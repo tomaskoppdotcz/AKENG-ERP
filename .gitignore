@@ -1,0 +1,19 @@
+# Python
+.venv
+__pycache__
+*.pyc
+
+# Node
+node_modules
+dist
+.vite
+
+# Mac
+.DS_Store
+
+# Logs
+*.log
+
+# IDE
+.vscode
+.idea
