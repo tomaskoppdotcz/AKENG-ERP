@@ -9,7 +9,13 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { getPlannerGantt, moveGanttOperation, PlannerGanttItem, PlannerGanttMachineGroup, PlannerGanttResponse } from "../services/plannerApi";
+import {
+  getPlannerGantt,
+  moveGanttOperation,
+  PlannerGanttItem,
+  PlannerGanttResponse,
+  updatePlanningOperation,
+} from "../services/plannerApi";
 
 function formatDateInput(date: Date): string {
   const y = date.getFullYear();
@@ -42,8 +48,24 @@ function clampDate(date: Date, min: Date, max: Date): Date {
   return date;
 }
 
+function normalizeStatus(status: string): string {
+  const s = (status || "").toLowerCase();
+
+  if (s === "bezi") return "bezi";
+  if (s === "hotovo") return "hotovo";
+  if (s === "blokovano") return "blokovano";
+  if (s === "ceka") return "ceka";
+  if (s === "naplanovano") return "naplanovano";
+
+  if (s === "planned") return "naplanovano";
+  if (s === "ready") return "ceka";
+  if (s === "waiting_release") return "ceka";
+
+  return s || "naplanovano";
+}
+
 function statusColor(status: string): string {
-  switch ((status || "").toLowerCase()) {
+  switch (normalizeStatus(status)) {
     case "hotovo":
       return "#10b981";
     case "bezi":
@@ -59,7 +81,7 @@ function statusColor(status: string): string {
 }
 
 function statusLabel(status: string): string {
-  switch ((status || "").toLowerCase()) {
+  switch (normalizeStatus(status)) {
     case "hotovo":
       return "Hotovo";
     case "bezi":
@@ -85,6 +107,7 @@ type GanttBarProps = {
   visibleTo: Date;
   totalMinutes: number;
   isDragging?: boolean;
+  onSelect: (item: PlannerGanttItem) => void;
 };
 
 function BarContent({ item, compact = false }: { item: PlannerGanttItem; compact?: boolean }) {
@@ -116,7 +139,14 @@ function BarContent({ item, compact = false }: { item: PlannerGanttItem; compact
   );
 }
 
-function DraggableGanttBar({ item, visibleFrom, visibleTo, totalMinutes, isDragging = false }: GanttBarProps) {
+function DraggableGanttBar({
+  item,
+  visibleFrom,
+  visibleTo,
+  totalMinutes,
+  isDragging = false,
+  onSelect,
+}: GanttBarProps) {
   if (!item.plannedStart || !item.plannedEnd) return null;
 
   const itemStart = new Date(item.plannedStart);
@@ -148,16 +178,16 @@ function DraggableGanttBar({ item, visibleFrom, visibleTo, totalMinutes, isDragg
       ref={setNodeRef}
       {...listeners}
       {...attributes}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect(item);
+      }}
       title={[
         `VP: ${item.workOrderNo ?? "-"}`,
         `GPN: ${item.gpn ?? "-"}`,
         `Operace: ${item.operationName}`,
         `Stroj: ${item.machineName}`,
         `Fronta: ${item.queuePosition ?? "-"}`,
-        `Od: ${item.plannedStart ? new Date(item.plannedStart).toLocaleString("cs-CZ") : "-"}`,
-        `Do: ${item.plannedEnd ? new Date(item.plannedEnd).toLocaleString("cs-CZ") : "-"}`,
-        `Status: ${statusLabel(item.status)}`,
-        `Qty: ${item.qty}`,
       ].join("\n")}
       style={{
         position: "absolute",
@@ -281,6 +311,249 @@ function EmptyMachineDrop({
   );
 }
 
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "110px 1fr",
+        gap: 10,
+        padding: "10px 0",
+        borderBottom: "1px solid #f1f5f9",
+        fontSize: 14,
+      }}
+    >
+      <div style={{ color: "#64748b", fontWeight: 700 }}>{label}</div>
+      <div style={{ color: "#0f172a", fontWeight: 600, wordBreak: "break-word" }}>{value}</div>
+    </div>
+  );
+}
+
+function OperationDetailPanel({
+  item,
+  onClose,
+  onSaved,
+}: {
+  item: PlannerGanttItem | null;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [status, setStatus] = useState("");
+  const [materialReady, setMaterialReady] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    if (!item) return;
+    setStatus(item.status || "planned");
+    setMaterialReady(!!item.materialReady);
+    setIsLocked(!!item.isLocked);
+    setMessage("");
+  }, [item]);
+
+  if (!item) return null;
+
+  async function handleSave() {
+    try {
+      setSaving(true);
+      setMessage("");
+      await updatePlanningOperation({
+        planningOperationId: item.operationId,
+        status,
+        materialReady,
+        isLocked,
+      });
+      await onSaved();
+      setMessage("Ulozeno.");
+    } catch (e: any) {
+      setMessage(e?.message || "Nepodarilo se ulozit zmenu.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        right: 0,
+        width: 380,
+        height: "100vh",
+        background: "#fff",
+        borderLeft: "1px solid #dbe2ea",
+        boxShadow: "-8px 0 24px rgba(15,23,42,0.10)",
+        zIndex: 1200,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <div
+        style={{
+          padding: 20,
+          borderBottom: "1px solid #e2e8f0",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: "#0f172a" }}>Detail operace</div>
+          <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+            {item.operationName} | {item.machineName}
+          </div>
+        </div>
+
+        <button
+          onClick={onClose}
+          style={{
+            border: "1px solid #cbd5e1",
+            background: "#fff",
+            color: "#0f172a",
+            borderRadius: 10,
+            padding: "8px 12px",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Zavrit
+        </button>
+      </div>
+
+      <div style={{ padding: 20, overflowY: "auto" }}>
+        <div
+          style={{
+            display: "inline-block",
+            padding: "6px 10px",
+            borderRadius: 999,
+            color: "#fff",
+            background: statusColor(status),
+            fontSize: 12,
+            fontWeight: 800,
+            marginBottom: 16,
+          }}
+        >
+          {statusLabel(status)}
+        </div>
+
+        <DetailRow label="VP" value={item.workOrderNo ?? "-"} />
+        <DetailRow label="GPN" value={item.gpn ?? "-"} />
+        <DetailRow label="Operace" value={item.operationName} />
+        <DetailRow label="Stroj" value={item.machineName} />
+        <DetailRow label="Fronta" value={item.queuePosition ?? "-"} />
+        <DetailRow label="Qty" value={item.qty} />
+        <DetailRow label="Setup" value={`${item.setupTimeMin} min`} />
+        <DetailRow label="Labor" value={`${item.laborTimeTotalMin} min`} />
+        <DetailRow label="Total" value={`${item.totalOperationTimeMin} min`} />
+        <DetailRow label="Expedice" value={item.expeditionDate ?? "-"} />
+        <DetailRow
+          label="Planned start"
+          value={item.plannedStart ? new Date(item.plannedStart).toLocaleString("cs-CZ") : "-"}
+        />
+        <DetailRow
+          label="Planned end"
+          value={item.plannedEnd ? new Date(item.plannedEnd).toLocaleString("cs-CZ") : "-"}
+        />
+        <DetailRow label="Material ready" value={item.materialReady ? "ANO" : "NE"} />
+
+        <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#334155", marginBottom: 6 }}>Status</div>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              style={{
+                width: "100%",
+                border: "1px solid #cbd5e1",
+                borderRadius: 10,
+                padding: "10px 12px",
+                fontSize: 14,
+                background: "#fff",
+              }}
+            >
+              <option value="ceka">Ceka</option>
+              <option value="planned">Planned</option>
+              <option value="naplanovano">Naplanovano</option>
+              <option value="bezi">Bezi</option>
+              <option value="hotovo">Hotovo</option>
+              <option value="blokovano">Blokovano</option>
+              <option value="ready">Ready</option>
+              <option value="waiting_release">Waiting release</option>
+            </select>
+          </div>
+
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              fontSize: 14,
+              fontWeight: 700,
+              color: "#0f172a",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={materialReady}
+              onChange={(e) => setMaterialReady(e.target.checked)}
+            />
+            Material ready
+          </label>
+
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              fontSize: 14,
+              fontWeight: 700,
+              color: "#0f172a",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={isLocked}
+              onChange={(e) => setIsLocked(e.target.checked)}
+            />
+            Lock operace
+          </label>
+
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{
+              border: "1px solid #0f172a",
+              background: "#0f172a",
+              color: "#fff",
+              borderRadius: 10,
+              padding: "11px 14px",
+              fontWeight: 800,
+              cursor: "pointer",
+              opacity: saving ? 0.6 : 1,
+            }}
+          >
+            {saving ? "Ukladam..." : "Ulozit zmeny"}
+          </button>
+
+          {message ? (
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: message === "Ulozeno." ? "#15803d" : "#b91c1c",
+              }}
+            >
+              {message}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PlannerPage() {
   const today = new Date();
   const defaultFrom = formatDateInput(today);
@@ -293,7 +566,8 @@ export default function PlannerPage() {
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState("");
   const [machineFilter, setMachineFilter] = useState("");
-  const [activeItem, setActiveItem] = useState<PlannerGanttItem | null>(null);
+  const [activeDragItem, setActiveDragItem] = useState<PlannerGanttItem | null>(null);
+  const [selectedItem, setSelectedItem] = useState<PlannerGanttItem | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -309,6 +583,15 @@ export default function PlannerPage() {
       setError("");
       const result = await getPlannerGantt(fromDate, toDate);
       setData(result);
+
+      if (selectedItem) {
+        const allItems = [
+          ...result.machines.flatMap((m) => m.items),
+          ...result.unscheduledItems,
+        ];
+        const updatedSelected = allItems.find((x) => x.operationId === selectedItem.operationId) || null;
+        setSelectedItem(updatedSelected);
+      }
     } catch (e: any) {
       setError(e?.message || "Nepodarilo se nacist Planner Gantt.");
     } finally {
@@ -332,7 +615,7 @@ export default function PlannerPage() {
   const totalMinutes = useMemo(() => Math.max(1, diffMinutes(visibleFrom, visibleTo)), [visibleFrom, visibleTo]);
 
   async function handleDragEnd(event: DragEndEvent) {
-    setActiveItem(null);
+    setActiveDragItem(null);
 
     const overData = event.over?.data.current as
       | { type?: string; machineId?: number; queuePosition?: number }
@@ -362,300 +645,9 @@ export default function PlannerPage() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f8fafc", padding: 24 }}>
-      <div style={{ maxWidth: 1800, margin: "0 auto", display: "grid", gap: 20 }}>
-        <div
-          style={{
-            background: "#fff",
-            border: "1px solid #dbe2ea",
-            borderRadius: 20,
-            padding: 20,
-            boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 28, fontWeight: 900, color: "#0f172a" }}>Planner Gantt</div>
-              <div style={{ fontSize: 14, color: "#64748b", marginTop: 6 }}>
-                Vizualni prehled planovanych operaci podle stroju.
-              </div>
-              <div style={{ fontSize: 12, color: "#334155", marginTop: 10, fontWeight: 700 }}>
-                Drag & Drop: pretahni operaci mezi stroji nebo na jinou pozici ve stejnem stroji.
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Od</div>
-                <input
-                  type="date"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  style={{
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 12,
-                    padding: "10px 12px",
-                    fontSize: 14,
-                    background: "#fff",
-                  }}
-                />
-              </div>
-
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Do</div>
-                <input
-                  type="date"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
-                  style={{
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 12,
-                    padding: "10px 12px",
-                    fontSize: 14,
-                    background: "#fff",
-                  }}
-                />
-              </div>
-
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Filtr stroj</div>
-                <input
-                  type="text"
-                  value={machineFilter}
-                  onChange={(e) => setMachineFilter(e.target.value)}
-                  placeholder="napr. BETA, TC, PILA..."
-                  style={{
-                    width: 220,
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 12,
-                    padding: "10px 12px",
-                    fontSize: 14,
-                    background: "#fff",
-                  }}
-                />
-              </div>
-
-              <button
-                onClick={loadData}
-                disabled={loading || moving}
-                style={{
-                  border: "1px solid #0f172a",
-                  background: "#0f172a",
-                  color: "#fff",
-                  borderRadius: 12,
-                  padding: "11px 16px",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                  opacity: loading || moving ? 0.6 : 1,
-                }}
-              >
-                {loading ? "Nacitam..." : moving ? "Presouvam..." : "Nacist Gantt"}
-              </button>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
-            {[
-              ["Ceka", "#94a3b8"],
-              ["Naplanovano", "#f59e0b"],
-              ["Bezi", "#3b82f6"],
-              ["Hotovo", "#10b981"],
-              ["Blokovano", "#ef4444"],
-            ].map(([label, color]) => (
-              <div
-                key={label}
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 999,
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: "#fff",
-                  background: color,
-                }}
-              >
-                {label}
-              </div>
-            ))}
-          </div>
-
-          {error ? (
-            <div
-              style={{
-                marginTop: 16,
-                padding: "12px 14px",
-                borderRadius: 12,
-                background: "#fef2f2",
-                color: "#b91c1c",
-                border: "1px solid #fecaca",
-                fontSize: 14,
-                fontWeight: 700,
-              }}
-            >
-              {error}
-            </div>
-          ) : null}
-        </div>
-
-        <DndContext
-          sensors={sensors}
-          onDragStart={(event) => {
-            const item = (event.active.data.current as any)?.item as PlannerGanttItem | undefined;
-            setActiveItem(item || null);
-          }}
-          onDragCancel={() => setActiveItem(null)}
-          onDragEnd={handleDragEnd}
-        >
-          <div
-            style={{
-              background: "#fff",
-              border: "1px solid #dbe2ea",
-              borderRadius: 20,
-              overflow: "hidden",
-              boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
-            }}
-          >
-            <div style={{ overflow: "auto", maxHeight: "65vh" }}>
-              <div
-                style={{
-                  minWidth: LEFT_COL_WIDTH + ((data?.days.length || 0) * DAY_COL_WIDTH),
-                }}
-              >
-                <div
-                  style={{
-                    position: "sticky",
-                    top: 0,
-                    zIndex: 10,
-                    display: "flex",
-                    background: "#f1f5f9",
-                    borderBottom: "1px solid #dbe2ea",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: LEFT_COL_WIDTH,
-                      minWidth: LEFT_COL_WIDTH,
-                      padding: 14,
-                      fontWeight: 900,
-                      borderRight: "1px solid #dbe2ea",
-                      background: "#f8fafc",
-                    }}
-                  >
-                    Stroj
-                  </div>
-
-                  {data?.days.map((day) => (
-                    <div
-                      key={day}
-                      style={{
-                        width: DAY_COL_WIDTH,
-                        minWidth: DAY_COL_WIDTH,
-                        padding: 14,
-                        textAlign: "center",
-                        fontWeight: 800,
-                        fontSize: 13,
-                        color: "#334155",
-                        borderRight: "1px solid #dbe2ea",
-                      }}
-                    >
-                      {new Date(`${day}T00:00:00`).toLocaleDateString("cs-CZ", {
-                        weekday: "short",
-                        day: "2-digit",
-                        month: "2-digit",
-                      })}
-                    </div>
-                  ))}
-                </div>
-
-                {!data && !loading ? (
-                  <div style={{ padding: 24, color: "#64748b" }}>Zatim nejsou nactena zadna data.</div>
-                ) : null}
-
-                {filteredMachines.map((machine) => {
-                  const width = (data?.days.length || 0) * DAY_COL_WIDTH;
-                  const rowHeight = Math.max(72, machine.items.length * ROW_STEP + 16);
-
-                  return (
-                    <div
-                      key={machine.machineId}
-                      style={{
-                        display: "flex",
-                        borderBottom: "1px solid #e2e8f0",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: LEFT_COL_WIDTH,
-                          minWidth: LEFT_COL_WIDTH,
-                          padding: 14,
-                          borderRight: "1px solid #e2e8f0",
-                          background: "#fff",
-                          position: "sticky",
-                          left: 0,
-                          zIndex: 5,
-                        }}
-                      >
-                        <div style={{ fontWeight: 900, color: "#0f172a" }}>{machine.machineName}</div>
-                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                          {machine.items.length} planovanych operaci
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          position: "relative",
-                          width,
-                          minHeight: rowHeight,
-                          backgroundImage: "linear-gradient(to right, rgba(148,163,184,0.22) 1px, transparent 1px)",
-                          backgroundSize: `${DAY_COL_WIDTH}px 100%`,
-                        }}
-                      >
-                        {machine.items.length === 0 ? (
-                          <EmptyMachineDrop machineId={machine.machineId} width={width} />
-                        ) : (
-                          <>
-                            <DropSlot machineId={machine.machineId} queuePosition={1} top={0} width={width} />
-
-                            {machine.items.map((item, index) => (
-                              <React.Fragment key={item.operationId}>
-                                <div
-                                  style={{
-                                    position: "absolute",
-                                    left: 0,
-                                    right: 0,
-                                    top: index * ROW_STEP,
-                                  }}
-                                >
-                                  <DraggableGanttBar
-                                    item={item}
-                                    visibleFrom={visibleFrom}
-                                    visibleTo={visibleTo}
-                                    totalMinutes={totalMinutes}
-                                    isDragging={activeItem?.operationId === item.operationId}
-                                  />
-                                </div>
-
-                                <DropSlot
-                                  machineId={machine.machineId}
-                                  queuePosition={index + 2}
-                                  top={(index + 1) * ROW_STEP - 6}
-                                  width={width}
-                                />
-                              </React.Fragment>
-                            ))}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {data && filteredMachines.length === 0 ? (
-                  <div style={{ padding: 24, color: "#64748b" }}>Filtru neodpovida zadny stroj.</div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
+    <>
+      <div style={{ minHeight: "100vh", background: "#f8fafc", padding: 24, paddingRight: selectedItem ? 404 : 24 }}>
+        <div style={{ maxWidth: 1800, margin: "0 auto", display: "grid", gap: 20 }}>
           <div
             style={{
               background: "#fff",
@@ -665,70 +657,374 @@ export default function PlannerPage() {
               boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
             }}
           >
-            <div style={{ fontSize: 22, fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>
-              Nenaplanovane operace
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 28, fontWeight: 900, color: "#0f172a" }}>Planner Gantt</div>
+                <div style={{ fontSize: 14, color: "#64748b", marginTop: 6 }}>
+                  Vizualni prehled planovanych operaci podle stroju.
+                </div>
+                <div style={{ fontSize: 12, color: "#334155", marginTop: 10, fontWeight: 700 }}>
+                  Drag & Drop: pretahni operaci mezi stroji nebo na jinou pozici ve stejnem stroji. Kliknutim na blok otevres detail.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Od</div>
+                  <input
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => setFromDate(e.target.value)}
+                    style={{
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 12,
+                      padding: "10px 12px",
+                      fontSize: 14,
+                      background: "#fff",
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Do</div>
+                  <input
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => setToDate(e.target.value)}
+                    style={{
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 12,
+                      padding: "10px 12px",
+                      fontSize: 14,
+                      background: "#fff",
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Filtr stroj</div>
+                  <input
+                    type="text"
+                    value={machineFilter}
+                    onChange={(e) => setMachineFilter(e.target.value)}
+                    placeholder="napr. BETA, TC, PILA..."
+                    style={{
+                      width: 220,
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 12,
+                      padding: "10px 12px",
+                      fontSize: 14,
+                      background: "#fff",
+                    }}
+                  />
+                </div>
+
+                <button
+                  onClick={loadData}
+                  disabled={loading || moving}
+                  style={{
+                    border: "1px solid #0f172a",
+                    background: "#0f172a",
+                    color: "#fff",
+                    borderRadius: 12,
+                    padding: "11px 16px",
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    opacity: loading || moving ? 0.6 : 1,
+                  }}
+                >
+                  {loading ? "Nacitam..." : moving ? "Presouvam..." : "Obnovit data"}
+                </button>
+              </div>
             </div>
 
-            {!data || data.unscheduledItems.length === 0 ? (
-              <div style={{ color: "#64748b", fontSize: 14 }}>Zadne nenaplanovane operace.</div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-                  <thead>
-                    <tr style={{ background: "#f8fafc" }}>
-                      {["VP", "GPN", "Operace", "Stroj", "Qty", "Fronta", "Status"].map((h) => (
-                        <th
-                          key={h}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
+              {[
+                ["Ceka", "#94a3b8"],
+                ["Naplanovano", "#f59e0b"],
+                ["Bezi", "#3b82f6"],
+                ["Hotovo", "#10b981"],
+                ["Blokovano", "#ef4444"],
+              ].map(([label, color]) => (
+                <div
+                  key={label}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "#fff",
+                    background: color,
+                  }}
+                >
+                  {label}
+                </div>
+              ))}
+            </div>
+
+            {error ? (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  background: "#fef2f2",
+                  color: "#b91c1c",
+                  border: "1px solid #fecaca",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}
+              >
+                {error}
+              </div>
+            ) : null}
+          </div>
+
+          <DndContext
+            sensors={sensors}
+            onDragStart={(event) => {
+              const item = (event.active.data.current as any)?.item as PlannerGanttItem | undefined;
+              setActiveDragItem(item || null);
+            }}
+            onDragCancel={() => setActiveDragItem(null)}
+            onDragEnd={handleDragEnd}
+          >
+            <div
+              style={{
+                background: "#fff",
+                border: "1px solid #dbe2ea",
+                borderRadius: 20,
+                overflow: "hidden",
+                boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
+              }}
+            >
+              <div style={{ overflow: "auto", maxHeight: "65vh" }}>
+                <div
+                  style={{
+                    minWidth: LEFT_COL_WIDTH + ((data?.days.length || 0) * DAY_COL_WIDTH),
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 10,
+                      display: "flex",
+                      background: "#f1f5f9",
+                      borderBottom: "1px solid #dbe2ea",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: LEFT_COL_WIDTH,
+                        minWidth: LEFT_COL_WIDTH,
+                        padding: 14,
+                        fontWeight: 900,
+                        borderRight: "1px solid #dbe2ea",
+                        background: "#f8fafc",
+                      }}
+                    >
+                      Stroj
+                    </div>
+
+                    {data?.days.map((day) => (
+                      <div
+                        key={day}
+                        style={{
+                          width: DAY_COL_WIDTH,
+                          minWidth: DAY_COL_WIDTH,
+                          padding: 14,
+                          textAlign: "center",
+                          fontWeight: 800,
+                          fontSize: 13,
+                          color: "#334155",
+                          borderRight: "1px solid #dbe2ea",
+                        }}
+                      >
+                        {new Date(`${day}T00:00:00`).toLocaleDateString("cs-CZ", {
+                          weekday: "short",
+                          day: "2-digit",
+                          month: "2-digit",
+                        })}
+                      </div>
+                    ))}
+                  </div>
+
+                  {!data && !loading ? (
+                    <div style={{ padding: 24, color: "#64748b" }}>Zatim nejsou nactena zadna data.</div>
+                  ) : null}
+
+                  {filteredMachines.map((machine) => {
+                    const width = (data?.days.length || 0) * DAY_COL_WIDTH;
+                    const rowHeight = Math.max(72, machine.items.length * ROW_STEP + 16);
+
+                    return (
+                      <div
+                        key={machine.machineId}
+                        style={{
+                          display: "flex",
+                          borderBottom: "1px solid #e2e8f0",
+                        }}
+                      >
+                        <div
                           style={{
-                            textAlign: "left",
-                            padding: "10px 12px",
-                            borderBottom: "1px solid #e2e8f0",
-                            color: "#334155",
-                            fontWeight: 800,
+                            width: LEFT_COL_WIDTH,
+                            minWidth: LEFT_COL_WIDTH,
+                            padding: 14,
+                            borderRight: "1px solid #e2e8f0",
+                            background: "#fff",
+                            position: "sticky",
+                            left: 0,
+                            zIndex: 5,
                           }}
                         >
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.unscheduledItems.map((item) => (
-                      <tr key={item.operationId}>
-                        <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.workOrderNo ?? "-"}</td>
-                        <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.gpn ?? "-"}</td>
-                        <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.operationName}</td>
-                        <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.machineName}</td>
-                        <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.qty}</td>
-                        <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.queuePosition ?? "-"}</td>
-                        <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>
-                          <span
+                          <div style={{ fontWeight: 900, color: "#0f172a" }}>{machine.machineName}</div>
+                          <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                            {machine.items.length} planovanych operaci
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            position: "relative",
+                            width,
+                            minHeight: rowHeight,
+                            backgroundImage: "linear-gradient(to right, rgba(148,163,184,0.22) 1px, transparent 1px)",
+                            backgroundSize: `${DAY_COL_WIDTH}px 100%`,
+                          }}
+                        >
+                          {machine.items.length === 0 ? (
+                            <EmptyMachineDrop machineId={machine.machineId} width={width} />
+                          ) : (
+                            <>
+                              <DropSlot machineId={machine.machineId} queuePosition={1} top={0} width={width} />
+
+                              {machine.items.map((item, index) => (
+                                <React.Fragment key={item.operationId}>
+                                  <div
+                                    style={{
+                                      position: "absolute",
+                                      left: 0,
+                                      right: 0,
+                                      top: index * ROW_STEP,
+                                    }}
+                                  >
+                                    <DraggableGanttBar
+                                      item={item}
+                                      visibleFrom={visibleFrom}
+                                      visibleTo={visibleTo}
+                                      totalMinutes={totalMinutes}
+                                      isDragging={activeDragItem?.operationId === item.operationId}
+                                      onSelect={setSelectedItem}
+                                    />
+                                  </div>
+
+                                  <DropSlot
+                                    machineId={machine.machineId}
+                                    queuePosition={index + 2}
+                                    top={(index + 1) * ROW_STEP - 6}
+                                    width={width}
+                                  />
+                                </React.Fragment>
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {data && filteredMachines.length === 0 ? (
+                    <div style={{ padding: 24, color: "#64748b" }}>Filtru neodpovida zadny stroj.</div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "#fff",
+                border: "1px solid #dbe2ea",
+                borderRadius: 20,
+                padding: 20,
+                boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
+              }}
+            >
+              <div style={{ fontSize: 22, fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>
+                Nenaplanovane operace
+              </div>
+
+              {!data || data.unscheduledItems.length === 0 ? (
+                <div style={{ color: "#64748b", fontSize: 14 }}>Zadne nenaplanovane operace.</div>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc" }}>
+                        {["VP", "GPN", "Operace", "Stroj", "Qty", "Fronta", "Status"].map((h) => (
+                          <th
+                            key={h}
                             style={{
-                              display: "inline-block",
-                              padding: "4px 8px",
-                              borderRadius: 999,
-                              color: "#fff",
-                              background: statusColor(item.status),
-                              fontSize: 12,
+                              textAlign: "left",
+                              padding: "10px 12px",
+                              borderBottom: "1px solid #e2e8f0",
+                              color: "#334155",
                               fontWeight: 800,
                             }}
                           >
-                            {statusLabel(item.status)}
-                          </span>
-                        </td>
+                            {h}
+                          </th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+                    </thead>
+                    <tbody>
+                      {data.unscheduledItems.map((item) => (
+                        <tr
+                          key={item.operationId}
+                          onClick={() => setSelectedItem(item)}
+                          style={{ cursor: "pointer" }}
+                        >
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.workOrderNo ?? "-"}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.gpn ?? "-"}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.operationName}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.machineName}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.qty}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.queuePosition ?? "-"}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "4px 8px",
+                                borderRadius: 999,
+                                color: "#fff",
+                                background: statusColor(item.status),
+                                fontSize: 12,
+                                fontWeight: 800,
+                              }}
+                            >
+                              {statusLabel(item.status)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
 
-          <DragOverlay>
-            {activeItem ? <OverlayBar item={activeItem} /> : null}
-          </DragOverlay>
-        </DndContext>
+            <DragOverlay>
+              {activeDragItem ? <OverlayBar item={activeDragItem} /> : null}
+            </DragOverlay>
+          </DndContext>
+        </div>
       </div>
-    </div>
+
+      <OperationDetailPanel
+        item={selectedItem}
+        onClose={() => setSelectedItem(null)}
+        onSaved={loadData}
+      />
+    </>
   );
 }

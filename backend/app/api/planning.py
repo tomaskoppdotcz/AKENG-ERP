@@ -30,6 +30,13 @@ class MoveGanttOperationRequest(BaseModel):
     target_queue_position: int | None = None
 
 
+class UpdatePlanningOperationRequest(BaseModel):
+    planning_operation_id: int
+    status: str | None = None
+    material_ready: bool | None = None
+    is_locked: bool | None = None
+
+
 def get_machine_ops(db: Session, machine_id: int):
     return db.scalars(
         select(PlanningOperation)
@@ -89,6 +96,7 @@ def get_planning_operations(machine_id: int, db: Session = Depends(get_db)):
             "queue_position": op.queue_position,
             "status": op.status,
             "material_ready": op.material_ready,
+            "is_locked": op.is_locked,
         }
         for op in ops
     ]
@@ -249,6 +257,46 @@ def move_gantt_operation(payload: MoveGanttOperationRequest, db: Session = Depen
         "target_queue_position": target_queue_position,
         "moved": True,
         "reordered_same_machine": False,
+    }
+
+
+@router.post("/update-operation")
+def update_operation(payload: UpdatePlanningOperationRequest, db: Session = Depends(get_db)):
+    op = db.get(PlanningOperation, payload.planning_operation_id)
+    if not op:
+        raise HTTPException(status_code=404, detail="Planning operation not found")
+
+    if payload.status is not None:
+        op.status = payload.status
+
+    if payload.material_ready is not None:
+        op.material_ready = payload.material_ready
+
+    if payload.is_locked is not None:
+        op.is_locked = payload.is_locked
+
+    db.commit()
+
+    service = PlanningEngineService(db)
+    service.rebuild_machine_schedule(op.machine_id, date.today())
+    db.commit()
+
+    return {
+        "status": "ok",
+        "planning_operation_id": op.id,
+        "operation": {
+            "id": op.id,
+            "work_order_no": op.work_order_no,
+            "gpn": op.gpn,
+            "operation_name": op.operation_name,
+            "machine_id": op.machine_id,
+            "queue_position": op.queue_position,
+            "status": op.status,
+            "material_ready": op.material_ready,
+            "is_locked": op.is_locked,
+            "planned_start": op.planned_start.isoformat() if op.planned_start else None,
+            "planned_end": op.planned_end.isoformat() if op.planned_end else None,
+        },
     }
 
 

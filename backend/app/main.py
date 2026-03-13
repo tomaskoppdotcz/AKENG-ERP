@@ -9,6 +9,9 @@ from app.api.orders import router as orders_router
 from app.api.technology import router as technology_router
 from app.api.planning import router as planning_router
 from app.api.planner_gantt import router as planner_gantt_router
+from app.api.capacity_dashboard import router as capacity_dashboard_router
+from app.api.auto_planner import router as auto_planner_router
+from app.api.shopfloor_kiosk import router as shopfloor_kiosk_router
 from app.api.production import router as production_router
 from app.api.seed import router as seed_router
 from app.api.kiosk import router as kiosk_router
@@ -42,6 +45,9 @@ app.include_router(orders_router, prefix="/orders", tags=["orders"])
 app.include_router(technology_router, prefix="/technology", tags=["technology"])
 app.include_router(planning_router, prefix="/planning", tags=["planning"])
 app.include_router(planner_gantt_router, prefix="/planning", tags=["planning-gantt"])
+app.include_router(capacity_dashboard_router, prefix="/capacity-dashboard", tags=["capacity-dashboard"])
+app.include_router(auto_planner_router, prefix="/auto-planner", tags=["auto-planner"])
+app.include_router(shopfloor_kiosk_router, prefix="/shopfloor-kiosk", tags=["shopfloor-kiosk"])
 app.include_router(production_router, prefix="/production", tags=["production"])
 app.include_router(seed_router, prefix="/seed", tags=["seed"])
 app.include_router(kiosk_router, prefix="/kiosk", tags=["kiosk"])
