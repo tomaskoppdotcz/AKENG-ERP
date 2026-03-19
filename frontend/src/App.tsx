@@ -1,151 +1,86 @@
-import React, { useEffect, useState } from "react";
-import PlannerPage from "./pages/PlannerPage";
-import PortfolioGpnTpPage from "./pages/PortfolioGpnTpPage";
-import CapacityDashboardPage from "./pages/CapacityDashboardPage";
-import AutoPlannerPage from "./pages/AutoPlannerPage";
-import ShopfloorKioskPage from "./pages/ShopfloorKioskPage";
+import React, { useState } from "react";
+import LoginPage from "./pages/LoginPage.tsx";
+import DashboardPage from "./pages/DashboardPage.tsx";
+import OrdersPage from "./pages/OrdersPage.tsx";
+import OrderItemDetailPage from "./pages/OrderItemDetailPage.tsx";
+import TopNav from "./components/TopNav.tsx";
+import { UI } from "./styles/ui";
 
-type ViewKey = "planner" | "portfolio" | "capacity" | "auto-planner" | "kiosk";
+const NAV_ITEMS = [
+  "Nástěnka",
+  "Zakázky",
+  "Výkresy",
+  "Portfolio",
+  "Sklad výrobků",
+  "Sklad materiálu",
+  "Výroba",
+  "Plánování",
+  "Kvalita",
+  "Nastavení",
+] as const;
 
-function detectViewFromPath(): ViewKey {
-  const path = window.location.pathname.toLowerCase();
-  if (path.includes("portfolio")) return "portfolio";
-  if (path.includes("capacity")) return "capacity";
-  if (path.includes("auto-planner")) return "auto-planner";
-  if (path.includes("kiosk")) return "kiosk";
-  return "planner";
+function ModulePlaceholderPage({ moduleName }: { moduleName: string }) {
+  return (
+    <div style={{ paddingTop: 18 }}>
+      <div style={UI.sectionTitle}>{moduleName}</div>
+      <div style={UI.sectionSubtitle}>Modul je ve vývoji</div>
+    </div>
+  );
 }
 
 export default function App() {
-  const [view, setView] = useState<ViewKey>(detectViewFromPath());
+  // UI skeleton state (no auth/backend yet)
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [activeModule, setActiveModule] = useState<string>("Nástěnka");
 
-  useEffect(() => {
-    const onPopState = () => setView(detectViewFromPath());
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  const [orderCardReturnId, setOrderCardReturnId] = useState<number | null>(null);
+  const [openedItemDetail, setOpenedItemDetail] = useState<{
+    customerOrderId: number;
+    jobItemId: number;
+  } | null>(null);
 
-  function navigate(next: ViewKey) {
-    const path =
-      next === "portfolio"
-        ? "/portfolio"
-        : next === "capacity"
-        ? "/capacity"
-        : next === "auto-planner"
-        ? "/auto-planner"
-        : next === "kiosk"
-        ? "/kiosk"
-        : "/gantt";
+  function handleLogin() {
+    setIsAuthenticated(true);
+    setActiveModule("Nástěnka");
+  }
 
-    window.history.pushState({}, "", path);
-    setView(next);
+  if (!isAuthenticated) {
+    return (
+      <div style={{ minHeight: "100vh", background: UI.appBackground, fontFamily: "Arial, sans-serif" }}>
+        <LoginPage onLogin={handleLogin} />
+      </div>
+    );
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f8fafc", fontFamily: "Arial, sans-serif" }}>
-      <div
-        style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 20,
-          background: "#fff",
-          borderBottom: "1px solid #dbe2ea",
-          padding: 12,
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ fontWeight: 900, fontSize: 18, marginRight: 12 }}>AKENG ERP</div>
-
-        <button
-          onClick={() => navigate("planner")}
-          style={{
-            border: view === "planner" ? "1px solid #0f172a" : "1px solid #cbd5e1",
-            background: view === "planner" ? "#0f172a" : "#fff",
-            color: view === "planner" ? "#fff" : "#0f172a",
-            borderRadius: 10,
-            padding: "10px 14px",
-            cursor: "pointer",
-            fontWeight: 700,
-          }}
-        >
-          Planner Gantt
-        </button>
-
-        <button
-          onClick={() => navigate("capacity")}
-          style={{
-            border: view === "capacity" ? "1px solid #0f172a" : "1px solid #cbd5e1",
-            background: view === "capacity" ? "#0f172a" : "#fff",
-            color: view === "capacity" ? "#fff" : "#0f172a",
-            borderRadius: 10,
-            padding: "10px 14px",
-            cursor: "pointer",
-            fontWeight: 700,
-          }}
-        >
-          Capacity Dashboard
-        </button>
-
-        <button
-          onClick={() => navigate("auto-planner")}
-          style={{
-            border: view === "auto-planner" ? "1px solid #0f172a" : "1px solid #cbd5e1",
-            background: view === "auto-planner" ? "#0f172a" : "#fff",
-            color: view === "auto-planner" ? "#fff" : "#0f172a",
-            borderRadius: 10,
-            padding: "10px 14px",
-            cursor: "pointer",
-            fontWeight: 700,
-          }}
-        >
-          Auto Planner
-        </button>
-
-        <button
-          onClick={() => navigate("kiosk")}
-          style={{
-            border: view === "kiosk" ? "1px solid #0f172a" : "1px solid #cbd5e1",
-            background: view === "kiosk" ? "#0f172a" : "#fff",
-            color: view === "kiosk" ? "#fff" : "#0f172a",
-            borderRadius: 10,
-            padding: "10px 14px",
-            cursor: "pointer",
-            fontWeight: 700,
-          }}
-        >
-          Shopfloor Kiosk
-        </button>
-
-        <button
-          onClick={() => navigate("portfolio")}
-          style={{
-            border: view === "portfolio" ? "1px solid #0f172a" : "1px solid #cbd5e1",
-            background: view === "portfolio" ? "#0f172a" : "#fff",
-            color: view === "portfolio" ? "#fff" : "#0f172a",
-            borderRadius: 10,
-            padding: "10px 14px",
-            cursor: "pointer",
-            fontWeight: 700,
-          }}
-        >
-          Portfolio GPN + TP
-        </button>
+    <div style={{ minHeight: "100vh", background: UI.appBackground, fontFamily: "Arial, sans-serif" }}>
+      <TopNav activeModule={activeModule} onNavigate={setActiveModule} navItems={NAV_ITEMS as unknown as string[]} />
+      <div style={UI.mainContainer}>
+        {activeModule === "Nástěnka" ? (
+          <DashboardPage />
+        ) : activeModule === "Zakázky" ? (
+          openedItemDetail ? (
+            <OrderItemDetailPage
+              customerOrderId={openedItemDetail.customerOrderId}
+              jobItemId={openedItemDetail.jobItemId}
+              onBack={() => setOpenedItemDetail(null)}
+            />
+          ) : (
+            <OrdersPage
+              initialCustomerOrderId={orderCardReturnId}
+              onOpenItemDetail={(customerOrderId, item) => {
+                setOrderCardReturnId(customerOrderId);
+                setOpenedItemDetail({
+                  customerOrderId,
+                  jobItemId: item.job_item_id,
+                });
+              }}
+            />
+          )
+        ) : (
+          <ModulePlaceholderPage moduleName={activeModule} />
+        )}
       </div>
-
-      {view === "portfolio" ? (
-        <PortfolioGpnTpPage />
-      ) : view === "capacity" ? (
-        <CapacityDashboardPage />
-      ) : view === "auto-planner" ? (
-        <AutoPlannerPage />
-      ) : view === "kiosk" ? (
-        <ShopfloorKioskPage />
-      ) : (
-        <PlannerPage />
-      )}
     </div>
   );
 }

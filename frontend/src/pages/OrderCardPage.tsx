@@ -4,7 +4,7 @@ import { UI } from "../styles/ui";
 type Props = {
   customerOrderId: number;
   onBack: () => void;
-  onOpenItemDetail: (customerOrderId: number, jobItemId: number) => void;
+  onOpenItemDetail: (item: DemoOrderItem) => void;
 };
 
 type DemoOrderItem = {
@@ -313,7 +313,7 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                       >
                         <button
                           type="button"
-                          onClick={() => onOpenItemDetail(customerOrderId, item.job_item_id)}
+                          onClick={() => onOpenItemDetail(item)}
                           style={{
                             border: "1px solid #0f172a",
                             background: "#0f172a",

@@ -51,24 +51,136 @@ const SUBTABS: ItemSubtab[] = [
   "Náklady",
 ];
 
-const DEMO_ITEM: DemoItemDetail = {
+const DEFAULT_DEMO_ITEM: DemoItemDetail = {
   customerOrderId: 260061,
   jobItemId: 2010,
   zakazka: "ZAK260061",
   lineNo: 10,
-  gpn: "87306055",
-  popis: "Sleeve 104 mm duplex",
-  vp: "VP260001",
+  gpn: "102-045-772",
+  popis: "Převlečná objímka (duplex) – zinkování",
+  vp: "VP260030",
   stav: "Ve výrobě",
   progressPct: 60,
   operationsDone: 3,
   operationsTotal: 5,
-  mnozstvi: "3 ks",
-  termin: "26.03.2026",
-  material: "1.4460",
-  cenaZaKs: "9 878 Kč",
+  mnozstvi: "120 ks",
+  termin: "2026-03-15",
+  material: "Ocel 11 353.1 – pozink (Z-12)",
+  cenaZaKs: "28 450 Kč/ks",
   stavVyroby: "Rozpracováno",
 };
+
+function getDemoItemDetail(customerOrderId?: number, jobItemId?: number): DemoItemDetail {
+  const safeCustomerOrderId = customerOrderId ?? DEFAULT_DEMO_ITEM.customerOrderId;
+  const safeJobItemId = jobItemId ?? DEFAULT_DEMO_ITEM.jobItemId;
+
+  // Demo values mapped to the same job_item_id used in OrderCardPage.
+  switch (safeJobItemId) {
+    case 2010:
+      return {
+        ...DEFAULT_DEMO_ITEM,
+        customerOrderId: safeCustomerOrderId,
+        zakazka: `ZAK${safeCustomerOrderId}`,
+        lineNo: 10,
+        progressPct: 30,
+        operationsDone: 0,
+        operationsTotal: 5,
+        mnozstvi: "120 ks",
+        termin: "2026-03-15",
+        material: "Ocel 11 353.1 – pozink (Z-12)",
+        cenaZaKs: "28 450 Kč/ks",
+        stav: "Plán",
+        stavVyroby: "Naplánováno",
+      };
+    case 2020:
+      return {
+        ...DEFAULT_DEMO_ITEM,
+        customerOrderId: safeCustomerOrderId,
+        zakazka: `ZAK${safeCustomerOrderId}`,
+        jobItemId: 2020,
+        lineNo: 20,
+        gpn: "107-118-504",
+        popis: "Distanční kroužek (ring) – nitridace",
+        vp: "—",
+        stav: "Běží",
+        progressPct: 60,
+        operationsDone: 3,
+        operationsTotal: 5,
+        mnozstvi: "80 ks",
+        termin: "2026-03-16",
+        material: "Legovaná ocel – nitridace (N-09)",
+        cenaZaKs: "19 900 Kč/ks",
+        stavVyroby: "Probíhá",
+      };
+    case 2030:
+      return {
+        ...DEFAULT_DEMO_ITEM,
+        customerOrderId: safeCustomerOrderId,
+        zakazka: `ZAK${safeCustomerOrderId}`,
+        jobItemId: 2030,
+        lineNo: 30,
+        gpn: "114-030-919",
+        popis: "Těleso spojky (sleeve) – broušení",
+        vp: "VP260031",
+        stav: "Hotovo",
+        progressPct: 80,
+        operationsDone: 4,
+        operationsTotal: 5,
+        mnozstvi: "55 ks",
+        termin: "2026-03-18",
+        material: "Ocel 16 111 – broušení (B-03)",
+        cenaZaKs: "24 650 Kč/ks",
+        stavVyroby: "Těsně před dokončením",
+      };
+    case 2040:
+      return {
+        ...DEFAULT_DEMO_ITEM,
+        customerOrderId: safeCustomerOrderId,
+        zakazka: `ZAK${safeCustomerOrderId}`,
+        jobItemId: 2040,
+        lineNo: 40,
+        gpn: "119-207-633",
+        popis: "Vratný kroužek (ring) – povrch AlMg",
+        vp: "—",
+        stav: "Plán",
+        progressPct: 20,
+        operationsDone: 1,
+        operationsTotal: 5,
+        mnozstvi: "140 ks",
+        termin: "2026-03-20",
+        material: "Ocel 15 120 – povrch AlMg (A-17)",
+        cenaZaKs: "15 750 Kč/ks",
+        stavVyroby: "Rozpracováno",
+      };
+    case 2050:
+      return {
+        ...DEFAULT_DEMO_ITEM,
+        customerOrderId: safeCustomerOrderId,
+        zakazka: `ZAK${safeCustomerOrderId}`,
+        jobItemId: 2050,
+        lineNo: 50,
+        gpn: "121-090-281",
+        popis: "Spojovací pouzdro (duplex) – finální kontrola",
+        vp: "VP260032",
+        stav: "Hotovo",
+        progressPct: 100,
+        operationsDone: 5,
+        operationsTotal: 5,
+        mnozstvi: "36 ks",
+        termin: "2026-03-21",
+        material: "Ocel 11 460 – finální kontrola (K-02)",
+        cenaZaKs: "31 200 Kč/ks",
+        stavVyroby: "Dokončeno",
+      };
+    default:
+      return {
+        ...DEFAULT_DEMO_ITEM,
+        customerOrderId: safeCustomerOrderId,
+        zakazka: `ZAK${safeCustomerOrderId}`,
+        jobItemId: safeJobItemId,
+      };
+  }
+}
 
 function PlaceholderCard({ text }: { text: string }) {
   return (
@@ -97,9 +209,9 @@ function SummaryTile({
   );
 }
 
-export default function OrderItemDetailPage({ onBack }: Props) {
+export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack }: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
-  const data = DEMO_ITEM;
+  const data = useMemo(() => getDemoItemDetail(customerOrderId, jobItemId), [customerOrderId, jobItemId]);
 
   const progressLabel = useMemo(
     () => `Hotovo: ${data.operationsDone} / ${data.operationsTotal} operací`,
@@ -115,7 +227,7 @@ export default function OrderItemDetailPage({ onBack }: Props) {
             <p style={UI.headerSubtitle}>{data.popis}</p>
           </div>
 
-          <button onClick={onBack} style={UI.buttonSecondary}>
+          <button onClick={() => onBack?.()} style={UI.buttonSecondary}>
             Zpět na zakázku
           </button>
         </div>
