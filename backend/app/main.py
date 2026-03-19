@@ -6,6 +6,8 @@ from app.models.base import Base
 
 from app.api.master_data import router as master_data_router
 from app.api.orders import router as orders_router
+from app.api.orders_overview import router as orders_overview_router
+from app.api.order_detail import router as order_detail_router
 from app.api.technology import router as technology_router
 from app.api.planning import router as planning_router
 from app.api.planner_gantt import router as planner_gantt_router
@@ -16,6 +18,7 @@ from app.api.production import router as production_router
 from app.api.seed import router as seed_router
 from app.api.kiosk import router as kiosk_router
 from app.api.import_orders import router as import_orders_router
+from app.api.dev_tools import dev_tools_router
 from app.api.generate_operations import router as generate_operations_router
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
@@ -42,6 +45,8 @@ def startup():
 
 app.include_router(master_data_router, prefix="/master-data", tags=["master-data"])
 app.include_router(orders_router, prefix="/orders", tags=["orders"])
+app.include_router(orders_overview_router, tags=["orders-overview"])
+app.include_router(order_detail_router, tags=["order-detail"])
 app.include_router(technology_router, prefix="/technology", tags=["technology"])
 app.include_router(planning_router, prefix="/planning", tags=["planning"])
 app.include_router(planner_gantt_router, prefix="/planning", tags=["planning-gantt"])
@@ -52,6 +57,7 @@ app.include_router(production_router, prefix="/production", tags=["production"])
 app.include_router(seed_router, prefix="/seed", tags=["seed"])
 app.include_router(kiosk_router, prefix="/kiosk", tags=["kiosk"])
 app.include_router(import_orders_router, prefix="/import", tags=["import"])
+app.include_router(dev_tools_router, prefix="/dev", tags=["dev"])
 app.include_router(generate_operations_router, prefix="/generate", tags=["generate"])
 
 

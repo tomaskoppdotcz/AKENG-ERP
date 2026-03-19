@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Depends
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 import pdfplumber
 import datetime
@@ -18,6 +19,43 @@ def generate_zak(db: Session) -> str:
 
 def generate_vp(year: int, counter: int) -> str:
     return f"VP{year}{counter:04d}"
+
+
+def _parse_qty_token(qty_raw: str) -> int:
+    """
+    Parse quantity tokens like '3,00', '3.00', '300', '3 000,00' robustly.
+    - If there is a comma, treat it as decimal separator and dots as thousands.
+    - If there is no comma, treat '.' as decimal separator, not thousands.
+    """
+    token = qty_raw.replace(" ", "")
+
+    if "," in token:
+        integer_part = token.split(",")[0].replace(".", "")
+        try:
+            return int(integer_part)
+        except Exception:
+            pass
+
+    token2 = token.replace(",", ".")
+    try:
+        return int(round(float(token2)))
+    except Exception:
+        return 0
+
+
+def _parse_price_token(value_raw: str) -> float:
+    """
+    Parse price tokens like '2.849,00' or '8547,00' into float.
+    """
+    token = value_raw.replace(" ", "")
+    if "," in token:
+        token = token.replace(".", "").replace(",", ".")
+    return float(token or 0)
+
+
+def _job_items_have_price_column(db: Session) -> bool:
+    rows = db.execute(text("PRAGMA table_info(job_items)")).fetchall()
+    return any(row[1] == "sales_price_per_unit" for row in rows)
 
 
 @router.post("/customer-order-pdf")
@@ -74,11 +112,20 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
         except Exception:
             due_date = None
 
-        qty_clean = qty_raw.replace(".", "").replace(",", ".")
-        try:
-            qty = int(round(float(qty_clean)))
-        except Exception:
-            qty = 0
+        qty = _parse_qty_token(qty_raw)
+
+        # Try to extract prices from the tail of the line, e.g.
+        # "3,00 KS 2.849,00 / KS 8.547,00"
+        sales_price_per_unit = None
+        sales_price_total = None
+        price_match = re.search(r"([\d\.,]+)\s*/\s*KS\s+([\d\.,]+)", line)
+        if price_match:
+            try:
+                sales_price_per_unit = _parse_price_token(price_match.group(1))
+                sales_price_total = _parse_price_token(price_match.group(2))
+            except Exception:
+                sales_price_per_unit = None
+                sales_price_total = None
 
         parsed_rows.append(
             {
@@ -87,16 +134,11 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
                 "description": description,
                 "due_date": due_date.isoformat() if due_date else None,
                 "qty": qty,
+                "sales_price_per_unit": sales_price_per_unit,
+                "sales_price_total": sales_price_total,
                 "source_line": line,
             }
         )
-
-    if not parsed_rows:
-        return {
-            "status": "no_items_found",
-            "customer_po_no": customer_po_no,
-            "sample": lines[:40],
-        }
 
     # 1) customer order
     customer_order = CustomerOrder(
@@ -120,6 +162,7 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
     year = datetime.datetime.now().year % 100
     vp_counter = 1
     created_items = []
+    have_price = _job_items_have_price_column(db)
 
     for row in parsed_rows:
         job_item = JobItem(
@@ -131,6 +174,24 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
         )
         db.add(job_item)
         db.flush()
+
+        # Persist sales_price_per_unit if the column exists in DB.
+        if have_price and row.get("sales_price_per_unit") is not None:
+            try:
+                db.execute(
+                    text(
+                        "UPDATE job_items "
+                        "SET sales_price_per_unit = :price "
+                        "WHERE id = :id"
+                    ),
+                    {
+                        "price": float(row["sales_price_per_unit"] or 0),
+                        "id": job_item.id,
+                    },
+                )
+            except Exception:
+                # Best-effort; ignore pricing persistence failures.
+                pass
 
         vp_code = generate_vp(year, vp_counter)
 
@@ -147,6 +208,8 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
                 "description": row["description"],
                 "due_date": row["due_date"],
                 "qty": row["qty"],
+                "sales_price_per_unit": row.get("sales_price_per_unit"),
+                "sales_price_total": row.get("sales_price_total"),
                 "vp": vp_code,
             }
         )
@@ -155,9 +218,15 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
 
     db.commit()
 
+    # Debug log to verify structure creation
+    print("IMPORT DEBUG:")
+    print("CustomerOrder:", customer_order.id)
+    print("Job:", job.id)
+    print("JobItems count:", len(parsed_rows))
+
     return {
         "status": "ok",
-        "customer_po_no": customer_po_no,
+        "customer_order_id": customer_order.id,
         "zak": zak_code,
-        "items_created": created_items,
+        "items_created": len(parsed_rows),
     }
