@@ -5,6 +5,7 @@ from app.core.database import SessionLocal, engine
 from app.models.base import Base
 
 from app.api.master_data import router as master_data_router
+from app.api.master_libraries import router as master_libraries_router
 from app.api.orders import router as orders_router
 from app.api.orders_overview import router as orders_overview_router
 from app.api.order_detail import router as order_detail_router
@@ -58,6 +59,7 @@ def startup():
 
 
 app.include_router(master_data_router, prefix="/master-data", tags=["master-data"])
+app.include_router(master_libraries_router, prefix="/libraries", tags=["libraries"])
 app.include_router(orders_router, prefix="/orders", tags=["orders"])
 app.include_router(orders_overview_router, tags=["orders-overview"])
 app.include_router(order_detail_router, tags=["order-detail"])
