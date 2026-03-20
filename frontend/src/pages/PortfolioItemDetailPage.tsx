@@ -1,16 +1,22 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
+import { getMaterialLibraryItems, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import {
+  createPortfolioTechnologyMaterial,
   createPortfolioTechnologyTemplate,
   createPortfolioTechnologyOperation,
+  deletePortfolioTechnologyMaterial,
   deletePortfolioTechnologyOperation,
+  getPortfolioTechnologyMaterials,
   getOperationLibraryItems,
   getPortfolioItemTechnology,
   getWorkplaceLibraryItems,
   reorderPortfolioTechnologyOperations,
+  updatePortfolioTechnologyMaterial,
   updatePortfolioTechnologyOperation,
   type OperationLibraryItem,
   type PortfolioItem,
+  type PortfolioTechnologyMaterial,
   type PortfolioTechnologyOperation,
   type WorkplaceLibraryItem,
 } from "../services/portfolioApi";
@@ -72,6 +78,31 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   const [workplaceLibraryItems, setWorkplaceLibraryItems] = useState<WorkplaceLibraryItem[]>([]);
   const [librariesLoading, setLibrariesLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [materials, setMaterials] = useState<PortfolioTechnologyMaterial[]>([]);
+  const [materialsLoading, setMaterialsLoading] = useState(false);
+  const [materialsError, setMaterialsError] = useState<string | null>(null);
+  const [showAddMaterialForm, setShowAddMaterialForm] = useState(false);
+  const [isMaterialEditMode, setIsMaterialEditMode] = useState(false);
+  const [editingMaterialId, setEditingMaterialId] = useState<number | null>(null);
+  const [materialLibraryItems, setMaterialLibraryItems] = useState<MaterialLibraryItem[]>([]);
+  const [materialLibraryLoading, setMaterialLibraryLoading] = useState(false);
+  const [materialLibraryError, setMaterialLibraryError] = useState<string | null>(null);
+  const [materialLibraryId, setMaterialLibraryId] = useState<number | null>(null);
+  const [consumptionPerPiece, setConsumptionPerPiece] = useState("");
+  const [consumptionUnit, setConsumptionUnit] = useState("");
+  const [scrapAllowance, setScrapAllowance] = useState("");
+  const [materialNote, setMaterialNote] = useState("");
+
+  const materialById = useMemo(() => {
+    const map = new Map<number, MaterialLibraryItem>();
+    for (const row of materialLibraryItems) map.set(row.id, row);
+    return map;
+  }, [materialLibraryItems]);
+
+  const activeMaterialLibrary = useMemo(
+    () => materialLibraryItems.filter((m) => m.is_active),
+    [materialLibraryItems]
+  );
 
   const activeOperationLibrary = useMemo(
     () => operationLibraryItems.filter((o) => o.is_active),
@@ -131,10 +162,50 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     }
   }
 
+  async function loadTechnologyMaterials() {
+    if (!item?.id) {
+      setMaterials([]);
+      return;
+    }
+    setMaterialsLoading(true);
+    setMaterialsError(null);
+    try {
+      const data = await getPortfolioTechnologyMaterials(item.id);
+      setMaterials(data.materials);
+    } catch (e: unknown) {
+      setMaterialsError(e instanceof Error ? e.message : "Nepodarilo se nacist materialy.");
+      setMaterials([]);
+    } finally {
+      setMaterialsLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadTechnology();
+    loadTechnologyMaterials();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.id]);
+
+  useEffect(() => {
+    if (activeTab !== "Technologický postup") return;
+    loadTechnologyMaterials();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "Technologický postup") return;
+    let cancelled = false;
+    getMaterialLibraryItems()
+      .then((rows) => {
+        if (!cancelled) setMaterialLibraryItems(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setMaterialLibraryItems([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   useEffect(() => {
     if (!showAddOperationForm) return;
@@ -161,6 +232,28 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     };
   }, [showAddOperationForm]);
 
+  useEffect(() => {
+    if (!showAddMaterialForm) return;
+    let cancelled = false;
+    setMaterialLibraryLoading(true);
+    setMaterialLibraryError(null);
+    getMaterialLibraryItems()
+      .then((rows) => {
+        if (!cancelled) setMaterialLibraryItems(rows);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setMaterialLibraryError(e instanceof Error ? e.message : "Nepodarilo se nacist knihovnu materialu.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMaterialLibraryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showAddMaterialForm]);
+
   function resetForm() {
     setIsEditMode(false);
     setEditingOperationId(null);
@@ -176,6 +269,17 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     setOutsourcing(false);
     setNote("");
     setShowAddOperationForm(false);
+  }
+
+  function resetMaterialForm() {
+    setIsMaterialEditMode(false);
+    setEditingMaterialId(null);
+    setMaterialLibraryId(null);
+    setConsumptionPerPiece("");
+    setConsumptionUnit("");
+    setScrapAllowance("");
+    setMaterialNote("");
+    setShowAddMaterialForm(false);
   }
 
   function onOperationSelectChange(value: string) {
@@ -313,6 +417,66 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     }
   }
 
+  function toNumberOrNull(value: string): number | null {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const num = Number(trimmed.replace(",", "."));
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function formatMaterialOptionLabel(m: MaterialLibraryItem): string {
+    const parts = [m.code?.trim(), m.name?.trim(), m.form?.trim(), m.dimension?.trim()].filter(Boolean);
+    return parts.join(" | ");
+  }
+
+  function startEditMaterial(row: PortfolioTechnologyMaterial) {
+    setIsMaterialEditMode(true);
+    setEditingMaterialId(row.id);
+    setMaterialLibraryId(row.material_library_item_id);
+    setConsumptionPerPiece(row.consumption_per_piece == null ? "" : String(row.consumption_per_piece));
+    setConsumptionUnit(row.consumption_unit ?? "");
+    setScrapAllowance(row.scrap_allowance == null ? "" : String(row.scrap_allowance));
+    setMaterialNote(row.note ?? "");
+    setShowAddMaterialForm(true);
+  }
+
+  async function saveMaterial() {
+    if (!templateId) return;
+    if (materialLibraryId == null) {
+      setMaterialsError("Vyberte materiál z knihovny.");
+      return;
+    }
+    const payload = {
+      material_library_item_id: materialLibraryId,
+      consumption_per_piece: toNumberOrNull(consumptionPerPiece),
+      consumption_unit: consumptionUnit.trim() || null,
+      scrap_allowance: toNumberOrNull(scrapAllowance),
+      note: materialNote.trim() || null,
+    };
+    try {
+      if (isMaterialEditMode && editingMaterialId != null) {
+        await updatePortfolioTechnologyMaterial(editingMaterialId, payload);
+      } else {
+        await createPortfolioTechnologyMaterial(templateId, payload);
+      }
+      setMaterialsError(null);
+      await loadTechnologyMaterials();
+      resetMaterialForm();
+    } catch (e: unknown) {
+      setMaterialsError(e instanceof Error ? e.message : "Nepodarilo se ulozit material.");
+    }
+  }
+
+  async function deleteMaterial(id: number) {
+    try {
+      await deletePortfolioTechnologyMaterial(id);
+      await loadTechnologyMaterials();
+      if (editingMaterialId === id) resetMaterialForm();
+    } catch (e: unknown) {
+      setMaterialsError(e instanceof Error ? e.message : "Nepodarilo se smazat material.");
+    }
+  }
+
   return (
     <div style={UI.container}>
       <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
@@ -406,6 +570,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
             </div>
           </div>
         ) : activeTab === "Technologický postup" ? (
+          <>
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
               <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>Technologický postup</div>
@@ -598,6 +763,119 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
               </div>
             )}
           </div>
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16, marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
+              <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>Materiál pro technologický postup</div>
+              <button
+                type="button"
+                style={{ ...UI.buttons.primary, ...(templateId ? {} : { opacity: 0.6, cursor: "not-allowed" }) }}
+                onClick={() => {
+                  if (!templateId) return;
+                  setShowAddMaterialForm((v) => !v);
+                }}
+              >
+                Přidat materiál
+              </button>
+            </div>
+
+            {materialsLoading ? <div style={UI.sectionSubtitle}>Načítám materiály...</div> : null}
+            {materialsError ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 8 }}>{materialsError}</div> : null}
+
+            {showAddMaterialForm ? (
+              <div style={{ ...UI.card, padding: 12, marginBottom: 12 }}>
+                {materialLibraryLoading ? <div style={{ ...UI.sectionSubtitle, marginBottom: 10 }}>Načítám knihovnu materiálů…</div> : null}
+                {materialLibraryError ? (
+                  <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{materialLibraryError}</div>
+                ) : null}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                  <div>
+                    <div style={UI.inputs.label}>Materiál</div>
+                    <select
+                      value={materialLibraryId == null ? "" : String(materialLibraryId)}
+                      onChange={(e) => setMaterialLibraryId(e.target.value ? Number(e.target.value) : null)}
+                      style={UI.inputs.base}
+                      disabled={materialLibraryLoading}
+                    >
+                      <option value="">Vyberte materiál</option>
+                      {activeMaterialLibrary.map((m) => (
+                          <option key={m.id} value={String(m.id)}>
+                            {formatMaterialOptionLabel(m)}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={UI.inputs.label}>Spotřeba / ks</div>
+                    <input value={consumptionPerPiece} onChange={(e) => setConsumptionPerPiece(e.target.value)} style={UI.inputs.base} />
+                  </div>
+                  <div>
+                    <div style={UI.inputs.label}>Jednotka spotřeby</div>
+                    <input value={consumptionUnit} onChange={(e) => setConsumptionUnit(e.target.value)} style={UI.inputs.base} />
+                  </div>
+                  <div>
+                    <div style={UI.inputs.label}>Prořez / odpad</div>
+                    <input value={scrapAllowance} onChange={(e) => setScrapAllowance(e.target.value)} style={UI.inputs.base} />
+                  </div>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <div style={UI.inputs.label}>Poznámka</div>
+                    <input value={materialNote} onChange={(e) => setMaterialNote(e.target.value)} style={UI.inputs.base} />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button type="button" style={UI.buttons.primary} onClick={saveMaterial}>
+                    {isMaterialEditMode ? "Uložit změny" : "Uložit materiál"}
+                  </button>
+                  <button type="button" style={UI.buttons.secondary} onClick={resetMaterialForm}>
+                    Zrušit
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {!templateId ? (
+              <div style={UI.sectionSubtitle}>Nejprve vytvořte technologický postup.</div>
+            ) : materials.length === 0 ? (
+              <div style={UI.sectionSubtitle}>Zatím nejsou definovány žádné materiály.</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={UI.table}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      {["Materiál", "Kód", "Rozměr", "Spotřeba / ks", "Jednotka", "Prořez / odpad", "Poznámka", "Akce"].map((h) => (
+                        <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {materials.map((row) => (
+                      <tr key={row.id}>
+                        <td style={{ ...UI.td, padding: "10px 10px" }}>{row.material_name}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_code || "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {materialById.get(row.material_library_item_id)?.dimension || "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.consumption_per_piece ?? "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.consumption_unit || "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.scrap_allowance ?? "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px" }}>{row.note || "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <button type="button" style={UI.buttons.secondary} onClick={() => startEditMaterial(row)}>
+                            Upravit
+                          </button>
+                          <button type="button" style={UI.buttons.secondary} onClick={() => deleteMaterial(row.id)}>
+                            Smazat
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          </>
         ) : activeTab === "Dokumenty" ? (
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>
