@@ -766,34 +766,44 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
           <div style={{ ...UI.card, borderRadius: 14, padding: 16, marginTop: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
               <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>Materiál pro technologický postup</div>
-              <button
-                type="button"
-                style={{ ...UI.buttons.primary, ...(templateId ? {} : { opacity: 0.6, cursor: "not-allowed" }) }}
-                onClick={() => {
-                  if (!templateId) return;
-                  setShowAddMaterialForm((v) => !v);
-                }}
-              >
-                Přidat materiál
-              </button>
+              {!showAddMaterialForm ? (
+                <button
+                  type="button"
+                  style={{ ...UI.buttons.primary, ...(templateId ? {} : { opacity: 0.6, cursor: "not-allowed" }) }}
+                  onClick={() => {
+                    if (!templateId) return;
+                    setShowAddMaterialForm(true);
+                  }}
+                >
+                  Přidat materiál
+                </button>
+              ) : null}
             </div>
 
             {materialsLoading ? <div style={UI.sectionSubtitle}>Načítám materiály...</div> : null}
             {materialsError ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 8 }}>{materialsError}</div> : null}
 
             {showAddMaterialForm ? (
-              <div style={{ ...UI.card, padding: 12, marginBottom: 12 }}>
+              <div
+                style={{
+                  border: "1px solid #e2e8f0",
+                  background: "#f8fafc",
+                  borderRadius: 12,
+                  padding: 16,
+                  marginBottom: 14,
+                }}
+              >
                 {materialLibraryLoading ? <div style={{ ...UI.sectionSubtitle, marginBottom: 10 }}>Načítám knihovnu materiálů…</div> : null}
                 {materialLibraryError ? (
                   <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{materialLibraryError}</div>
                 ) : null}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                   <div>
                     <div style={UI.inputs.label}>Materiál</div>
                     <select
                       value={materialLibraryId == null ? "" : String(materialLibraryId)}
                       onChange={(e) => setMaterialLibraryId(e.target.value ? Number(e.target.value) : null)}
-                      style={UI.inputs.base}
+                      style={{ ...UI.inputs.base, width: "100%", minHeight: 42 }}
                       disabled={materialLibraryLoading}
                     >
                       <option value="">Vyberte materiál</option>
@@ -804,40 +814,65 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                         ))}
                     </select>
                   </div>
-                  <div>
-                    <div style={UI.inputs.label}>Spotřeba / ks</div>
-                    <input value={consumptionPerPiece} onChange={(e) => setConsumptionPerPiece(e.target.value)} style={UI.inputs.base} />
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 18 }}>
+                    <div>
+                      <div style={UI.inputs.label}>Spotřeba / ks</div>
+                      <input value={consumptionPerPiece} onChange={(e) => setConsumptionPerPiece(e.target.value)} style={UI.inputs.base} />
+                    </div>
+                    <div>
+                      <div style={UI.inputs.label}>Jednotka spotřeby</div>
+                      <input value={consumptionUnit} onChange={(e) => setConsumptionUnit(e.target.value)} style={UI.inputs.base} />
+                    </div>
+                    <div>
+                      <div style={UI.inputs.label}>Prořez / odpad</div>
+                      <input value={scrapAllowance} onChange={(e) => setScrapAllowance(e.target.value)} style={UI.inputs.base} />
+                    </div>
                   </div>
+
                   <div>
-                    <div style={UI.inputs.label}>Jednotka spotřeby</div>
-                    <input value={consumptionUnit} onChange={(e) => setConsumptionUnit(e.target.value)} style={UI.inputs.base} />
-                  </div>
-                  <div>
-                    <div style={UI.inputs.label}>Prořez / odpad</div>
-                    <input value={scrapAllowance} onChange={(e) => setScrapAllowance(e.target.value)} style={UI.inputs.base} />
-                  </div>
-                  <div style={{ gridColumn: "1 / -1" }}>
                     <div style={UI.inputs.label}>Poznámka</div>
                     <input value={materialNote} onChange={(e) => setMaterialNote(e.target.value)} style={UI.inputs.base} />
                   </div>
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                  <button type="button" style={UI.buttons.primary} onClick={saveMaterial}>
-                    {isMaterialEditMode ? "Uložit změny" : "Uložit materiál"}
-                  </button>
-                  <button type="button" style={UI.buttons.secondary} onClick={resetMaterialForm}>
-                    Zrušit
-                  </button>
+
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <button type="button" style={UI.buttons.secondary} onClick={resetMaterialForm}>
+                      Zrušit
+                    </button>
+                    <button type="button" style={UI.buttons.primary} onClick={saveMaterial}>
+                      {isMaterialEditMode ? "Uložit změny" : "Uložit materiál"}
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : null}
 
             {!templateId ? (
               <div style={UI.sectionSubtitle}>Nejprve vytvořte technologický postup.</div>
-            ) : materials.length === 0 ? (
-              <div style={UI.sectionSubtitle}>Zatím nejsou definovány žádné materiály.</div>
+            ) : materials.length === 0 && !showAddMaterialForm ? (
+              <div
+                style={{
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 12,
+                  background: "#f8fafc",
+                  padding: 16,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                  alignItems: "flex-start",
+                }}
+              >
+                <div style={UI.sectionSubtitle}>Zatím nejsou definovány žádné materiály.</div>
+                <button
+                  type="button"
+                  style={UI.buttons.primary}
+                  onClick={() => setShowAddMaterialForm(true)}
+                >
+                  Přidat první materiál
+                </button>
+              </div>
             ) : (
-              <div style={{ overflowX: "auto" }}>
+              <div style={{ overflowX: "auto", marginTop: showAddMaterialForm ? 6 : 12 }}>
                 <table style={UI.table}>
                   <thead>
                     <tr style={{ background: "#f8fafc" }}>
