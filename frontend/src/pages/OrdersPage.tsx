@@ -114,6 +114,15 @@ function formatSearchValue(v: string) {
   return v.trim().toLowerCase();
 }
 
+const ZAKAZKY_OVERVIEW_SUMMARY = [
+  { label: "Celkem objednávky", value: "15 570 000 Kč" },
+  { label: "Počet objednávek", value: "28" },
+  { label: "Nedodělané zakázky", value: "6 240 000 Kč" },
+  { label: "Celkem hodin", value: "1 248 h" },
+  { label: "Po termínu", value: "3" },
+  { label: "K expedici", value: "5" },
+] as const;
+
 const ZAKAZKY_MODULE_SUBTABS = [
   { id: "prehled" as const, label: "Přehled" },
   { id: "dokumenty" as const, label: "Dokumenty" },
@@ -170,20 +179,37 @@ export default function OrdersPage(_props: Props) {
 
   return (
     <div style={{ paddingTop: 10 }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
-        <div>
-          <div style={UI.sectionTitle}>Zakázky</div>
-          <div style={UI.sectionSubtitle}>Přehled zakázek</div>
-        </div>
+      <div>
+        <div style={UI.sectionTitle}>Zakázky</div>
+        <div style={UI.sectionSubtitle}>Přehled zakázek</div>
+      </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button type="button" style={UI.buttons.primary} onClick={() => {}}>
-            Nová zakázka
-          </button>
-          <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
-            Import objednávky
-          </button>
-        </div>
+      <div style={UI.ordersSummaryBar}>
+        {ZAKAZKY_OVERVIEW_SUMMARY.map((tile) => (
+          <div key={tile.label} style={UI.ordersSummaryTile}>
+            <div style={UI.ordersSummaryTileLabel}>{tile.label}</div>
+            <div style={UI.ordersSummaryTileValue}>{tile.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          flexWrap: "wrap",
+          justifyContent: "flex-end",
+          marginTop: 12,
+          marginBottom: 2,
+        }}
+      >
+        <button type="button" style={UI.buttons.primary} onClick={() => {}}>
+          Nová zakázka
+        </button>
+        <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
+          Import objednávky
+        </button>
       </div>
 
       <div style={UI.subTabsContainer}>

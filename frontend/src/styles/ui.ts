@@ -96,6 +96,43 @@ export const UI = {
     lineHeight: 1.15,
   },
 
+  /** Souhrnný řádek nad akcemi (přehled Zakázky) — stejná rodina jako summaryTile */
+  ordersSummaryBar: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 12,
+    alignItems: "stretch",
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  ordersSummaryTile: {
+    background: "#fff",
+    border: "1px solid #dbe2ea",
+    borderRadius: 14,
+    padding: "12px 14px",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+    minHeight: 76,
+    flex: "1 1 160px",
+    minWidth: 148,
+    maxWidth: 240,
+    boxSizing: "border-box" as const,
+  },
+  ordersSummaryTileLabel: {
+    fontSize: 12,
+    color: "#64748b",
+    fontWeight: 900,
+    lineHeight: 1.2,
+  },
+  ordersSummaryTileValue: {
+    fontSize: 20,
+    color: "#0f172a",
+    fontWeight: 1000,
+    lineHeight: 1.15,
+    wordBreak: "break-word" as const,
+  },
+
   /** Sub-navigation tabs (order card, item detail, …) */
   subTabsContainer: {
     display: "flex",
