@@ -96,37 +96,45 @@ export const UI = {
     lineHeight: 1.15,
   },
 
-  /** Souhrnný řádek nad akcemi (přehled Zakázky) — stejná rodina jako summaryTile */
-  ordersSummaryBar: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: 12,
-    alignItems: "stretch",
+  /** Obal KPI řádku (přehled Zakázky): na úzkém viewportu horizontální posun místo zalomení řádku */
+  ordersSummaryBarOuter: {
+    width: "100%",
+    overflowX: "auto" as const,
     marginTop: 14,
     marginBottom: 4,
   },
-  ordersSummaryTile: {
-    background: "#fff",
-    border: "1px solid #dbe2ea",
-    borderRadius: 14,
-    padding: "12px 14px",
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 6,
-    minHeight: 76,
-    flex: "1 1 160px",
-    minWidth: 148,
-    maxWidth: 240,
+  /** 6 stejných sloupců na desktopu, jeden řádek */
+  ordersSummaryBar: {
+    display: "grid",
+    gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
+    gap: 12,
+    alignItems: "stretch",
+    minWidth: 960,
+    width: "100%",
     boxSizing: "border-box" as const,
   },
-  ordersSummaryTileLabel: {
-    fontSize: 12,
-    color: "#64748b",
-    fontWeight: 900,
-    lineHeight: 1.2,
+  /** Kompaktní executive KPI dlaždice (Zakázky) */
+  ordersSummaryKpiTile: {
+    background: "#fff",
+    border: "1px solid #e2e8f0",
+    borderRadius: 12,
+    padding: "10px 12px",
+    display: "flex",
+    flexDirection: "column" as const,
+    justifyContent: "center",
+    gap: 4,
+    minHeight: 104,
+    minWidth: 0,
+    boxSizing: "border-box" as const,
   },
-  ordersSummaryTileValue: {
-    fontSize: 20,
+  ordersSummaryKpiLabel: {
+    fontSize: 11,
+    color: "#64748b",
+    fontWeight: 800,
+    lineHeight: 1.25,
+  },
+  ordersSummaryKpiValue: {
+    fontSize: 22,
     color: "#0f172a",
     fontWeight: 1000,
     lineHeight: 1.15,

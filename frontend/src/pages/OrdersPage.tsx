@@ -184,13 +184,15 @@ export default function OrdersPage(_props: Props) {
         <div style={UI.sectionSubtitle}>Přehled zakázek</div>
       </div>
 
-      <div style={UI.ordersSummaryBar}>
-        {ZAKAZKY_OVERVIEW_SUMMARY.map((tile) => (
-          <div key={tile.label} style={UI.ordersSummaryTile}>
-            <div style={UI.ordersSummaryTileLabel}>{tile.label}</div>
-            <div style={UI.ordersSummaryTileValue}>{tile.value}</div>
-          </div>
-        ))}
+      <div style={UI.ordersSummaryBarOuter}>
+        <div style={UI.ordersSummaryBar}>
+          {ZAKAZKY_OVERVIEW_SUMMARY.map((tile) => (
+            <div key={tile.label} style={UI.ordersSummaryKpiTile}>
+              <div style={UI.ordersSummaryKpiLabel}>{tile.label}</div>
+              <div style={UI.ordersSummaryKpiValue}>{tile.value}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div
