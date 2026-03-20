@@ -18,6 +18,8 @@ import {
 type Props = {
   item?: PortfolioItem | null;
   onBack: () => void;
+  /** Volitelný text tlačítka zpět (např. návrat z detailu zakázky). */
+  backLabel?: string;
 };
 
 type PortfolioDetailSubtab = "Přehled" | "Technologický postup" | "Dokumenty" | "Historie";
@@ -43,7 +45,7 @@ function logisticLabel(mode: string) {
   return "Výroba zákazník";
 }
 
-export default function PortfolioItemDetailPage({ item, onBack }: Props) {
+export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Props) {
   const [activeTab, setActiveTab] = useState<PortfolioDetailSubtab>("Technologický postup");
   const [hoverTab, setHoverTab] = useState<PortfolioDetailSubtab | null>(null);
   const [showAddOperationForm, setShowAddOperationForm] = useState(false);
@@ -316,7 +318,7 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
       <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button type="button" style={UI.buttons.secondary} onClick={onBack}>
-            Zpět na portfolio
+            {backLabel ?? "Zpět na portfolio"}
           </button>
         </div>
 

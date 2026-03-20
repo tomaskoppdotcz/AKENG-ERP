@@ -44,6 +44,11 @@ export default function App() {
     source: "orders" | "drawings";
   } | null>(null);
   const [selectedPortfolioItem, setSelectedPortfolioItem] = useState<PortfolioItem | null>(null);
+  /** Po otevření portfolia z detailu zakázky/výkresů — zpět vrátí na stejnou položku. */
+  const [portfolioReturnFromOrderItem, setPortfolioReturnFromOrderItem] = useState<{
+    id: number;
+    source: "orders" | "drawings";
+  } | null>(null);
 
   function handleLogin() {
     setIsAuthenticated(true);
@@ -70,13 +75,28 @@ export default function App() {
               setActiveModule(selectedItem.source === "orders" ? "Zakázky" : "Výkresy");
               setSelectedItem(null);
             }}
+            onOpenPortfolioItem={(portfolioItem) => {
+              setPortfolioReturnFromOrderItem({ id: selectedItem.id, source: selectedItem.source });
+              setSelectedPortfolioItem(portfolioItem);
+              setSelectedItem(null);
+              setActiveModule("Portfolio");
+            }}
           />
         ) : selectedPortfolioItem ? (
           <PortfolioItemDetailPage
             item={selectedPortfolioItem}
+            backLabel={portfolioReturnFromOrderItem ? "Zpět na položku" : undefined}
             onBack={() => {
-              setActiveModule("Portfolio");
-              setSelectedPortfolioItem(null);
+              if (portfolioReturnFromOrderItem) {
+                const ctx = portfolioReturnFromOrderItem;
+                setSelectedItem({ id: ctx.id, source: ctx.source });
+                setSelectedPortfolioItem(null);
+                setPortfolioReturnFromOrderItem(null);
+                setActiveModule(ctx.source === "orders" ? "Zakázky" : "Výkresy");
+              } else {
+                setActiveModule("Portfolio");
+                setSelectedPortfolioItem(null);
+              }
             }}
           />
         ) : activeModule === "Nástěnka" ? (

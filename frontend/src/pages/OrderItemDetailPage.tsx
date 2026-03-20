@@ -11,6 +11,8 @@ type Props = {
   jobItemId: number;
   source: "orders" | "drawings";
   onBack: () => void;
+  /** Otevře detail portfolio položky (např. z GPN shody). */
+  onOpenPortfolioItem?: (item: PortfolioItem) => void;
 };
 
 type ItemSubtab =
@@ -201,7 +203,7 @@ function PlaceholderCard({ text }: { text: string }) {
   );
 }
 
-export default function OrderItemDetailPage({ jobItemId, source, onBack }: Props) {
+export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenPortfolioItem }: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
   const [hoverTab, setHoverTab] = useState<ItemSubtab | null>(null);
   const data = useMemo(() => getDemoItemDetail(undefined, jobItemId), [jobItemId]);
@@ -416,6 +418,50 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack }: Props
             />
           </div>
           <div style={{ fontSize: 13, color: "#64748b", fontWeight: 700, marginTop: 8 }}>{progressLabel}</div>
+        </div>
+
+        {/* Související moduly */}
+        <div
+          style={{
+            ...UI.card,
+            borderRadius: 14,
+            padding: 14,
+            border: "1px solid #e2e8f0",
+            background: "#fafbfc",
+          }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Související odkazy</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+            {portfolioTechLoading ? (
+              <span style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>Ověřuji portfolio…</span>
+            ) : matchedPortfolioItem ? (
+              <button
+                type="button"
+                style={{
+                  ...UI.buttons.primary,
+                  ...(!onOpenPortfolioItem ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+                }}
+                disabled={!onOpenPortfolioItem}
+                onClick={() => onOpenPortfolioItem?.(matchedPortfolioItem)}
+              >
+                Otevřít portfolio
+              </button>
+            ) : (
+              <span style={{ fontSize: 13, color: "#94a3b8", fontWeight: 700 }}>Portfolio nenalezeno</span>
+            )}
+            <button
+              type="button"
+              style={{
+                ...UI.buttons.secondary,
+                opacity: 0.55,
+                cursor: "not-allowed",
+              }}
+              disabled
+              title="Modul Sklad výrobků bude v budoucnu propojen odsud."
+            >
+              Otevřít sklad výrobků
+            </button>
+          </div>
         </div>
 
         {/* Lokální podkarty položky — obal kvůli viditelnosti celé řady (globální kontejner má overflow: hidden) */}
