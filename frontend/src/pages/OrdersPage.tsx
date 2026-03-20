@@ -114,10 +114,29 @@ function formatSearchValue(v: string) {
   return v.trim().toLowerCase();
 }
 
+const ZAKAZKY_MODULE_SUBTABS = [
+  { id: "prehled" as const, label: "Přehled" },
+  { id: "dokumenty" as const, label: "Dokumenty" },
+  { id: "historie" as const, label: "Historie" },
+  { id: "vykazy" as const, label: "Výkazy" },
+  { id: "neshody" as const, label: "Neshody" },
+  { id: "zmetky" as const, label: "Zmetky" },
+  { id: "reklamace" as const, label: "Reklamace" },
+  { id: "kooperace" as const, label: "Kooperace" },
+  { id: "pozadavky_material" as const, label: "Požadavky materiál" },
+  { id: "poptavky" as const, label: "Poptávky" },
+  { id: "objednavky" as const, label: "Objednávky" },
+  { id: "dodaci_listy" as const, label: "Dodací listy" },
+  { id: "expedice" as const, label: "Expedice" },
+  { id: "naklady" as const, label: "Náklady" },
+] as const;
+
 export default function OrdersPage(_props: Props) {
   const [query, setQuery] = useState("");
   const [selectedCustomerOrderId, setSelectedCustomerOrderId] = useState<number | null>(_props.initialCustomerOrderId ?? null);
   const [hoveredZakazka, setHoveredZakazka] = useState<string | null>(null);
+  const [activeSubtab, setActiveSubtab] = useState("prehled");
+  const [hoverSubtab, setHoverSubtab] = useState<string | null>(null);
 
   function parseCustomerOrderId(zakazka: string): number {
     const raw = zakazka.replace(/^ZAK/i, "");
@@ -147,6 +166,8 @@ export default function OrdersPage(_props: Props) {
     );
   }
 
+  const activeSubtabLabel = ZAKAZKY_MODULE_SUBTABS.find((t) => t.id === activeSubtab)?.label ?? "Přehled";
+
   return (
     <div style={{ paddingTop: 10 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
@@ -165,75 +186,105 @@ export default function OrdersPage(_props: Props) {
         </div>
       </div>
 
-      <div style={{ marginTop: 16, ...UI.card, padding: 16, borderRadius: 14 }}>
-        <div>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Hledat zakázku, zákazníka nebo objednávku..."
-            style={UI.inputs.base}
-          />
-        </div>
+      <div style={UI.subTabsContainer}>
+        {ZAKAZKY_MODULE_SUBTABS.map(({ id, label }) => {
+          const active = id === activeSubtab;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActiveSubtab(id)}
+              onMouseEnter={() => setHoverSubtab(id)}
+              onMouseLeave={() => setHoverSubtab((h) => (h === id ? null : h))}
+              style={{
+                ...UI.subTab,
+                ...(active ? UI.subTabActive : {}),
+                ...(!active && hoverSubtab === id ? UI.subTabHover : {}),
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
 
-        <div style={{ marginTop: 14, overflowX: "auto" }}>
-          <table style={UI.table}>
-            <thead>
-              <tr style={{ background: "#f8fafc" }}>
-                {TABLE_COLUMNS.map((col) => (
-                  <th key={col} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                    {col}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((row) => {
-                const isHovered = hoveredZakazka === row.zakazka;
-                return (
-                  <tr
-                    key={row.zakazka}
-                    onClick={() => setSelectedCustomerOrderId(parseCustomerOrderId(row.zakazka))}
-                    onMouseEnter={() => setHoveredZakazka(row.zakazka)}
-                    onMouseLeave={() => setHoveredZakazka(null)}
-                    style={{
-                      cursor: "pointer",
-                      background: isHovered ? "#eff6ff" : "#fff",
-                    }}
-                  >
-                    <td style={{ ...UI.td, fontWeight: 1000, color: "#0f172a", padding: "10px 10px", whiteSpace: "nowrap" }}>
-                      {row.zakazka}
-                    </td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.zakaznik}</td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.objednavka}</td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.datum}</td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vykresy}</td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900, color: "#0f172a" }}>
-                      {row.prodejniCena}
-                    </td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900, color: "#0f172a" }}>
-                      {row.celkovyNaklad}
-                    </td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vykazanyCas}</td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vyrobaVykonnost}</td>
-                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 1000, color: "#2563eb" }}>
-                      {row.hotovo}
-                    </td>
+      <div style={{ marginTop: 16, ...UI.card, padding: 16, borderRadius: 14 }}>
+        {activeSubtab === "prehled" ? (
+          <>
+            <div>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Hledat zakázku, zákazníka nebo objednávku..."
+                style={UI.inputs.base}
+              />
+            </div>
+
+            <div style={{ marginTop: 14, overflowX: "auto" }}>
+              <table style={UI.table}>
+                <thead>
+                  <tr style={{ background: "#f8fafc" }}>
+                    {TABLE_COLUMNS.map((col) => (
+                      <th key={col} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                        {col}
+                      </th>
+                    ))}
                   </tr>
-                );
-              })}
-              {filtered.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={TABLE_COLUMNS.length}
-                    style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}
-                  >
-                    Žádné výsledky.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {filtered.map((row) => {
+                    const isHovered = hoveredZakazka === row.zakazka;
+                    return (
+                      <tr
+                        key={row.zakazka}
+                        onClick={() => setSelectedCustomerOrderId(parseCustomerOrderId(row.zakazka))}
+                        onMouseEnter={() => setHoveredZakazka(row.zakazka)}
+                        onMouseLeave={() => setHoveredZakazka(null)}
+                        style={{
+                          cursor: "pointer",
+                          background: isHovered ? "#eff6ff" : "#fff",
+                        }}
+                      >
+                        <td style={{ ...UI.td, fontWeight: 1000, color: "#0f172a", padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.zakazka}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.zakaznik}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.objednavka}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.datum}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vykresy}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900, color: "#0f172a" }}>
+                          {row.prodejniCena}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900, color: "#0f172a" }}>
+                          {row.celkovyNaklad}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vykazanyCas}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vyrobaVykonnost}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 1000, color: "#2563eb" }}>
+                          {row.hotovo}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filtered.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={TABLE_COLUMNS.length}
+                        style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}
+                      >
+                        Žádné výsledky.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0, fontWeight: 900 }}>
+            {`Modul ${activeSubtabLabel} pro zakázky je ve vývoji.`}
+          </div>
+        )}
       </div>
     </div>
   );

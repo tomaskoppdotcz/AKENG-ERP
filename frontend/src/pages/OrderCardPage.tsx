@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { UI } from "../styles/ui";
 
 type Props = {
@@ -136,39 +136,11 @@ function getDemoOrder(customerOrderId: number): DemoOrderDetail {
   };
 }
 
-const SUBTABS = [
-  "Přehled",
-  "Dokumenty",
-  "Historie",
-  "Výkazy",
-  "Neshody",
-  "Zmetky",
-  "Reklamace",
-  "Kooperace",
-  "Požadavky materiál",
-  "Poptávky",
-  "Objednávky",
-  "Dodací listy",
-  "Expedice",
-  "Náklady",
-] as const;
-
-function PlaceholderCard({ subtab }: { subtab: (typeof SUBTABS)[number] }) {
-  return (
-    <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
-      <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>{`Modul ${subtab} pro tuto zakázku je ve vývoji.`}</div>
-    </div>
-  );
-}
-
 export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetail }: Props) {
   const data = useMemo(() => getDemoOrder(customerOrderId), [customerOrderId]);
 
   const hotovoPolozky = data.items.filter((i) => i.stav === "Hotovo").length;
   const nehotovoPolozky = data.items.length - hotovoPolozky;
-
-  const [activeSubtab, setActiveSubtab] = useState<(typeof SUBTABS)[number]>("Přehled");
-  const [hoverSubtab, setHoverSubtab] = useState<(typeof SUBTABS)[number] | null>(null);
 
   return (
     <div style={{ paddingTop: 10 }}>
@@ -229,101 +201,96 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
           </div>
         </div>
 
-        <div style={UI.subTabsContainer}>
-          {SUBTABS.map((label) => {
-            const active = label === activeSubtab;
-            return (
-              <button
-                key={label}
-                type="button"
-                onClick={() => setActiveSubtab(label)}
-                onMouseEnter={() => setHoverSubtab(label)}
-                onMouseLeave={() => setHoverSubtab((h) => (h === label ? null : h))}
-                style={{
-                  ...UI.subTab,
-                  ...(active ? UI.subTabActive : {}),
-                  ...(!active && hoverSubtab === label ? UI.subTabHover : {}),
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
+        <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+          <div style={{ fontSize: 16, fontWeight: 1000, color: "#0f172a", marginBottom: 10 }}>Položky zakázky</div>
 
-        {activeSubtab === "Přehled" ? (
-          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
-            <div style={{ fontSize: 16, fontWeight: 1000, color: "#0f172a", marginBottom: 10 }}>Položky zakázky</div>
-
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    {[
-                      "Řádek",
-                      "GPN",
-                      "Popis",
-                      "Materiál",
-                      "Množství",
-                      "Cena za kus",
-                      "Termín",
-                      "VP",
-                      "Stav",
-                      "Akce",
-                    ].map((h) => (
-                      <th
-                        key={h}
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc" }}>
+                  {[
+                    "Řádek",
+                    "GPN",
+                    "Popis",
+                    "Materiál",
+                    "Množství",
+                    "Cena za kus",
+                    "Termín",
+                    "VP",
+                    "Stav",
+                    "Akce",
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      style={{
+                        ...UI.th,
+                        fontSize: 13,
+                        padding: "10px 10px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.items.map((item) => (
+                  <tr key={item.job_item_id}>
+                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>{item.line_no}</td>
+                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>{item.gpn}</td>
+                    <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9" }}>{item.description}</td>
+                    <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9" }}>{item.material}</td>
+                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>{item.qty}</td>
+                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 900, color: "#0f172a" }}>{item.pricePerPiece}</td>
+                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>{item.due_date}</td>
+                    <td
+                      style={{
+                        ...UI.td,
+                        padding: "10px 10px",
+                        whiteSpace: "nowrap",
+                        borderBottom: "1px solid #f1f5f9",
+                        fontWeight: 700,
+                        color: item.vp_code ? "#15803d" : "#64748b",
+                      }}
+                    >
+                      {item.vp_code ?? "-"}
+                    </td>
+                    <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 900, color: "#0f172a" }}>{item.stav}</td>
+                    <td
+                      style={{
+                        ...UI.td,
+                        padding: "10px 10px",
+                        whiteSpace: "nowrap",
+                        borderBottom: "1px solid #f1f5f9",
+                        display: "flex",
+                        gap: 6,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onOpenItemDetail(item)}
                         style={{
-                          ...UI.th,
-                          fontSize: 13,
-                          padding: "10px 10px",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.items.map((item) => (
-                    <tr key={item.job_item_id}>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>{item.line_no}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>{item.gpn}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9" }}>{item.description}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9" }}>{item.material}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>{item.qty}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 900, color: "#0f172a" }}>{item.pricePerPiece}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>{item.due_date}</td>
-                      <td
-                        style={{
-                          ...UI.td,
-                          padding: "10px 10px",
-                          whiteSpace: "nowrap",
-                          borderBottom: "1px solid #f1f5f9",
+                          border: "1px solid #0f172a",
+                          background: "#0f172a",
+                          color: "#fff",
+                          borderRadius: 8,
+                          padding: "5px 8px",
+                          fontSize: 12,
                           fontWeight: 700,
-                          color: item.vp_code ? "#15803d" : "#64748b",
+                          cursor: "pointer",
                         }}
                       >
-                        {item.vp_code ?? "-"}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 900, color: "#0f172a" }}>{item.stav}</td>
-                      <td
-                        style={{
-                          ...UI.td,
-                          padding: "10px 10px",
-                          whiteSpace: "nowrap",
-                          borderBottom: "1px solid #f1f5f9",
-                          display: "flex",
-                          gap: 6,
-                        }}
-                      >
+                        Otevřít
+                      </button>
+
+                      {!item.vp_code ? (
                         <button
                           type="button"
-                          onClick={() => onOpenItemDetail(item)}
+                          onClick={() => {}}
                           style={{
-                            border: "1px solid #0f172a",
-                            background: "#0f172a",
+                            border: "1px solid #15803d",
+                            background: "#15803d",
                             color: "#fff",
                             borderRadius: 8,
                             padding: "5px 8px",
@@ -332,37 +299,16 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                             cursor: "pointer",
                           }}
                         >
-                          Otevřít
+                          Vytvořit VP
                         </button>
-
-                        {!item.vp_code ? (
-                          <button
-                            type="button"
-                            onClick={() => {}}
-                            style={{
-                              border: "1px solid #15803d",
-                              background: "#15803d",
-                              color: "#fff",
-                              borderRadius: 8,
-                              padding: "5px 8px",
-                              fontSize: 12,
-                              fontWeight: 700,
-                              cursor: "pointer",
-                            }}
-                          >
-                            Vytvořit VP
-                          </button>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        ) : (
-          <PlaceholderCard subtab={activeSubtab} />
-        )}
+        </div>
       </div>
     </div>
   );
