@@ -368,29 +368,10 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                         whiteSpace: "nowrap",
                         borderBottom: "1px solid #f1f5f9",
                         display: "flex",
+                        alignItems: "center",
                         gap: 6,
                       }}
                     >
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpenItemDetail(item);
-                        }}
-                        style={{
-                          border: "1px solid #0f172a",
-                          background: "#0f172a",
-                          color: "#fff",
-                          borderRadius: 8,
-                          padding: "5px 8px",
-                          fontSize: 12,
-                          fontWeight: 700,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Otevřít
-                      </button>
-
                       {!item.vp_code ? (
                         <button
                           type="button"
@@ -410,7 +391,9 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                         >
                           Vytvořit VP
                         </button>
-                      ) : null}
+                      ) : (
+                        <span style={{ color: "#94a3b8", fontWeight: 700 }}>—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
