@@ -197,6 +197,7 @@ function PlaceholderCard({ text }: { text: string }) {
 
 export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack }: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
+  const [hoverTab, setHoverTab] = useState<ItemSubtab | null>(null);
   const data = useMemo(() => getDemoItemDetail(customerOrderId, jobItemId), [customerOrderId, jobItemId]);
 
   const progressLabel = useMemo(
@@ -362,16 +363,20 @@ export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack
           <div style={{ fontSize: 13, color: "#64748b", fontWeight: 700, marginTop: 8 }}>{progressLabel}</div>
         </div>
 
-        <div style={UI.subNavigation}>
+        <div style={UI.subTabsContainer}>
           {SUBTABS.map((tab) => {
             const active = tab === activeTab;
             return (
               <button
                 key={tab}
+                type="button"
                 onClick={() => setActiveTab(tab)}
+                onMouseEnter={() => setHoverTab(tab)}
+                onMouseLeave={() => setHoverTab((h) => (h === tab ? null : h))}
                 style={{
-                  ...UI.subNavigationTab,
-                  ...(active ? UI.subNavigationTabActive : {}),
+                  ...UI.subTab,
+                  ...(active ? UI.subTabActive : {}),
+                  ...(!active && hoverTab === tab ? UI.subTabHover : {}),
                 }}
               >
                 {tab}

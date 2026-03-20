@@ -168,6 +168,7 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
   const nehotovoPolozky = data.items.length - hotovoPolozky;
 
   const [activeSubtab, setActiveSubtab] = useState<(typeof SUBTABS)[number]>("Přehled");
+  const [hoverSubtab, setHoverSubtab] = useState<(typeof SUBTABS)[number] | null>(null);
 
   return (
     <div style={{ paddingTop: 10 }}>
@@ -228,7 +229,7 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
           </div>
         </div>
 
-        <div style={UI.subNavigation.wrapper}>
+        <div style={UI.subTabsContainer}>
           {SUBTABS.map((label) => {
             const active = label === activeSubtab;
             return (
@@ -236,7 +237,13 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                 key={label}
                 type="button"
                 onClick={() => setActiveSubtab(label)}
-                style={active ? UI.subNavigation.itemActive : UI.subNavigation.item}
+                onMouseEnter={() => setHoverSubtab(label)}
+                onMouseLeave={() => setHoverSubtab((h) => (h === label ? null : h))}
+                style={{
+                  ...UI.subTab,
+                  ...(active ? UI.subTabActive : {}),
+                  ...(!active && hoverSubtab === label ? UI.subTabHover : {}),
+                }}
               >
                 {label}
               </button>
