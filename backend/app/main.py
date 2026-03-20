@@ -25,6 +25,12 @@ from app.models.planning import PlanningOperation, MachineCalendar, MachineSched
 from app.models.kiosk import Employee, Kiosk, KioskSession, OperationEvent
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
 from app.models.technology_library import TechnologyTemplate, TechnologyTemplateOperation
+from app.models.portfolio import (
+    PortfolioGroup,
+    PortfolioItem,
+    TechnologyTemplate as PortfolioTechnologyTemplate,
+    TechnologyTemplateOperation as PortfolioTechnologyTemplateOperation,
+)
 
 
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
