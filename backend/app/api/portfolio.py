@@ -25,6 +25,17 @@ class PortfolioOperationUpsert(BaseModel):
     note: str | None = None
 
 
+class PortfolioOperationUpdate(BaseModel):
+    operation_no: int | None = None
+    operation_name: str | None = None
+    machine_code: str | None = None
+    setup_time_min: float | None = None
+    labor_time_per_piece_min: float | None = None
+    control_required: bool | None = None
+    outsourcing: bool | None = None
+    note: str | None = None
+
+
 def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
     return {
         "id": op.id,
@@ -348,7 +359,7 @@ def create_template_operation(
 @router.put("/template-operations/{operation_id}")
 def update_template_operation(
     operation_id: int,
-    payload: PortfolioOperationUpsert,
+    payload: PortfolioOperationUpdate,
     db: Session = Depends(get_db),
 ):
     row = db.scalar(
@@ -357,13 +368,39 @@ def update_template_operation(
     if not row:
         raise HTTPException(status_code=404, detail="Technology template operation not found")
 
-    row.operation_name = payload.operation_name
-    row.workplace = payload.machine_code
-    row.setup_min = payload.setup_time_min
-    row.run_min_per_piece = payload.labor_time_per_piece_min
-    row.control_required = payload.control_required
-    row.outsourcing = payload.outsourcing
-    row.note = payload.note
+    data = payload.model_dump(exclude_unset=True)
+
+    if "operation_no" in data and data["operation_no"] is not None and data["operation_no"] <= 0:
+        raise HTTPException(status_code=422, detail="operation_no must be integer > 0")
+
+    if "operation_name" in data:
+        row.operation_name = data["operation_name"]
+    if "machine_code" in data:
+        row.workplace = data["machine_code"]
+    if "setup_time_min" in data:
+        row.setup_min = data["setup_time_min"]
+    if "labor_time_per_piece_min" in data:
+        row.run_min_per_piece = data["labor_time_per_piece_min"]
+    if "control_required" in data:
+        row.control_required = data["control_required"]
+    if "outsourcing" in data:
+        row.outsourcing = data["outsourcing"]
+    if "note" in data:
+        row.note = data["note"]
+    if "operation_no" in data and data["operation_no"] is not None:
+        row.operation_no = data["operation_no"]
+
+    if "operation_no" in data and data["operation_no"] is not None:
+        operations_in_template = db.scalars(
+            select(PortfolioTechnologyTemplateOperation)
+            .where(PortfolioTechnologyTemplateOperation.template_id == row.template_id)
+            .order_by(
+                PortfolioTechnologyTemplateOperation.operation_no.asc(),
+                PortfolioTechnologyTemplateOperation.id.asc(),
+            )
+        ).all()
+        for idx, op in enumerate(operations_in_template):
+            op.operation_no = (idx + 1) * 10
 
     db.commit()
     db.refresh(row)
