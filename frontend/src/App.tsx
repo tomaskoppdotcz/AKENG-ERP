@@ -68,6 +68,7 @@ export default function App() {
           ) : (
             <OrdersPage
               initialCustomerOrderId={orderCardReturnId}
+              onBackToDashboard={() => setActiveModule("Nástěnka")}
               onOpenItemDetail={(customerOrderId, item) => {
                 setOrderCardReturnId(customerOrderId);
                 setOpenedItemDetail({

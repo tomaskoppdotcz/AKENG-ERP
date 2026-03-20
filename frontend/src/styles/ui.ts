@@ -43,6 +43,20 @@ export const UI = {
     color: "#0f172a",
     marginBottom: 6,
   },
+  pageHeaderRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "flex-start",
+    flexWrap: "wrap" as const,
+  },
+  pageHeaderActions: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 10,
+    alignItems: "center",
+    justifyContent: "flex-end",
+  },
   statLabel: {
     fontSize: 13,
     color: "#64748b",

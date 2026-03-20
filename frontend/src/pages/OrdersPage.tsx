@@ -19,6 +19,7 @@ type Props = {
   onOpenOrderCard?: (customerOrderId: number) => void;
   onOpenItemDetail?: (customerOrderId: number, item: DemoOrderItem) => void;
   initialCustomerOrderId?: number | null;
+  onBackToDashboard?: () => void;
 };
 
 type OrderRow = {
@@ -194,9 +195,23 @@ export default function OrdersPage(_props: Props) {
 
   return (
     <div style={{ paddingTop: 10 }}>
-      <div>
-        <div style={UI.sectionTitle}>Zakázky</div>
-        <div style={UI.sectionSubtitle}>Přehled zakázek</div>
+      <div style={UI.pageHeaderRow}>
+        <div>
+          <div style={UI.sectionTitle}>Zakázky</div>
+          <div style={UI.sectionSubtitle}>Přehled zakázek</div>
+        </div>
+
+        <div style={UI.pageHeaderActions}>
+          <button type="button" style={UI.buttons.secondary} onClick={() => _props.onBackToDashboard?.()}>
+            Zpět na nástěnku
+          </button>
+          <button type="button" style={UI.buttons.primary} onClick={() => {}}>
+            Nová zakázka
+          </button>
+          <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
+            Import objednávky
+          </button>
+        </div>
       </div>
 
       <div style={UI.summaryTilesGridOuter}>
@@ -208,25 +223,6 @@ export default function OrdersPage(_props: Props) {
             </div>
           ))}
         </div>
-      </div>
-
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          flexWrap: "wrap",
-          justifyContent: "flex-end",
-          marginTop: 12,
-          marginBottom: 2,
-        }}
-      >
-        <button type="button" style={UI.buttons.primary} onClick={() => {}}>
-          Nová zakázka
-        </button>
-        <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
-          Import objednávky
-        </button>
       </div>
 
       <div style={UI.subTabsContainer}>
