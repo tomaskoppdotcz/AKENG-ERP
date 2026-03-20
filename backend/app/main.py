@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.database import engine
+from app.core.database import SessionLocal, engine
 from app.models.base import Base
 
 from app.api.master_data import router as master_data_router
@@ -21,6 +21,7 @@ from app.api.import_orders import router as import_orders_router
 from app.api.dev_tools import dev_tools_router
 from app.api.generate_operations import router as generate_operations_router
 from app.api.portfolio import router as portfolio_router
+from app.api.portfolio import seed_portfolio_demo_data
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
 from app.models.kiosk import Employee, Kiosk, KioskSession, OperationEvent
@@ -32,6 +33,7 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplate,
     PortfolioTechnologyTemplateOperation,
 )
+from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 
 
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
@@ -48,6 +50,11 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        seed_portfolio_demo_data(db)
+    finally:
+        db.close()
 
 
 app.include_router(master_data_router, prefix="/master-data", tags=["master-data"])
