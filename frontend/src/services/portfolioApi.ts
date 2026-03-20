@@ -100,6 +100,15 @@ export async function getPortfolioItems(): Promise<PortfolioItem[]> {
   return res.json();
 }
 
+/** Najde portfolio položku podle GPN (trim, přesná shoda). */
+export async function findPortfolioItemByGpn(gpn: string): Promise<PortfolioItem | null> {
+  const needle = gpn.trim();
+  if (!needle) return null;
+  const items = await getPortfolioItems();
+  const found = items.find((i) => i.gpn.trim() === needle);
+  return found ?? null;
+}
+
 export async function getPortfolioItemTechnology(
   itemId: number
 ): Promise<PortfolioItemTechnologyResponse> {

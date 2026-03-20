@@ -1,5 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
+import {
+  findPortfolioItemByGpn,
+  getPortfolioItemTechnology,
+  type PortfolioItem,
+  type PortfolioItemTechnologyResponse,
+} from "../services/portfolioApi";
 
 type Props = {
   jobItemId: number;
@@ -199,6 +205,62 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack }: Props
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
   const [hoverTab, setHoverTab] = useState<ItemSubtab | null>(null);
   const data = useMemo(() => getDemoItemDetail(undefined, jobItemId), [jobItemId]);
+
+  const [matchedPortfolioItem, setMatchedPortfolioItem] = useState<PortfolioItem | null>(null);
+  const [portfolioTechnology, setPortfolioTechnology] = useState<PortfolioItemTechnologyResponse | null>(null);
+  const [portfolioTechLoading, setPortfolioTechLoading] = useState(false);
+  const [portfolioTechError, setPortfolioTechError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const gpn = data.gpn.trim();
+    let cancelled = false;
+    setPortfolioTechError(null);
+    if (!gpn) {
+      setMatchedPortfolioItem(null);
+      setPortfolioTechnology(null);
+      setPortfolioTechLoading(false);
+      return;
+    }
+    setPortfolioTechLoading(true);
+    setMatchedPortfolioItem(null);
+    setPortfolioTechnology(null);
+    findPortfolioItemByGpn(gpn)
+      .then(async (item) => {
+        if (cancelled) return;
+        setMatchedPortfolioItem(item);
+        if (!item) {
+          setPortfolioTechnology(null);
+          setPortfolioTechLoading(false);
+          return;
+        }
+        try {
+          const tech = await getPortfolioItemTechnology(item.id);
+          if (!cancelled) {
+            setPortfolioTechnology(tech);
+          }
+        } catch (e: unknown) {
+          if (!cancelled) {
+            setPortfolioTechError(
+              e instanceof Error ? e.message : "Nepodařilo se načíst technologický postup z portfolia."
+            );
+            setPortfolioTechnology(null);
+          }
+        } finally {
+          if (!cancelled) setPortfolioTechLoading(false);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setPortfolioTechError(e instanceof Error ? e.message : "Nepodařilo se načíst portfolio.");
+          setMatchedPortfolioItem(null);
+          setPortfolioTechnology(null);
+          setPortfolioTechLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.gpn]);
 
   const progressLabel = useMemo(
     () => `Hotovo: ${data.operationsDone} / ${data.operationsTotal} operací`,
@@ -400,7 +462,100 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack }: Props
         </div>
 
         {activeTab === "Technologický postup" ? (
-          <PlaceholderCard text="Zatím nejsou definovány žádné operace." />
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+            {portfolioTechLoading ? (
+              <div style={{ ...UI.sectionSubtitle, fontWeight: 600 }}>Načítám technologii z portfolia…</div>
+            ) : portfolioTechError ? (
+              <div style={{ color: "#b45309", fontWeight: 700, fontSize: 14 }}>{portfolioTechError}</div>
+            ) : !matchedPortfolioItem ? (
+              <div style={{ fontSize: 14, color: "#475569", fontWeight: 600, lineHeight: 1.5 }}>
+                Pro tuto položku nebyla nalezena odpovídající portfolio položka.
+              </div>
+            ) : matchedPortfolioItem && portfolioTechnology && portfolioTechnology.template_id != null ? (
+              <>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      padding: "6px 12px",
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: 800,
+                      background: "#e0f2fe",
+                      color: "#0369a1",
+                      border: "1px solid #7dd3fc",
+                    }}
+                  >
+                    Technologie z portfolia
+                  </span>
+                  <span style={{ ...UI.sectionSubtitle, marginBottom: 0 }}>
+                    {portfolioTechnology.template_name ?? "Šablona"}
+                  </span>
+                </div>
+                {portfolioTechnology.operations.length === 0 ? (
+                  <div style={{ ...UI.sectionSubtitle, fontWeight: 600 }}>V šabloně nejsou definované žádné operace.</div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={UI.table}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc" }}>
+                          {[
+                            "Pořadí",
+                            "Operace",
+                            "Pracoviště",
+                            "Setup (min)",
+                            "Čas / ks (min)",
+                            "Kontrola",
+                            "Kooperace",
+                            "Poznámka",
+                          ].map((h) => (
+                            <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {portfolioTechnology.operations.map((op) => (
+                          <tr key={op.id}>
+                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                              {op.operation_no}
+                            </td>
+                            <td style={{ ...UI.td, padding: "10px 10px" }}>{op.operation_name}</td>
+                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.machine_code ?? "—"}</td>
+                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.setup_time_min}</td>
+                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.labor_time_per_piece_min}</td>
+                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                              {op.control_required ? "ANO" : "NE"}
+                            </td>
+                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                              {op.outsourcing ? "ANO" : "NE"}
+                            </td>
+                            <td style={{ ...UI.td, padding: "10px 10px" }}>{op.note ?? "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 14, color: "#475569", fontWeight: 600, lineHeight: 1.5, marginBottom: 12 }}>
+                  Portfolio položka nalezena, ale nemá definovaný technologický postup.
+                </div>
+                <button
+                  type="button"
+                  style={{ ...UI.buttons.secondary, opacity: 0.65, cursor: "not-allowed" }}
+                  disabled
+                  title="Propojení s modulem Portfolio bude doplněno."
+                >
+                  Otevřít portfolio položku
+                </button>
+              </>
+            )}
+          </div>
         ) : (
           <PlaceholderCard text={`Modul ${activeTab} pro tuto položku je ve vývoji.`} />
         )}
