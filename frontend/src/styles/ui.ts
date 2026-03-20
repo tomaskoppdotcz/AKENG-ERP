@@ -54,57 +54,25 @@ export const UI = {
     fontWeight: 1000,
   },
 
-  // Executive-style summary tiles (OrderCard header)
-  summaryTile: {
-    background: "#fff",
-    border: "1px solid #dbe2ea",
-    borderRadius: 14,
-    padding: 14,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 8,
-    minHeight: 86,
-  },
-  summaryTileLabel: {
-    fontSize: 12,
-    color: "#64748b",
-    fontWeight: 900,
-  },
-  summaryTileValue: {
-    fontSize: 20,
-    color: "#0f172a",
-    fontWeight: 1000,
-    lineHeight: 1.15,
-    wordBreak: "break-word" as const,
-  },
-  summaryTileSubValue: {
-    fontSize: 12,
-    color: "#334155",
-    fontWeight: 900,
-    marginBottom: 4,
-  },
-  summaryTileValueHotovo: {
-    fontSize: 18,
-    fontWeight: 1000,
-    color: "#16a34a",
-    lineHeight: 1.15,
-  },
-  summaryTileValueNehotovo: {
-    fontSize: 18,
-    fontWeight: 1000,
-    color: "#dc2626",
-    lineHeight: 1.15,
-  },
-
-  /** Obal KPI řádku (přehled Zakázky): na úzkém viewportu horizontální posun místo zalomení řádku */
-  ordersSummaryBarOuter: {
+  /**
+   * Executive KPI / souhrnné dlaždice — jednotný systém (Zakázky, Karta zakázky, Detail položky)
+   */
+  summaryTilesGridOuter: {
     width: "100%",
     overflowX: "auto" as const,
     marginTop: 14,
     marginBottom: 4,
   },
-  /** 6 stejných sloupců na desktopu, jeden řádek */
-  ordersSummaryBar: {
+  /** Řádek dlaždic s wrap (karta zakázky, detail položky) */
+  summaryTilesGrid: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 12,
+    alignItems: "stretch",
+    width: "100%",
+  },
+  /** Šest stejných KPI v jednom řádku na desktopu (přehled Zakázky) */
+  summaryTilesGridSix: {
     display: "grid",
     gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
     gap: 12,
@@ -113,8 +81,7 @@ export const UI = {
     width: "100%",
     boxSizing: "border-box" as const,
   },
-  /** Kompaktní executive KPI dlaždice (Zakázky) */
-  ordersSummaryKpiTile: {
+  summaryTile: {
     background: "#fff",
     border: "1px solid #e2e8f0",
     borderRadius: 12,
@@ -127,18 +94,37 @@ export const UI = {
     minWidth: 0,
     boxSizing: "border-box" as const,
   },
-  ordersSummaryKpiLabel: {
+  summaryTileLabel: {
     fontSize: 11,
     color: "#64748b",
     fontWeight: 800,
     lineHeight: 1.25,
   },
-  ordersSummaryKpiValue: {
+  summaryTileValue: {
     fontSize: 22,
     color: "#0f172a",
     fontWeight: 1000,
     lineHeight: 1.15,
     wordBreak: "break-word" as const,
+  },
+  summaryTileSubValue: {
+    fontSize: 11,
+    color: "#64748b",
+    fontWeight: 800,
+    marginBottom: 2,
+    lineHeight: 1.2,
+  },
+  summaryTileValueHotovo: {
+    fontSize: 20,
+    fontWeight: 1000,
+    color: "#16a34a",
+    lineHeight: 1.15,
+  },
+  summaryTileValueNehotovo: {
+    fontSize: 20,
+    fontWeight: 1000,
+    color: "#dc2626",
+    lineHeight: 1.15,
   },
 
   /** Sub-navigation tabs (order card, item detail, …) */
@@ -286,6 +272,42 @@ export const UI = {
       color: "#334155",
       marginBottom: 6,
     },
+  },
+
+  /** Filtr bar nad tabulkou Zakázky */
+  ordersFilterBar: {
+    display: "flex",
+    gap: 10,
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap" as const,
+    marginBottom: 12,
+  },
+  ordersFilterSearchWrap: {
+    flex: "1 1 360px",
+    minWidth: 280,
+  },
+  ordersFilterChips: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    flexWrap: "wrap" as const,
+  },
+  ordersFilterChip: {
+    border: "1px solid #dbe2ea",
+    background: "#f8fafc",
+    color: "#0f172a",
+    borderRadius: 999,
+    padding: "7px 10px",
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  },
+  ordersFilterChipActive: {
+    border: "1px solid #2563eb",
+    background: "#dbeafe",
+    color: "#1d4ed8",
   },
 
   topNavigation: {

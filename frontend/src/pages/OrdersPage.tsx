@@ -140,12 +140,16 @@ const ZAKAZKY_MODULE_SUBTABS = [
   { id: "naklady" as const, label: "Náklady" },
 ] as const;
 
+const ORDER_FILTERS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
+type OrderFilter = (typeof ORDER_FILTERS)[number];
+
 export default function OrdersPage(_props: Props) {
   const [query, setQuery] = useState("");
   const [selectedCustomerOrderId, setSelectedCustomerOrderId] = useState<number | null>(_props.initialCustomerOrderId ?? null);
   const [hoveredZakazka, setHoveredZakazka] = useState<string | null>(null);
   const [activeSubtab, setActiveSubtab] = useState("prehled");
   const [hoverSubtab, setHoverSubtab] = useState<string | null>(null);
+  const [activeFilters, setActiveFilters] = useState<OrderFilter[]>([]);
 
   function parseCustomerOrderId(zakazka: string): number {
     const raw = zakazka.replace(/^ZAK/i, "");
@@ -155,13 +159,24 @@ export default function OrdersPage(_props: Props) {
 
   const filtered = useMemo(() => {
     const q = formatSearchValue(query);
-    if (!q) return DEMO_ORDERS;
-
     return DEMO_ORDERS.filter((row) => {
       const haystack = [row.zakazka, row.zakaznik, row.objednavka].join(" ").toLowerCase();
-      return haystack.includes(q);
+      const matchesQuery = !q || haystack.includes(q);
+
+      const hotovoNum = Number.parseInt(row.hotovo.replace("%", "").trim(), 10) || 0;
+      const orderNum = Number(row.zakazka.replace("ZAK", "")) || 0;
+
+      const matchesFilters = activeFilters.every((f) => {
+        if (f === "Po termínu") return row.datum < "2026-03-08";
+        if (f === "Dokončená") return hotovoNum >= 50;
+        if (f === "Dodací list") return orderNum % 2 === 0;
+        if (f === "Fakturováno") return hotovoNum >= 50 && row.datum <= "2026-03-09";
+        return true;
+      });
+
+      return matchesQuery && matchesFilters;
     });
-  }, [query]);
+  }, [query, activeFilters]);
 
   if (selectedCustomerOrderId !== null) {
     return (
@@ -184,12 +199,12 @@ export default function OrdersPage(_props: Props) {
         <div style={UI.sectionSubtitle}>Přehled zakázek</div>
       </div>
 
-      <div style={UI.ordersSummaryBarOuter}>
-        <div style={UI.ordersSummaryBar}>
+      <div style={UI.summaryTilesGridOuter}>
+        <div style={UI.summaryTilesGridSix}>
           {ZAKAZKY_OVERVIEW_SUMMARY.map((tile) => (
-            <div key={tile.label} style={UI.ordersSummaryKpiTile}>
-              <div style={UI.ordersSummaryKpiLabel}>{tile.label}</div>
-              <div style={UI.ordersSummaryKpiValue}>{tile.value}</div>
+            <div key={tile.label} style={UI.summaryTile}>
+              <div style={UI.summaryTileLabel}>{tile.label}</div>
+              <div style={UI.summaryTileValue}>{tile.value}</div>
             </div>
           ))}
         </div>
@@ -239,16 +254,40 @@ export default function OrdersPage(_props: Props) {
       <div style={{ marginTop: 16, ...UI.card, padding: 16, borderRadius: 14 }}>
         {activeSubtab === "prehled" ? (
           <>
-            <div>
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Hledat zakázku, zákazníka nebo objednávku..."
-                style={UI.inputs.base}
-              />
+            <div style={UI.ordersFilterBar}>
+              <div style={UI.ordersFilterSearchWrap}>
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Hledat zakázku, zákazníka nebo objednávku..."
+                  style={UI.inputs.base}
+                />
+              </div>
+              <div style={UI.ordersFilterChips}>
+                {ORDER_FILTERS.map((filter) => {
+                  const active = activeFilters.includes(filter);
+                  return (
+                    <button
+                      key={filter}
+                      type="button"
+                      onClick={() =>
+                        setActiveFilters((prev) =>
+                          prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
+                        )
+                      }
+                      style={{
+                        ...UI.ordersFilterChip,
+                        ...(active ? UI.ordersFilterChipActive : {}),
+                      }}
+                    >
+                      {filter}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            <div style={{ marginTop: 14, overflowX: "auto" }}>
+            <div style={{ overflowX: "auto" }}>
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
