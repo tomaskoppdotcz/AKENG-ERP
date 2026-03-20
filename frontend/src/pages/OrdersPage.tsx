@@ -17,7 +17,7 @@ type DemoOrderItem = {
 
 type Props = {
   onOpenOrderCard?: (customerOrderId: number) => void;
-  onOpenItemDetail?: (customerOrderId: number, item: DemoOrderItem) => void;
+  onOpenItemDetail?: (jobItemId: number, source: "orders") => void;
   initialCustomerOrderId?: number | null;
   onBackToDashboard?: () => void;
 };
@@ -184,8 +184,8 @@ export default function OrdersPage(_props: Props) {
       <OrderCardPage
         customerOrderId={selectedCustomerOrderId}
         onBack={() => setSelectedCustomerOrderId(null)}
-        onOpenItemDetail={(item) => {
-          _props.onOpenItemDetail?.(selectedCustomerOrderId, item);
+        onOpenItemDetail={(jobItemId, source) => {
+          _props.onOpenItemDetail?.(jobItemId, source);
         }}
       />
     );

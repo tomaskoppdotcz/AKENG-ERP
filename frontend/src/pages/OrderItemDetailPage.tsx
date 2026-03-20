@@ -2,14 +2,14 @@ import React, { useMemo, useState } from "react";
 import { UI } from "../styles/ui";
 
 type Props = {
-  customerOrderId?: number;
-  jobItemId?: number;
-  onBack?: () => void;
+  jobItemId: number;
+  source: "orders" | "drawings";
+  onBack: () => void;
 };
 
 type ItemSubtab =
-  | "Technologický postup"
   | "Dokumenty"
+  | "Technologický postup"
   | "Výkazy"
   | "Neshody"
   | "Zmetky"
@@ -39,8 +39,8 @@ type DemoItemDetail = {
 };
 
 const SUBTABS: ItemSubtab[] = [
-  "Technologický postup",
   "Dokumenty",
+  "Technologický postup",
   "Výkazy",
   "Neshody",
   "Zmetky",
@@ -195,10 +195,10 @@ function PlaceholderCard({ text }: { text: string }) {
   );
 }
 
-export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack }: Props) {
+export default function OrderItemDetailPage({ jobItemId, source, onBack }: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
   const [hoverTab, setHoverTab] = useState<ItemSubtab | null>(null);
-  const data = useMemo(() => getDemoItemDetail(customerOrderId, jobItemId), [customerOrderId, jobItemId]);
+  const data = useMemo(() => getDemoItemDetail(undefined, jobItemId), [jobItemId]);
 
   const progressLabel = useMemo(
     () => `Hotovo: ${data.operationsDone} / ${data.operationsTotal} operací`,
@@ -217,8 +217,8 @@ export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack
     <div style={UI.container}>
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <div>
-          <button onClick={() => onBack?.()} style={UI.buttonSecondary}>
-            Zpět na zakázku
+          <button onClick={onBack} style={UI.buttonSecondary}>
+            {source === "orders" ? "Zpět na zakázku" : "Zpět na výkresy"}
           </button>
         </div>
 
@@ -245,7 +245,9 @@ export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack
             >
               {data.gpn}
             </h1>
-            <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0, maxWidth: 720 }}>{data.popis}</p>
+            <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0, maxWidth: 720 }}>
+              {source === "drawings" ? "Detail položky napříč zakázkami" : data.popis}
+            </p>
           </div>
           <div
             style={{
@@ -295,17 +297,8 @@ export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack
           </div>
         </div>
 
-        {/* Sekce 2 — kompaktní řádek údajů */}
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap" as const,
-            gap: 24,
-            alignItems: "flex-start",
-            paddingTop: 4,
-            borderTop: "1px solid #e2e8f0",
-          }}
-        >
+        {/* Sekce 2 — údaje jako executive dlaždice (stejný systém jako Zakázky / karta) */}
+        <div style={UI.summaryTilesGrid}>
           {(
             [
               ["Zakázka", data.zakazka],
@@ -316,9 +309,9 @@ export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack
               ["Cena / ks", data.cenaZaKs],
             ] as const
           ).map(([label, value]) => (
-            <div key={label} style={{ minWidth: 100, maxWidth: 280 }}>
-              <div style={{ ...UI.statLabel, fontSize: 11, fontWeight: 800, marginBottom: 4 }}>{label}</div>
-              <div style={{ ...UI.statValue, fontSize: 14, lineHeight: 1.3 }}>{value}</div>
+            <div key={label} style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
+              <div style={UI.summaryTileLabel}>{label}</div>
+              <div style={UI.summaryTileValue}>{value}</div>
             </div>
           ))}
         </div>
@@ -363,26 +356,47 @@ export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack
           <div style={{ fontSize: 13, color: "#64748b", fontWeight: 700, marginTop: 8 }}>{progressLabel}</div>
         </div>
 
-        <div style={UI.subTabsContainer}>
-          {SUBTABS.map((tab) => {
-            const active = tab === activeTab;
-            return (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setActiveTab(tab)}
-                onMouseEnter={() => setHoverTab(tab)}
-                onMouseLeave={() => setHoverTab((h) => (h === tab ? null : h))}
-                style={{
-                  ...UI.subTab,
-                  ...(active ? UI.subTabActive : {}),
-                  ...(!active && hoverTab === tab ? UI.subTabHover : {}),
-                }}
-              >
-                {tab}
-              </button>
-            );
-          })}
+        {/* Lokální podkarty položky — obal kvůli viditelnosti celé řady (globální kontejner má overflow: hidden) */}
+        <div
+          style={{
+            width: "100%",
+            overflowX: "auto" as const,
+            overflowY: "hidden" as const,
+            marginTop: 12,
+            marginBottom: 4,
+          }}
+        >
+          <div
+            style={{
+              ...UI.subTabsContainer,
+              overflow: "visible",
+              width: "max-content",
+              minWidth: "100%",
+              justifyContent: "flex-start",
+              marginTop: 0,
+              marginBottom: 0,
+            }}
+          >
+            {SUBTABS.map((tab) => {
+              const active = tab === activeTab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  onMouseEnter={() => setHoverTab(tab)}
+                  onMouseLeave={() => setHoverTab((h) => (h === tab ? null : h))}
+                  style={{
+                    ...UI.subTab,
+                    ...(active ? UI.subTabActive : {}),
+                    ...(!active && hoverTab === tab ? UI.subTabHover : {}),
+                  }}
+                >
+                  {tab}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {activeTab === "Technologický postup" ? (

@@ -4,7 +4,7 @@ import { UI } from "../styles/ui";
 type Props = {
   customerOrderId: number;
   onBack: () => void;
-  onOpenItemDetail: (item: DemoOrderItem) => void;
+  onOpenItemDetail: (jobItemId: number, source: "orders") => void;
 };
 
 type DemoOrderItem = {
@@ -379,11 +379,11 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                     key={item.job_item_id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => onOpenItemDetail(item)}
+                    onClick={() => onOpenItemDetail(item.job_item_id, "orders")}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        onOpenItemDetail(item);
+                        onOpenItemDetail(item.job_item_id, "orders");
                       }
                     }}
                     onMouseEnter={() => setHoveredItemId(item.job_item_id)}

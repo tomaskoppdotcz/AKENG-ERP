@@ -16,17 +16,8 @@ type DrawingItem = {
 
 type Props = {
   onBackToDashboard?: () => void;
-  onOpenItemDetail?: (customerOrderId: number, item: { job_item_id: number }) => void;
+  onOpenItemDetail?: (jobItemId: number, source: "drawings") => void;
 };
-
-const KPI = [
-  { label: "Celkem položek", value: "186" },
-  { label: "Aktivní položky", value: "142" },
-  { label: "Bez technologie", value: "11" },
-  { label: "Bez VP", value: "24" },
-  { label: "Po termínu", value: "7" },
-  { label: "K expedici", value: "18" },
-] as const;
 
 const SUBTABS = [
   "Přehled",
@@ -90,6 +81,25 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
     });
   }, [query, activeFilters]);
 
+  const kpi = useMemo(() => {
+    const celkemPolozek = DEMO_ROWS.length;
+    const celkemKusu = DEMO_ROWS.reduce((sum, row) => {
+      const qty = Number.parseInt(row.mnozstvi.replace(" ks", "").trim(), 10) || 0;
+      return sum + qty;
+    }, 0);
+    const aktivniPolozky = DEMO_ROWS.filter((row) => row.stav !== "Hotovo").length;
+    const poTerminu = DEMO_ROWS.filter((row) => row.termin < "2026-03-12").length;
+    const kExpedici = DEMO_ROWS.filter((row) => row.stav === "Hotovo").length;
+
+    return [
+      { label: "Celkem položek", value: String(celkemPolozek) },
+      { label: "Celkem kusů", value: `${celkemKusu} ks` },
+      { label: "Aktivní položky", value: String(aktivniPolozky) },
+      { label: "Po termínu", value: String(poTerminu) },
+      { label: "K expedici", value: String(kExpedici) },
+    ] as const;
+  }, []);
+
   return (
     <div style={{ paddingTop: 10 }}>
       <div style={UI.pageHeaderRow}>
@@ -112,7 +122,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
 
       <div style={UI.summaryTilesGridOuter}>
         <div style={UI.summaryTilesGridSix}>
-          {KPI.map((k) => (
+          {kpi.map((k) => (
             <div key={k.label} style={UI.summaryTile}>
               <div style={UI.summaryTileLabel}>{k.label}</div>
               <div style={UI.summaryTileValue}>{k.value}</div>
@@ -212,11 +222,11 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
                       key={`${row.customerOrderId}-${row.job_item_id}`}
                       role="button"
                       tabIndex={0}
-                      onClick={() => onOpenItemDetail?.(row.customerOrderId, { job_item_id: row.job_item_id })}
+                      onClick={() => onOpenItemDetail?.(row.job_item_id, "drawings")}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          onOpenItemDetail?.(row.customerOrderId, { job_item_id: row.job_item_id });
+                          onOpenItemDetail?.(row.job_item_id, "drawings");
                         }
                       }}
                       onMouseEnter={() => setHoveredRow(row.job_item_id)}

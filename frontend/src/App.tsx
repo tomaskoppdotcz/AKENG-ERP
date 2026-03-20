@@ -35,9 +35,9 @@ export default function App() {
   const [activeModule, setActiveModule] = useState<string>("Nástěnka");
 
   const [orderCardReturnId, setOrderCardReturnId] = useState<number | null>(null);
-  const [openedItemDetail, setOpenedItemDetail] = useState<{
-    customerOrderId: number;
-    jobItemId: number;
+  const [selectedItem, setSelectedItem] = useState<{
+    id: number;
+    source: "orders" | "drawings";
   } | null>(null);
 
   function handleLogin() {
@@ -57,11 +57,14 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: UI.appBackground, fontFamily: "Arial, sans-serif" }}>
       <TopNav activeModule={activeModule} onNavigate={setActiveModule} navItems={NAV_ITEMS as unknown as string[]} />
       <div style={UI.mainContainer}>
-        {(activeModule === "Zakázky" || activeModule === "Výkresy") && openedItemDetail ? (
+        {selectedItem ? (
           <OrderItemDetailPage
-            customerOrderId={openedItemDetail.customerOrderId}
-            jobItemId={openedItemDetail.jobItemId}
-            onBack={() => setOpenedItemDetail(null)}
+            jobItemId={selectedItem.id}
+            source={selectedItem.source}
+            onBack={() => {
+              setActiveModule(selectedItem.source === "orders" ? "Zakázky" : "Výkresy");
+              setSelectedItem(null);
+            }}
           />
         ) : activeModule === "Nástěnka" ? (
           <DashboardPage />
@@ -69,22 +72,15 @@ export default function App() {
           <OrdersPage
             initialCustomerOrderId={orderCardReturnId}
             onBackToDashboard={() => setActiveModule("Nástěnka")}
-            onOpenItemDetail={(customerOrderId, item) => {
-              setOrderCardReturnId(customerOrderId);
-              setOpenedItemDetail({
-                customerOrderId,
-                jobItemId: item.job_item_id,
-              });
+              onOpenItemDetail={(id, source) => {
+                setSelectedItem({ id, source });
             }}
           />
         ) : activeModule === "Výkresy" ? (
           <DrawingsPage
             onBackToDashboard={() => setActiveModule("Nástěnka")}
-            onOpenItemDetail={(customerOrderId, item) => {
-              setOpenedItemDetail({
-                customerOrderId,
-                jobItemId: item.job_item_id,
-              });
+            onOpenItemDetail={(id, source) => {
+              setSelectedItem({ id, source });
             }}
           />
         ) : (
