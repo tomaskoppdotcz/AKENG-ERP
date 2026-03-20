@@ -3,6 +3,7 @@ import LoginPage from "./pages/LoginPage.tsx";
 import DashboardPage from "./pages/DashboardPage.tsx";
 import OrdersPage from "./pages/OrdersPage.tsx";
 import OrderItemDetailPage from "./pages/OrderItemDetailPage.tsx";
+import DrawingsPage from "./pages/DrawingsPage.tsx";
 import TopNav from "./components/TopNav.tsx";
 import { UI } from "./styles/ui";
 
@@ -56,28 +57,36 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: UI.appBackground, fontFamily: "Arial, sans-serif" }}>
       <TopNav activeModule={activeModule} onNavigate={setActiveModule} navItems={NAV_ITEMS as unknown as string[]} />
       <div style={UI.mainContainer}>
-        {activeModule === "Nástěnka" ? (
+        {(activeModule === "Zakázky" || activeModule === "Výkresy") && openedItemDetail ? (
+          <OrderItemDetailPage
+            customerOrderId={openedItemDetail.customerOrderId}
+            jobItemId={openedItemDetail.jobItemId}
+            onBack={() => setOpenedItemDetail(null)}
+          />
+        ) : activeModule === "Nástěnka" ? (
           <DashboardPage />
         ) : activeModule === "Zakázky" ? (
-          openedItemDetail ? (
-            <OrderItemDetailPage
-              customerOrderId={openedItemDetail.customerOrderId}
-              jobItemId={openedItemDetail.jobItemId}
-              onBack={() => setOpenedItemDetail(null)}
-            />
-          ) : (
-            <OrdersPage
-              initialCustomerOrderId={orderCardReturnId}
-              onBackToDashboard={() => setActiveModule("Nástěnka")}
-              onOpenItemDetail={(customerOrderId, item) => {
-                setOrderCardReturnId(customerOrderId);
-                setOpenedItemDetail({
-                  customerOrderId,
-                  jobItemId: item.job_item_id,
-                });
-              }}
-            />
-          )
+          <OrdersPage
+            initialCustomerOrderId={orderCardReturnId}
+            onBackToDashboard={() => setActiveModule("Nástěnka")}
+            onOpenItemDetail={(customerOrderId, item) => {
+              setOrderCardReturnId(customerOrderId);
+              setOpenedItemDetail({
+                customerOrderId,
+                jobItemId: item.job_item_id,
+              });
+            }}
+          />
+        ) : activeModule === "Výkresy" ? (
+          <DrawingsPage
+            onBackToDashboard={() => setActiveModule("Nástěnka")}
+            onOpenItemDetail={(customerOrderId, item) => {
+              setOpenedItemDetail({
+                customerOrderId,
+                jobItemId: item.job_item_id,
+              });
+            }}
+          />
         ) : (
           <ModulePlaceholderPage moduleName={activeModule} />
         )}
