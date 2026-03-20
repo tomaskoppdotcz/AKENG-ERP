@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,30 @@ from app.models.portfolio import (
 )
 
 router = APIRouter()
+
+
+class PortfolioOperationUpsert(BaseModel):
+    operation_name: str
+    machine_code: str | None = None
+    setup_time_min: float = 0
+    labor_time_per_piece_min: float = 0
+    control_required: bool = False
+    outsourcing: bool = False
+    note: str | None = None
+
+
+def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
+    return {
+        "id": op.id,
+        "operation_no": op.operation_no,
+        "operation_name": op.operation_name,
+        "machine_code": op.workplace,
+        "setup_time_min": op.setup_min,
+        "labor_time_per_piece_min": op.run_min_per_piece,
+        "control_required": op.control_required,
+        "outsourcing": op.outsourcing,
+        "note": op.note,
+    }
 
 
 def seed_portfolio_demo_data(db: Session) -> None:
@@ -235,21 +260,88 @@ def get_portfolio_item_technology(item_id: int, db: Session = Depends(get_db)):
     )
 
     if not template:
-        return None
+        return {
+            "template_id": None,
+            "template_name": None,
+            "operations": [],
+        }
 
     return {
         "template_id": template.id,
         "template_name": template.name,
-        "operations": [
-            {
-                "id": op.id,
-                "operation_no": op.operation_no,
-                "operation_name": op.operation_name,
-                "machine_code": op.workplace,
-                "setup_time_min": op.setup_min,
-                "labor_time_per_piece_min": op.run_min_per_piece,
-            }
-            for op in template.operations
-        ],
+        "operations": [_operation_to_payload(op) for op in template.operations],
     }
+
+
+@router.post("/templates/{template_id}/operations")
+def create_template_operation(
+    template_id: int,
+    payload: PortfolioOperationUpsert,
+    db: Session = Depends(get_db),
+):
+    template = db.scalar(select(PortfolioTechnologyTemplate).where(PortfolioTechnologyTemplate.id == template_id))
+    if not template:
+        raise HTTPException(status_code=404, detail="Technology template not found")
+
+    last_operation = db.scalar(
+        select(PortfolioTechnologyTemplateOperation)
+        .where(PortfolioTechnologyTemplateOperation.template_id == template_id)
+        .order_by(PortfolioTechnologyTemplateOperation.operation_no.desc())
+        .limit(1)
+    )
+    next_operation_no = (last_operation.operation_no + 1) if last_operation else 1
+
+    row = PortfolioTechnologyTemplateOperation(
+        template_id=template_id,
+        operation_no=next_operation_no,
+        operation_name=payload.operation_name,
+        workplace=payload.machine_code,
+        setup_min=payload.setup_time_min,
+        run_min_per_piece=payload.labor_time_per_piece_min,
+        control_required=payload.control_required,
+        outsourcing=payload.outsourcing,
+        note=payload.note,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _operation_to_payload(row)
+
+
+@router.put("/template-operations/{operation_id}")
+def update_template_operation(
+    operation_id: int,
+    payload: PortfolioOperationUpsert,
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(
+        select(PortfolioTechnologyTemplateOperation).where(PortfolioTechnologyTemplateOperation.id == operation_id)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Technology template operation not found")
+
+    row.operation_name = payload.operation_name
+    row.workplace = payload.machine_code
+    row.setup_min = payload.setup_time_min
+    row.run_min_per_piece = payload.labor_time_per_piece_min
+    row.control_required = payload.control_required
+    row.outsourcing = payload.outsourcing
+    row.note = payload.note
+
+    db.commit()
+    db.refresh(row)
+    return _operation_to_payload(row)
+
+
+@router.delete("/template-operations/{operation_id}")
+def delete_template_operation(operation_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(
+        select(PortfolioTechnologyTemplateOperation).where(PortfolioTechnologyTemplateOperation.id == operation_id)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Technology template operation not found")
+
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}
 
