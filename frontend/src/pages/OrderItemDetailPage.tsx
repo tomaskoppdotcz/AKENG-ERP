@@ -70,6 +70,11 @@ const DEFAULT_DEMO_ITEM: DemoItemDetail = {
   stavVyroby: "Rozpracováno",
 };
 
+function displayStav(stav: string): string {
+  if (stav === "Běží") return "Ve výrobě";
+  return stav;
+}
+
 function getDemoItemDetail(customerOrderId?: number, jobItemId?: number): DemoItemDetail {
   const safeCustomerOrderId = customerOrderId ?? DEFAULT_DEMO_ITEM.customerOrderId;
   const safeJobItemId = jobItemId ?? DEFAULT_DEMO_ITEM.jobItemId;
@@ -190,25 +195,6 @@ function PlaceholderCard({ text }: { text: string }) {
   );
 }
 
-function SummaryTile({
-  title,
-  value,
-  accent,
-}: {
-  title: string;
-  value: string;
-  accent?: string;
-}) {
-  return (
-    <div style={UI.summaryTile}>
-      <div style={UI.summaryTileLabel}>{title}</div>
-      <div style={{ ...UI.summaryTileValue, color: accent || UI.summaryTileValue.color }}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
 export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack }: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
   const data = useMemo(() => getDemoItemDetail(customerOrderId, jobItemId), [customerOrderId, jobItemId]);
@@ -218,103 +204,162 @@ export default function OrderItemDetailPage({ customerOrderId, jobItemId, onBack
     [data.operationsDone, data.operationsTotal]
   );
 
+  const stavLabel = displayStav(data.stav);
+  const stavBadgeStyle =
+    stavLabel === "Hotovo"
+      ? { background: "#dcfce7", color: "#15803d", border: "1px solid #86efac" }
+      : stavLabel === "Ve výrobě"
+        ? { background: "#dbeafe", color: "#1d4ed8", border: "1px solid #93c5fd" }
+        : { background: "#f1f5f9", color: "#475569", border: "1px solid #cbd5e1" };
+
   return (
     <div style={UI.container}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <div>
-            <h1 style={UI.headerTitle}>{data.gpn}</h1>
-            <p style={UI.headerSubtitle}>{data.popis}</p>
-          </div>
-
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <div>
           <button onClick={() => onBack?.()} style={UI.buttonSecondary}>
             Zpět na zakázku
           </button>
         </div>
 
-        <div style={UI.card}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 16,
-              alignItems: "start",
-            }}
-          >
-            <div style={UI.summaryTile}>
-              <div style={UI.summaryTileLabel}>Zakázka</div>
-              <div style={UI.summaryTileValue}>{data.zakazka}</div>
-            </div>
-
-            <div style={UI.summaryTile}>
-              <div style={UI.summaryTileLabel}>Řádek</div>
-              <div style={UI.summaryTileValue}>{data.lineNo}</div>
-            </div>
-
-            <div style={UI.summaryTile}>
-              <div style={UI.summaryTileLabel}>GPN</div>
-              <div style={UI.summaryTileValue}>{data.gpn}</div>
-            </div>
-
-            <div style={UI.summaryTile}>
-              <div style={UI.summaryTileLabel}>VP</div>
-              <div style={UI.summaryTileValue}>{data.vp}</div>
-            </div>
-
-            <div style={UI.summaryTile}>
-              <div style={UI.summaryTileLabel}>Stav</div>
-              <div style={UI.summaryTileValue}>{data.stav}</div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 18 }}>
-            <div
+        {/* Sekce 1 — hlavička */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 24,
+            flexWrap: "wrap" as const,
+          }}
+        >
+          <div style={{ minWidth: 0, flex: "1 1 280px" }}>
+            <h1
               style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                gap: 12,
-                marginBottom: 14,
+                margin: 0,
+                fontSize: 30,
+                fontWeight: 900,
+                color: "#0f172a",
+                lineHeight: 1.2,
+                letterSpacing: "-0.02em",
               }}
             >
-              <SummaryTile title="Množství" value={data.mnozstvi} />
-              <SummaryTile title="Termín" value={data.termin} />
-              <SummaryTile title="Materiál" value={data.material} />
-              <SummaryTile title="Cena / ks" value={data.cenaZaKs} />
-              <SummaryTile title="Stav výroby" value={data.stavVyroby} />
-            </div>
-
-            <div style={{ ...UI.card, padding: 16, background: "#f8fafc" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                <div>
-                  <div style={{ fontSize: 13, color: "#64748b", fontWeight: 700 }}>Průběh výroby</div>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginTop: 4 }}>
-                    {progressLabel}
-                  </div>
-                </div>
-                <div style={{ fontSize: 24, fontWeight: 900, color: "#16a34a" }}>{data.progressPct} %</div>
-              </div>
-
-              <div
-                style={{
-                  marginTop: 12,
-                  width: "100%",
-                  height: 12,
-                  background: "#e2e8f0",
-                  borderRadius: 999,
-                  overflow: "hidden",
-                }}
-              >
-                <div
-                  style={{
-                    width: `${data.progressPct}%`,
-                    height: "100%",
-                    background: "#16a34a",
-                    borderRadius: 999,
-                  }}
-                />
-              </div>
-            </div>
+              {data.gpn}
+            </h1>
+            <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0, maxWidth: 720 }}>{data.popis}</p>
           </div>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap" as const,
+              gap: 8,
+              justifyContent: "flex-end",
+              alignItems: "center",
+            }}
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "6px 12px",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 800,
+                ...(data.vp && data.vp !== "—"
+                  ? {
+                      background: "#dcfce7",
+                      color: "#15803d",
+                      border: "1px solid #86efac",
+                    }
+                  : {
+                      background: "#f1f5f9",
+                      color: "#64748b",
+                      border: "1px solid #e2e8f0",
+                    }),
+              }}
+            >
+              VP: {data.vp}
+            </span>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "6px 12px",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 800,
+                ...stavBadgeStyle,
+              }}
+            >
+              Stav: {stavLabel}
+            </span>
+          </div>
+        </div>
+
+        {/* Sekce 2 — kompaktní řádek údajů */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap" as const,
+            gap: 24,
+            alignItems: "flex-start",
+            paddingTop: 4,
+            borderTop: "1px solid #e2e8f0",
+          }}
+        >
+          {(
+            [
+              ["Zakázka", data.zakazka],
+              ["Řádek", String(data.lineNo)],
+              ["Množství", data.mnozstvi],
+              ["Termín", data.termin],
+              ["Materiál", data.material],
+              ["Cena / ks", data.cenaZaKs],
+            ] as const
+          ).map(([label, value]) => (
+            <div key={label} style={{ minWidth: 100, maxWidth: 280 }}>
+              <div style={{ ...UI.statLabel, fontSize: 11, fontWeight: 800, marginBottom: 4 }}>{label}</div>
+              <div style={{ ...UI.statValue, fontSize: 14, lineHeight: 1.3 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Sekce 3 — průběh */}
+        <div
+          style={{
+            paddingTop: 4,
+            borderTop: "1px solid #e2e8f0",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16,
+              marginBottom: 10,
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a" }}>Průběh výroby</div>
+            <div style={{ fontSize: 28, fontWeight: 900, color: "#16a34a", lineHeight: 1 }}>{data.progressPct} %</div>
+          </div>
+          <div
+            style={{
+              width: "100%",
+              height: 12,
+              background: "#e2e8f0",
+              borderRadius: 999,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${data.progressPct}%`,
+                height: "100%",
+                background: "#16a34a",
+                borderRadius: 999,
+              }}
+            />
+          </div>
+          <div style={{ fontSize: 13, color: "#64748b", fontWeight: 700, marginTop: 8 }}>{progressLabel}</div>
         </div>
 
         <div style={UI.subNavigation}>
