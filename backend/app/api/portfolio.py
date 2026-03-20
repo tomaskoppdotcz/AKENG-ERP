@@ -25,6 +25,10 @@ class PortfolioOperationUpsert(BaseModel):
     note: str | None = None
 
 
+class ReorderOperationsBody(BaseModel):
+    ordered_operation_ids: list[int]
+
+
 class PortfolioOperationUpdate(BaseModel):
     operation_no: int | None = None
     operation_name: str | None = None
@@ -354,6 +358,47 @@ def create_template_operation(
     db.commit()
     db.refresh(row)
     return _operation_to_payload(row)
+
+
+@router.post("/templates/{template_id}/operations/reorder")
+def reorder_template_operations(
+    template_id: int,
+    payload: ReorderOperationsBody,
+    db: Session = Depends(get_db),
+):
+    template = db.scalar(select(PortfolioTechnologyTemplate).where(PortfolioTechnologyTemplate.id == template_id))
+    if not template:
+        raise HTTPException(status_code=404, detail="Technology template not found")
+
+    operations = db.scalars(
+        select(PortfolioTechnologyTemplateOperation)
+        .where(PortfolioTechnologyTemplateOperation.template_id == template_id)
+        .order_by(
+            PortfolioTechnologyTemplateOperation.operation_no.asc(),
+            PortfolioTechnologyTemplateOperation.id.asc(),
+        )
+    ).all()
+
+    existing_ids = {op.id for op in operations}
+    ordered = payload.ordered_operation_ids
+
+    if len(ordered) != len(existing_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="ordered_operation_ids must contain exactly all operations for this template",
+        )
+    if set(ordered) != existing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="ordered_operation_ids must match template operations exactly",
+        )
+
+    id_to_op = {op.id: op for op in operations}
+    for idx, op_id in enumerate(ordered):
+        id_to_op[op_id].operation_no = (idx + 1) * 10
+
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.put("/template-operations/{operation_id}")

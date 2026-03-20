@@ -38,6 +38,12 @@ export type PortfolioOperationPayload = {
   note: string | null;
 };
 
+export type CreatePortfolioTechnologyTemplateResponse = {
+  template_id: number;
+  template_name: string;
+  created: boolean;
+};
+
 export async function getPortfolioItems(): Promise<PortfolioItem[]> {
   const res = await fetch(`${API_BASE}/portfolio/items`);
   if (!res.ok) {
@@ -52,6 +58,21 @@ export async function getPortfolioItemTechnology(
   const res = await fetch(`${API_BASE}/portfolio/items/${itemId}/technology`);
   if (!res.ok) {
     throw new Error("Nepodarilo se nacist technologicky postup.");
+  }
+  return res.json();
+}
+
+export async function reorderPortfolioTechnologyOperations(
+  templateId: number,
+  orderedOperationIds: number[]
+): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/portfolio/templates/${templateId}/operations/reorder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ordered_operation_ids: orderedOperationIds }),
+  });
+  if (!res.ok) {
+    throw new Error("Nepodarilo se zmenit poradi operaci.");
   }
   return res.json();
 }
@@ -94,6 +115,18 @@ export async function deletePortfolioTechnologyOperation(
   });
   if (!res.ok) {
     throw new Error("Nepodarilo se smazat operaci.");
+  }
+  return res.json();
+}
+
+export async function createPortfolioTechnologyTemplate(
+  itemId: number
+): Promise<CreatePortfolioTechnologyTemplateResponse> {
+  const res = await fetch(`${API_BASE}/portfolio/items/${itemId}/technology-template`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error("Nepodarilo se vytvorit technologicky postup.");
   }
   return res.json();
 }

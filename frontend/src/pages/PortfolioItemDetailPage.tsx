@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
 import {
+  createPortfolioTechnologyTemplate,
   createPortfolioTechnologyOperation,
   deletePortfolioTechnologyOperation,
   getPortfolioItemTechnology,
+  reorderPortfolioTechnologyOperations,
   updatePortfolioTechnologyOperation,
   type PortfolioItem,
   type PortfolioTechnologyOperation,
@@ -54,6 +56,8 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
   const [operations, setOperations] = useState<PortfolioTechnologyOperation[]>([]);
   const [techLoading, setTechLoading] = useState(false);
   const [techError, setTechError] = useState<string | null>(null);
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const [reorderBusy, setReorderBusy] = useState(false);
 
   const detail = useMemo(
     () => ({
@@ -157,6 +161,40 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
       if (editingOperationId === opId) resetForm();
     } catch (e: unknown) {
       setTechError(e instanceof Error ? e.message : "Nepodarilo se smazat operaci.");
+    }
+  }
+
+  async function moveOperation(fromIndex: number, toIndex: number) {
+    if (!templateId || reorderBusy) return;
+    if (fromIndex < 0 || toIndex < 0 || fromIndex >= operations.length || toIndex >= operations.length) return;
+    const next = [...operations];
+    const tmp = next[fromIndex];
+    next[fromIndex] = next[toIndex];
+    next[toIndex] = tmp;
+    const orderedIds = next.map((o) => o.id);
+    setTechError(null);
+    setReorderBusy(true);
+    try {
+      await reorderPortfolioTechnologyOperations(templateId, orderedIds);
+      await loadTechnology();
+    } catch (e: unknown) {
+      setTechError(e instanceof Error ? e.message : "Nepodarilo se zmenit poradi operaci.");
+    } finally {
+      setReorderBusy(false);
+    }
+  }
+
+  async function handleCreateTechnologyTemplate() {
+    if (!item?.id || creatingTemplate) return;
+    setCreatingTemplate(true);
+    setTechError(null);
+    try {
+      await createPortfolioTechnologyTemplate(item.id);
+      await loadTechnology();
+    } catch (e: unknown) {
+      setTechError(e instanceof Error ? e.message : "Nepodarilo se vytvorit technologicky postup.");
+    } finally {
+      setCreatingTemplate(false);
     }
   }
 
@@ -316,7 +354,19 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
             ) : null}
 
             {!templateId ? (
-              <div style={UI.sectionSubtitle}>Zatím není definován žádný technologický postup.</div>
+              <>
+                <div style={UI.sectionSubtitle}>Zatím není definován žádný technologický postup.</div>
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    type="button"
+                    style={{ ...UI.buttons.primary, ...(creatingTemplate ? { opacity: 0.7, cursor: "wait" } : {}) }}
+                    onClick={handleCreateTechnologyTemplate}
+                    disabled={creatingTemplate}
+                  >
+                    {creatingTemplate ? "Vytvářím..." : "Přidat technologický postup"}
+                  </button>
+                </div>
+              </>
             ) : operations.length === 0 ? (
               <div style={UI.sectionSubtitle}>Zatím nejsou definovány žádné operace.</div>
             ) : (
@@ -342,7 +392,7 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
                     </tr>
                   </thead>
                   <tbody>
-                    {operations.map((op) => (
+                    {operations.map((op, index) => (
                       <tr key={op.id}>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{op.operation_no}</td>
                         <td style={{ ...UI.td, padding: "10px 10px" }}>{op.operation_name}</td>
@@ -352,7 +402,29 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.control_required ? "ANO" : "NE"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.outsourcing ? "ANO" : "NE"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px" }}>{op.note || "—"}</td>
-                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6 }}>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            style={{
+                              ...UI.buttons.secondary,
+                              ...(index === 0 || reorderBusy ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+                            }}
+                            disabled={index === 0 || reorderBusy}
+                            onClick={() => moveOperation(index, index - 1)}
+                          >
+                            Nahoru
+                          </button>
+                          <button
+                            type="button"
+                            style={{
+                              ...UI.buttons.secondary,
+                              ...(index === operations.length - 1 || reorderBusy ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+                            }}
+                            disabled={index === operations.length - 1 || reorderBusy}
+                            onClick={() => moveOperation(index, index + 1)}
+                          >
+                            Dolů
+                          </button>
                           <button
                             type="button"
                             style={UI.buttons.secondary}
