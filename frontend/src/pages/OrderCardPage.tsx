@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { UI } from "../styles/ui";
 
 type Props = {
@@ -136,11 +136,48 @@ function getDemoOrder(customerOrderId: number): DemoOrderDetail {
   };
 }
 
+type OrderSubtab =
+  | "Přehled"
+  | "Dokumenty"
+  | "Historie"
+  | "Výkazy"
+  | "Neshody"
+  | "Zmetky"
+  | "Reklamace"
+  | "Kooperace"
+  | "Požadavky materiál"
+  | "Poptávky"
+  | "Objednávky"
+  | "Dodací listy"
+  | "Expedice"
+  | "Náklady";
+
+const ORDER_SUBTABS: OrderSubtab[] = [
+  "Přehled",
+  "Dokumenty",
+  "Historie",
+  "Výkazy",
+  "Neshody",
+  "Zmetky",
+  "Reklamace",
+  "Kooperace",
+  "Požadavky materiál",
+  "Poptávky",
+  "Objednávky",
+  "Dodací listy",
+  "Expedice",
+  "Náklady",
+];
+
 export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetail }: Props) {
   const data = useMemo(() => getDemoOrder(customerOrderId), [customerOrderId]);
 
   const hotovoPolozky = data.items.filter((i) => i.stav === "Hotovo").length;
   const nehotovoPolozky = data.items.length - hotovoPolozky;
+
+  const [hoveredItemId, setHoveredItemId] = useState<number | null>(null);
+  const [activeOrderSubtab, setActiveOrderSubtab] = useState<OrderSubtab>("Přehled");
+  const [hoverOrderSubtab, setHoverOrderSubtab] = useState<OrderSubtab | null>(null);
 
   return (
     <div style={{ paddingTop: 10 }}>
@@ -151,12 +188,20 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
             <div style={UI.sectionSubtitle}>Detail zakázky a její položky</div>
           </div>
 
-          <button type="button" onClick={onBack} style={UI.buttons.secondary}>
-            Zpět na přehled
-          </button>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "flex-end" }}>
+            <button type="button" onClick={onBack} style={UI.buttons.secondary}>
+              Zpět na přehled
+            </button>
+            <button type="button" style={UI.buttons.primary} onClick={() => {}}>
+              Přidat položku
+            </button>
+            <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
+              Import položek
+            </button>
+          </div>
         </div>
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "stretch" }}>
+        <div style={UI.summaryTilesGrid}>
           <div style={{ ...UI.summaryTile, minWidth: 220, flex: "1 1 220px" }}>
             <div style={UI.summaryTileLabel}>Zakázka</div>
             <div style={UI.summaryTileValue}>{data.zakazka}</div>
@@ -201,6 +246,48 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
           </div>
         </div>
 
+        <div
+          style={{
+            width: "100%",
+            overflowX: "auto" as const,
+            overflowY: "hidden" as const,
+            marginBottom: 4,
+          }}
+        >
+          <div
+            style={{
+              ...UI.subTabsContainer,
+              overflow: "visible",
+              width: "max-content",
+              minWidth: "100%",
+              justifyContent: "flex-start",
+              marginTop: 0,
+              marginBottom: 0,
+            }}
+          >
+            {ORDER_SUBTABS.map((tab) => {
+              const active = tab === activeOrderSubtab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveOrderSubtab(tab)}
+                  onMouseEnter={() => setHoverOrderSubtab(tab)}
+                  onMouseLeave={() => setHoverOrderSubtab((h) => (h === tab ? null : h))}
+                  style={{
+                    ...UI.subTab,
+                    ...(active ? UI.subTabActive : {}),
+                    ...(!active && hoverOrderSubtab === tab ? UI.subTabHover : {}),
+                  }}
+                >
+                  {tab}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {activeOrderSubtab === "Přehled" ? (
         <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
           <div style={{ fontSize: 16, fontWeight: 1000, color: "#0f172a", marginBottom: 10 }}>Položky zakázky</div>
 
@@ -236,7 +323,24 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
               </thead>
               <tbody>
                 {data.items.map((item) => (
-                  <tr key={item.job_item_id}>
+                  <tr
+                    key={item.job_item_id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onOpenItemDetail(item)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onOpenItemDetail(item);
+                      }
+                    }}
+                    onMouseEnter={() => setHoveredItemId(item.job_item_id)}
+                    onMouseLeave={() => setHoveredItemId((id) => (id === item.job_item_id ? null : id))}
+                    style={{
+                      cursor: "pointer",
+                      background: hoveredItemId === item.job_item_id ? "#eff6ff" : "#fff",
+                    }}
+                  >
                     <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>{item.line_no}</td>
                     <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>{item.gpn}</td>
                     <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9" }}>{item.description}</td>
@@ -269,7 +373,10 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                     >
                       <button
                         type="button"
-                        onClick={() => onOpenItemDetail(item)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenItemDetail(item);
+                        }}
                         style={{
                           border: "1px solid #0f172a",
                           background: "#0f172a",
@@ -287,7 +394,9 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                       {!item.vp_code ? (
                         <button
                           type="button"
-                          onClick={() => {}}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                          }}
                           style={{
                             border: "1px solid #15803d",
                             background: "#15803d",
@@ -309,6 +418,13 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
             </table>
           </div>
         </div>
+        ) : (
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>
+              {`Modul ${activeOrderSubtab} pro tuto zakázku je ve vývoji.`}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
