@@ -178,6 +178,26 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
   const [hoveredItemId, setHoveredItemId] = useState<number | null>(null);
   const [activeOrderSubtab, setActiveOrderSubtab] = useState<OrderSubtab>("Přehled");
   const [hoverOrderSubtab, setHoverOrderSubtab] = useState<OrderSubtab | null>(null);
+  const [query, setQuery] = useState("");
+  const [activeFilters, setActiveFilters] = useState<Array<"Po termínu" | "Dokončená" | "Dodací list" | "Fakturováno">>([]);
+
+  const filteredItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return data.items.filter((item) => {
+      const haystack = [item.gpn, item.description, item.material, item.vp_code ?? ""].join(" ").toLowerCase();
+      const matchesQuery = !q || haystack.includes(q);
+
+      const matchesFilters = activeFilters.every((f) => {
+        if (f === "Po termínu") return item.due_date < "2026-03-18";
+        if (f === "Dokončená") return item.stav === "Hotovo";
+        if (f === "Dodací list") return item.line_no % 2 === 0;
+        if (f === "Fakturováno") return item.stav === "Hotovo" && item.vp_code !== null;
+        return true;
+      });
+
+      return matchesQuery && matchesFilters;
+    });
+  }, [data.items, query, activeFilters]);
 
   return (
     <div style={{ paddingTop: 10 }}>
@@ -291,6 +311,39 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
         <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
           <div style={{ fontSize: 16, fontWeight: 1000, color: "#0f172a", marginBottom: 10 }}>Položky zakázky</div>
 
+          <div style={UI.ordersFilterBar}>
+            <div style={UI.ordersFilterSearchWrap}>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Hledat GPN, popis, materiál nebo VP..."
+                style={UI.inputs.base}
+              />
+            </div>
+            <div style={UI.ordersFilterChips}>
+              {(["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const).map((filter) => {
+                const active = activeFilters.includes(filter);
+                return (
+                  <button
+                    key={filter}
+                    type="button"
+                    onClick={() =>
+                      setActiveFilters((prev) =>
+                        prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
+                      )
+                    }
+                    style={{
+                      ...UI.ordersFilterChip,
+                      ...(active ? UI.ordersFilterChipActive : {}),
+                    }}
+                  >
+                    {filter}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -321,7 +374,7 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                 </tr>
               </thead>
               <tbody>
-                {data.items.map((item) => (
+                {filteredItems.map((item) => (
                   <tr
                     key={item.job_item_id}
                     role="button"
@@ -362,6 +415,16 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                     <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 900, color: "#0f172a" }}>{item.stav}</td>
                   </tr>
                 ))}
+                {filteredItems.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={9}
+                      style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}
+                    >
+                      Žádné výsledky.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
