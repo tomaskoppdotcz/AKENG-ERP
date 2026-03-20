@@ -17,3 +17,5 @@ dist
 # IDE
 .vscode
 .idea
+backend/*.db
+__pycache__/
