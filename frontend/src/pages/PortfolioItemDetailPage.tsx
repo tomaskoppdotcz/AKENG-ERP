@@ -789,7 +789,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                   border: "1px solid #e2e8f0",
                   background: "#f8fafc",
                   borderRadius: 12,
-                  padding: 16,
+                  padding: 24,
                   marginBottom: 14,
                 }}
               >
@@ -797,9 +797,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                 {materialLibraryError ? (
                   <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{materialLibraryError}</div>
                 ) : null}
-                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                  <div>
-                    <div style={UI.inputs.label}>Materiál</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", rowGap: 16, columnGap: 12 }}>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Materiál</div>
                     <select
                       value={materialLibraryId == null ? "" : String(materialLibraryId)}
                       onChange={(e) => setMaterialLibraryId(e.target.value ? Number(e.target.value) : null)}
@@ -815,31 +815,29 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                     </select>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 18 }}>
-                    <div>
-                      <div style={UI.inputs.label}>Spotřeba / ks</div>
-                      <input value={consumptionPerPiece} onChange={(e) => setConsumptionPerPiece(e.target.value)} style={UI.inputs.base} />
-                    </div>
-                    <div>
-                      <div style={UI.inputs.label}>Jednotka spotřeby</div>
-                      <input value={consumptionUnit} onChange={(e) => setConsumptionUnit(e.target.value)} style={UI.inputs.base} />
-                    </div>
-                    <div>
-                      <div style={UI.inputs.label}>Prořez / odpad</div>
-                      <input value={scrapAllowance} onChange={(e) => setScrapAllowance(e.target.value)} style={UI.inputs.base} />
-                    </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Spotřeba / ks</div>
+                    <input value={consumptionPerPiece} onChange={(e) => setConsumptionPerPiece(e.target.value)} style={UI.inputs.base} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Jednotka spotřeby</div>
+                    <input value={consumptionUnit} onChange={(e) => setConsumptionUnit(e.target.value)} style={UI.inputs.base} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Prořez / odpad</div>
+                    <input value={scrapAllowance} onChange={(e) => setScrapAllowance(e.target.value)} style={UI.inputs.base} />
                   </div>
 
-                  <div>
-                    <div style={UI.inputs.label}>Poznámka</div>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Poznámka</div>
                     <input value={materialNote} onChange={(e) => setMaterialNote(e.target.value)} style={UI.inputs.base} />
                   </div>
 
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    <button type="button" style={UI.buttons.secondary} onClick={resetMaterialForm}>
+                  <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <button type="button" style={{ ...UI.buttons.secondary, minHeight: 40 }} onClick={resetMaterialForm}>
                       Zrušit
                     </button>
-                    <button type="button" style={UI.buttons.primary} onClick={saveMaterial}>
+                    <button type="button" style={{ ...UI.buttons.primary, minHeight: 40 }} onClick={saveMaterial}>
                       {isMaterialEditMode ? "Uložit změny" : "Uložit materiál"}
                     </button>
                   </div>
@@ -872,7 +870,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                 </button>
               </div>
             ) : (
-              <div style={{ overflowX: "auto", marginTop: showAddMaterialForm ? 6 : 12 }}>
+              <div style={{ overflowX: "auto", marginTop: 24 }}>
                 <table style={UI.table}>
                   <thead>
                     <tr style={{ background: "#f8fafc" }}>

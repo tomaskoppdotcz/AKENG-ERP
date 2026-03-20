@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.material_library import MaterialLibraryItem
     from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 
 
@@ -62,6 +63,12 @@ class PortfolioTechnologyTemplate(Base):
         cascade="all, delete-orphan",
         order_by="PortfolioTechnologyTemplateOperation.operation_no.asc()",
     )
+    materials: Mapped[list["PortfolioTechnologyTemplateMaterial"]] = relationship(
+        "PortfolioTechnologyTemplateMaterial",
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="PortfolioTechnologyTemplateMaterial.id.asc()",
+    )
 
 
 class PortfolioTechnologyTemplateOperation(Base):
@@ -93,4 +100,22 @@ class PortfolioTechnologyTemplateOperation(Base):
         "WorkplaceLibraryItem",
         foreign_keys=[workplace_library_item_id],
     )
+
+
+class PortfolioTechnologyTemplateMaterial(Base):
+    __tablename__ = "portfolio_technology_template_materials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    template_id: Mapped[int] = mapped_column(ForeignKey("portfolio_technology_templates.id"), index=True, nullable=False)
+    material_library_item_id: Mapped[int] = mapped_column(ForeignKey("material_library_items.id"), index=True, nullable=False)
+    consumption_per_piece: Mapped[float | None] = mapped_column(Float, nullable=True)
+    consumption_unit: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    scrap_allowance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    template: Mapped["PortfolioTechnologyTemplate"] = relationship(
+        "PortfolioTechnologyTemplate",
+        back_populates="materials",
+    )
+    material_library_item: Mapped["MaterialLibraryItem"] = relationship("MaterialLibraryItem")
 

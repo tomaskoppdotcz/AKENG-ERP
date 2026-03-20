@@ -1,13 +1,106 @@
 """Clean master libraries API (operations, workplaces)."""
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import inspect as sa_inspect, select, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 
 router = APIRouter()
+
+
+def ensure_master_libraries_sqlite_schema(engine: Engine) -> None:
+    """Add missing columns on SQLite when create_all does not alter existing tables."""
+    try:
+        url = str(engine.url)
+    except Exception:
+        return
+    if not url.startswith("sqlite"):
+        return
+
+    insp = sa_inspect(engine)
+    if "workplace_library_items" not in insp.get_table_names():
+        return
+
+    col_names = {c["name"] for c in insp.get_columns("workplace_library_items")}
+    if "daily_capacity_hours" in col_names:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE workplace_library_items ADD COLUMN daily_capacity_hours FLOAT"))
+
+
+def _op_to_dict(r: OperationLibraryItem) -> dict:
+    return {
+        "id": r.id,
+        "code": r.code,
+        "name": r.name,
+        "description": r.description,
+        "is_active": r.is_active,
+    }
+
+
+def _wp_to_dict(r: WorkplaceLibraryItem) -> dict:
+    return {
+        "id": r.id,
+        "code": r.code,
+        "name": r.name,
+        "workplace_type": r.workplace_type,
+        "hourly_rate": r.hourly_rate,
+        "daily_capacity_hours": r.daily_capacity_hours,
+        "is_active": r.is_active,
+    }
+
+
+def _blank_to_none(v: str | None) -> str | None:
+    if v is None:
+        return None
+    s = v.strip()
+    return s if s else None
+
+
+class OperationLibraryPayload(BaseModel):
+    code: str | None = None
+    name: str = Field(..., min_length=1)
+    description: str | None = None
+    is_active: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def name_stripped(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Jméno operace je povinné.")
+        return s
+
+
+class WorkplaceLibraryPayload(BaseModel):
+    code: str | None = None
+    name: str = Field(..., min_length=1)
+    workplace_type: str | None = None
+    hourly_rate: float | None = None
+    daily_capacity_hours: float | None = None
+    is_active: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def name_stripped(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Název pracoviště je povinný.")
+        return s
+
+    @field_validator("hourly_rate", "daily_capacity_hours")
+    @classmethod
+    def numeric_reasonable(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        if v < 0:
+            raise ValueError("Číselné hodnoty nesmí být záporné.")
+        return v
 
 
 def seed_master_libraries_demo_data(db: Session) -> None:
@@ -77,6 +170,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     name="Pila",
                     workplace_type="řezání",
                     hourly_rate=420.0,
+                    daily_capacity_hours=8.0,
                     is_active=True,
                 ),
                 WorkplaceLibraryItem(
@@ -84,6 +178,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     name="CLX 450 TC",
                     workplace_type="soustruh",
                     hourly_rate=950.0,
+                    daily_capacity_hours=8.0,
                     is_active=True,
                 ),
                 WorkplaceLibraryItem(
@@ -91,6 +186,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     name="CTX Beta 800",
                     workplace_type="soustruh",
                     hourly_rate=1020.0,
+                    daily_capacity_hours=8.0,
                     is_active=True,
                 ),
                 WorkplaceLibraryItem(
@@ -98,6 +194,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     name="CMX 600 V",
                     workplace_type="frézka",
                     hourly_rate=880.0,
+                    daily_capacity_hours=8.0,
                     is_active=True,
                 ),
                 WorkplaceLibraryItem(
@@ -105,6 +202,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     name="NEF 400",
                     workplace_type="frézka",
                     hourly_rate=760.0,
+                    daily_capacity_hours=8.0,
                     is_active=True,
                 ),
                 WorkplaceLibraryItem(
@@ -112,6 +210,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     name="Kontrola",
                     workplace_type="kontrola",
                     hourly_rate=680.0,
+                    daily_capacity_hours=8.0,
                     is_active=True,
                 ),
                 WorkplaceLibraryItem(
@@ -119,6 +218,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     name="Kooperace",
                     workplace_type="kooperace",
                     hourly_rate=550.0,
+                    daily_capacity_hours=8.0,
                     is_active=True,
                 ),
             ]
@@ -133,30 +233,99 @@ def seed_master_libraries_demo_data(db: Session) -> None:
 def list_operation_library_items(db: Session = Depends(get_db)):
     seed_master_libraries_demo_data(db)
     rows = db.scalars(select(OperationLibraryItem).order_by(OperationLibraryItem.name.asc())).all()
-    return [
-        {
-            "id": r.id,
-            "code": r.code,
-            "name": r.name,
-            "description": r.description,
-            "is_active": r.is_active,
-        }
-        for r in rows
-    ]
+    return [_op_to_dict(r) for r in rows]
+
+
+@router.post("/operations")
+def create_operation_library_item(payload: OperationLibraryPayload, db: Session = Depends(get_db)):
+    row = OperationLibraryItem(
+        code=_blank_to_none(payload.code),
+        name=payload.name,
+        description=_blank_to_none(payload.description),
+        is_active=payload.is_active,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _op_to_dict(row)
+
+
+@router.put("/operations/{operation_id}")
+def update_operation_library_item(
+    operation_id: int,
+    payload: OperationLibraryPayload,
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(select(OperationLibraryItem).where(OperationLibraryItem.id == operation_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Operation library item not found")
+    row.code = _blank_to_none(payload.code)
+    row.name = payload.name
+    row.description = _blank_to_none(payload.description)
+    row.is_active = payload.is_active
+    db.commit()
+    db.refresh(row)
+    return _op_to_dict(row)
+
+
+@router.delete("/operations/{operation_id}")
+def delete_operation_library_item(operation_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(select(OperationLibraryItem).where(OperationLibraryItem.id == operation_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Operation library item not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.get("/workplaces")
 def list_workplace_library_items(db: Session = Depends(get_db)):
     seed_master_libraries_demo_data(db)
     rows = db.scalars(select(WorkplaceLibraryItem).order_by(WorkplaceLibraryItem.name.asc())).all()
-    return [
-        {
-            "id": r.id,
-            "code": r.code,
-            "name": r.name,
-            "workplace_type": r.workplace_type,
-            "hourly_rate": r.hourly_rate,
-            "is_active": r.is_active,
-        }
-        for r in rows
-    ]
+    return [_wp_to_dict(r) for r in rows]
+
+
+@router.post("/workplaces")
+def create_workplace_library_item(payload: WorkplaceLibraryPayload, db: Session = Depends(get_db)):
+    row = WorkplaceLibraryItem(
+        code=_blank_to_none(payload.code),
+        name=payload.name,
+        workplace_type=_blank_to_none(payload.workplace_type),
+        hourly_rate=payload.hourly_rate,
+        daily_capacity_hours=payload.daily_capacity_hours,
+        is_active=payload.is_active,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _wp_to_dict(row)
+
+
+@router.put("/workplaces/{workplace_id}")
+def update_workplace_library_item(
+    workplace_id: int,
+    payload: WorkplaceLibraryPayload,
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(select(WorkplaceLibraryItem).where(WorkplaceLibraryItem.id == workplace_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Workplace library item not found")
+    row.code = _blank_to_none(payload.code)
+    row.name = payload.name
+    row.workplace_type = _blank_to_none(payload.workplace_type)
+    row.hourly_rate = payload.hourly_rate
+    row.daily_capacity_hours = payload.daily_capacity_hours
+    row.is_active = payload.is_active
+    db.commit()
+    db.refresh(row)
+    return _wp_to_dict(row)
+
+
+@router.delete("/workplaces/{workplace_id}")
+def delete_workplace_library_item(workplace_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(select(WorkplaceLibraryItem).where(WorkplaceLibraryItem.id == workplace_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Workplace library item not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}

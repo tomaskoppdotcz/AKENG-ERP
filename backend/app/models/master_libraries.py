@@ -24,4 +24,5 @@ class WorkplaceLibraryItem(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     workplace_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     hourly_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    daily_capacity_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

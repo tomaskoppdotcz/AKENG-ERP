@@ -55,6 +55,14 @@ export default function App() {
     setActiveModule("Nástěnka");
   }
 
+  /** Horní lišta: ukončí případný detail a přepne modul. */
+  function handleTopNavNavigate(module: string) {
+    setSelectedItem(null);
+    setSelectedPortfolioItem(null);
+    setPortfolioReturnFromOrderItem(null);
+    setActiveModule(module);
+  }
+
   if (!isAuthenticated) {
     return (
       <div style={{ minHeight: "100vh", background: UI.appBackground, fontFamily: "Arial, sans-serif" }}>
@@ -65,7 +73,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: UI.appBackground, fontFamily: "Arial, sans-serif" }}>
-      <TopNav activeModule={activeModule} onNavigate={setActiveModule} navItems={NAV_ITEMS as unknown as string[]} />
+      <TopNav activeModule={activeModule} onNavigate={handleTopNavNavigate} navItems={NAV_ITEMS as unknown as string[]} />
       <div style={UI.mainContainer}>
         {selectedItem ? (
           <OrderItemDetailPage

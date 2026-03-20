@@ -30,6 +30,38 @@ export type PortfolioItemTechnologyResponse = {
   operations: PortfolioTechnologyOperation[];
 };
 
+export type PortfolioTechnologyMaterial = {
+  id: number;
+  material_library_item_id: number;
+  material_name: string;
+  material_code: string | null;
+  consumption_per_piece: number | null;
+  consumption_unit: string | null;
+  scrap_allowance: number | null;
+  note: string | null;
+};
+
+export type PortfolioItemTechnologyMaterialsResponse = {
+  template_id: number | null;
+  materials: PortfolioTechnologyMaterial[];
+};
+
+export type PortfolioTechnologyMaterialCreatePayload = {
+  material_library_item_id: number;
+  consumption_per_piece: number | null;
+  consumption_unit: string | null;
+  scrap_allowance: number | null;
+  note: string | null;
+};
+
+export type PortfolioTechnologyMaterialUpdatePayload = {
+  material_library_item_id?: number;
+  consumption_per_piece?: number | null;
+  consumption_unit?: string | null;
+  scrap_allowance?: number | null;
+  note?: string | null;
+};
+
 /** POST /portfolio/templates/{id}/operations */
 export type PortfolioTechnologyOperationCreatePayload = {
   operation_library_item_id: number;
@@ -184,6 +216,56 @@ export async function createPortfolioTechnologyTemplate(
   });
   if (!res.ok) {
     throw new Error("Nepodarilo se vytvorit technologicky postup.");
+  }
+  return res.json();
+}
+
+export async function getPortfolioTechnologyMaterials(
+  itemId: number
+): Promise<PortfolioItemTechnologyMaterialsResponse> {
+  const res = await fetch(`${API_BASE}/portfolio/items/${itemId}/technology-material`);
+  if (!res.ok) {
+    throw new Error("Nepodarilo se nacist material technologickeho postupu.");
+  }
+  return res.json();
+}
+
+export async function createPortfolioTechnologyMaterial(
+  templateId: number,
+  payload: PortfolioTechnologyMaterialCreatePayload
+): Promise<PortfolioTechnologyMaterial> {
+  const res = await fetch(`${API_BASE}/portfolio/templates/${templateId}/technology-material`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error("Nepodarilo se pridat material.");
+  }
+  return res.json();
+}
+
+export async function updatePortfolioTechnologyMaterial(
+  id: number,
+  payload: PortfolioTechnologyMaterialUpdatePayload
+): Promise<PortfolioTechnologyMaterial> {
+  const res = await fetch(`${API_BASE}/portfolio/technology-material/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error("Nepodarilo se upravit material.");
+  }
+  return res.json();
+}
+
+export async function deletePortfolioTechnologyMaterial(id: number): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/portfolio/technology-material/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error("Nepodarilo se smazat material.");
   }
   return res.json();
 }

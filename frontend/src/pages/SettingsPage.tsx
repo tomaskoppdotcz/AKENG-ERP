@@ -1,9 +1,10 @@
 import React, { useState } from "react";
 import { UI } from "../styles/ui";
+import MaterialLibraryPage from "./MaterialLibraryPage";
 import OperationLibraryPage from "./OperationLibraryPage";
 import WorkplaceLibraryPage from "./WorkplaceLibraryPage";
 
-const SUBTABS = ["Operace", "Pracoviště"] as const;
+const SUBTABS = ["Operace", "Pracoviště", "Materiály"] as const;
 type SettingsSubtab = (typeof SUBTABS)[number];
 
 type Props = {
@@ -63,7 +64,13 @@ export default function SettingsPage({ onBackToDashboard }: Props) {
           </div>
         </div>
 
-        {activeSubtab === "Operace" ? <OperationLibraryPage /> : <WorkplaceLibraryPage />}
+        {activeSubtab === "Operace" ? (
+          <OperationLibraryPage />
+        ) : activeSubtab === "Pracoviště" ? (
+          <WorkplaceLibraryPage />
+        ) : (
+          <MaterialLibraryPage />
+        )}
       </div>
     </div>
   );

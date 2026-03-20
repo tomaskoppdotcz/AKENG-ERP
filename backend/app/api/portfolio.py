@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.database import get_db
 from app.models.master_data import Customer
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
+from app.models.material_library import MaterialLibraryItem
 from app.models.portfolio import (
     PortfolioGroup,
     PortfolioItem,
     PortfolioTechnologyTemplate,
+    PortfolioTechnologyTemplateMaterial,
     PortfolioTechnologyTemplateOperation,
 )
 
@@ -73,6 +75,22 @@ class PortfolioOperationUpdate(BaseModel):
     note: str | None = None
 
 
+class PortfolioTechnologyMaterialUpsert(BaseModel):
+    material_library_item_id: int
+    consumption_per_piece: float | None = None
+    consumption_unit: str | None = None
+    scrap_allowance: float | None = None
+    note: str | None = None
+
+
+class PortfolioTechnologyMaterialUpdate(BaseModel):
+    material_library_item_id: int | None = None
+    consumption_per_piece: float | None = None
+    consumption_unit: str | None = None
+    scrap_allowance: float | None = None
+    note: str | None = None
+
+
 def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
     op_name = op.operation_name
     if op.operation_library_item_id is not None and op.operation_library_item is not None:
@@ -92,6 +110,19 @@ def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
         "control_required": op.control_required,
         "outsourcing": op.outsourcing,
         "note": op.note,
+    }
+
+
+def _material_to_payload(row: PortfolioTechnologyTemplateMaterial) -> dict:
+    return {
+        "id": row.id,
+        "material_library_item_id": row.material_library_item_id,
+        "material_name": row.material_library_item.name if row.material_library_item else "",
+        "material_code": row.material_library_item.code if row.material_library_item else None,
+        "consumption_per_piece": row.consumption_per_piece,
+        "consumption_unit": row.consumption_unit,
+        "scrap_allowance": row.scrap_allowance,
+        "note": row.note,
     }
 
 
@@ -434,6 +465,122 @@ def create_template_operation(
         )
     )
     return _operation_to_payload(row)
+
+
+@router.get("/items/{item_id}/technology-material")
+def get_portfolio_item_technology_material(item_id: int, db: Session = Depends(get_db)):
+    item = db.scalar(select(PortfolioItem).where(PortfolioItem.id == item_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="Portfolio item not found")
+
+    template = db.scalar(
+        select(PortfolioTechnologyTemplate)
+        .where(PortfolioTechnologyTemplate.portfolio_item_id == item_id, PortfolioTechnologyTemplate.is_active.is_(True))
+        .order_by(PortfolioTechnologyTemplate.id.asc())
+    )
+
+    if not template:
+        return {"template_id": None, "materials": []}
+
+    materials = db.scalars(
+        select(PortfolioTechnologyTemplateMaterial)
+        .where(PortfolioTechnologyTemplateMaterial.template_id == template.id)
+        .options(selectinload(PortfolioTechnologyTemplateMaterial.material_library_item))
+        .order_by(PortfolioTechnologyTemplateMaterial.id.asc())
+    ).all()
+
+    return {
+        "template_id": template.id,
+        "materials": [_material_to_payload(row) for row in materials],
+    }
+
+
+@router.post("/templates/{template_id}/technology-material")
+def create_template_technology_material(
+    template_id: int,
+    payload: PortfolioTechnologyMaterialUpsert,
+    db: Session = Depends(get_db),
+):
+    template = db.scalar(select(PortfolioTechnologyTemplate).where(PortfolioTechnologyTemplate.id == template_id))
+    if not template:
+        raise HTTPException(status_code=404, detail="Technology template not found")
+
+    material = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == payload.material_library_item_id))
+    if not material:
+        raise HTTPException(status_code=404, detail="Material library item not found")
+
+    row = PortfolioTechnologyTemplateMaterial(
+        template_id=template_id,
+        material_library_item_id=payload.material_library_item_id,
+        consumption_per_piece=payload.consumption_per_piece,
+        consumption_unit=payload.consumption_unit,
+        scrap_allowance=payload.scrap_allowance,
+        note=payload.note,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    row = db.scalar(
+        select(PortfolioTechnologyTemplateMaterial)
+        .where(PortfolioTechnologyTemplateMaterial.id == row.id)
+        .options(selectinload(PortfolioTechnologyTemplateMaterial.material_library_item))
+    )
+    return _material_to_payload(row)
+
+
+@router.put("/technology-material/{material_id}")
+def update_template_technology_material(
+    material_id: int,
+    payload: PortfolioTechnologyMaterialUpdate,
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(
+        select(PortfolioTechnologyTemplateMaterial).where(PortfolioTechnologyTemplateMaterial.id == material_id)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Technology template material not found")
+
+    data = payload.model_dump(exclude_unset=True)
+
+    if "material_library_item_id" in data:
+        mid = data["material_library_item_id"]
+        if mid is None:
+            raise HTTPException(status_code=422, detail="material_library_item_id cannot be null")
+        material = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == mid))
+        if not material:
+            raise HTTPException(status_code=404, detail="Material library item not found")
+        row.material_library_item_id = mid
+
+    if "consumption_per_piece" in data:
+        row.consumption_per_piece = data["consumption_per_piece"]
+    if "consumption_unit" in data:
+        row.consumption_unit = data["consumption_unit"]
+    if "scrap_allowance" in data:
+        row.scrap_allowance = data["scrap_allowance"]
+    if "note" in data:
+        row.note = data["note"]
+
+    db.commit()
+    db.refresh(row)
+    row = db.scalar(
+        select(PortfolioTechnologyTemplateMaterial)
+        .where(PortfolioTechnologyTemplateMaterial.id == row.id)
+        .options(selectinload(PortfolioTechnologyTemplateMaterial.material_library_item))
+    )
+    return _material_to_payload(row)
+
+
+@router.delete("/technology-material/{material_id}")
+def delete_template_technology_material(material_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(
+        select(PortfolioTechnologyTemplateMaterial).where(PortfolioTechnologyTemplateMaterial.id == material_id)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Technology template material not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.post("/templates/{template_id}/operations/reorder")
