@@ -273,6 +273,43 @@ def get_portfolio_item_technology(item_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.post("/items/{item_id}/technology-template")
+def create_item_technology_template(item_id: int, db: Session = Depends(get_db)):
+    item = db.scalar(select(PortfolioItem).where(PortfolioItem.id == item_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="Portfolio item not found")
+
+    existing = db.scalar(
+        select(PortfolioTechnologyTemplate)
+        .where(
+            PortfolioTechnologyTemplate.portfolio_item_id == item_id,
+            PortfolioTechnologyTemplate.is_active.is_(True),
+        )
+        .order_by(PortfolioTechnologyTemplate.id.asc())
+    )
+    if existing:
+        return {
+            "template_id": existing.id,
+            "template_name": existing.name,
+            "created": False,
+        }
+
+    template = PortfolioTechnologyTemplate(
+        portfolio_item_id=item_id,
+        name=f"TP - {item.name}",
+        version="A",
+        is_active=True,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return {
+        "template_id": template.id,
+        "template_name": template.name,
+        "created": True,
+    }
+
+
 @router.post("/templates/{template_id}/operations")
 def create_template_operation(
     template_id: int,
@@ -289,7 +326,7 @@ def create_template_operation(
         .order_by(PortfolioTechnologyTemplateOperation.operation_no.desc())
         .limit(1)
     )
-    next_operation_no = (last_operation.operation_no + 1) if last_operation else 1
+    next_operation_no = (last_operation.operation_no + 10) if last_operation else 10
 
     row = PortfolioTechnologyTemplateOperation(
         template_id=template_id,
