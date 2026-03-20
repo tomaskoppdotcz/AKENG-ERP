@@ -4,8 +4,12 @@ import DashboardPage from "./pages/DashboardPage.tsx";
 import OrdersPage from "./pages/OrdersPage.tsx";
 import OrderItemDetailPage from "./pages/OrderItemDetailPage.tsx";
 import DrawingsPage from "./pages/DrawingsPage.tsx";
+import PortfolioPage from "./pages/PortfolioPage";
+import PortfolioItemDetailPage from "./pages/PortfolioItemDetailPage";
+import SettingsPage from "./pages/SettingsPage";
 import TopNav from "./components/TopNav.tsx";
 import { UI } from "./styles/ui";
+import type { PortfolioItem } from "./services/portfolioApi";
 
 const NAV_ITEMS = [
   "Nástěnka",
@@ -39,6 +43,7 @@ export default function App() {
     id: number;
     source: "orders" | "drawings";
   } | null>(null);
+  const [selectedPortfolioItem, setSelectedPortfolioItem] = useState<PortfolioItem | null>(null);
 
   function handleLogin() {
     setIsAuthenticated(true);
@@ -66,6 +71,14 @@ export default function App() {
               setSelectedItem(null);
             }}
           />
+        ) : selectedPortfolioItem ? (
+          <PortfolioItemDetailPage
+            item={selectedPortfolioItem}
+            onBack={() => {
+              setActiveModule("Portfolio");
+              setSelectedPortfolioItem(null);
+            }}
+          />
         ) : activeModule === "Nástěnka" ? (
           <DashboardPage />
         ) : activeModule === "Zakázky" ? (
@@ -83,6 +96,14 @@ export default function App() {
               setSelectedItem({ id, source });
             }}
           />
+        ) : activeModule === "Portfolio" ? (
+          <PortfolioPage
+            onOpenItemDetail={(item) => {
+              setSelectedPortfolioItem(item);
+            }}
+          />
+        ) : activeModule === "Nastavení" ? (
+          <SettingsPage onBackToDashboard={() => setActiveModule("Nástěnka")} />
         ) : (
           <ModulePlaceholderPage moduleName={activeModule} />
         )}
