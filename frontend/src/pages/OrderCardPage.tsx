@@ -305,7 +305,6 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                     "Termín",
                     "VP",
                     "Stav",
-                    "Akce",
                   ].map((h) => (
                     <th
                       key={h}
@@ -361,40 +360,6 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                       {item.vp_code ?? "-"}
                     </td>
                     <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9", fontWeight: 900, color: "#0f172a" }}>{item.stav}</td>
-                    <td
-                      style={{
-                        ...UI.td,
-                        padding: "10px 10px",
-                        whiteSpace: "nowrap",
-                        borderBottom: "1px solid #f1f5f9",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                      }}
-                    >
-                      {!item.vp_code ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                          }}
-                          style={{
-                            border: "1px solid #15803d",
-                            background: "#15803d",
-                            color: "#fff",
-                            borderRadius: 8,
-                            padding: "5px 8px",
-                            fontSize: 12,
-                            fontWeight: 700,
-                            cursor: "pointer",
-                          }}
-                        >
-                          Vytvořit VP
-                        </button>
-                      ) : (
-                        <span style={{ color: "#94a3b8", fontWeight: 700 }}>—</span>
-                      )}
-                    </td>
                   </tr>
                 ))}
               </tbody>
