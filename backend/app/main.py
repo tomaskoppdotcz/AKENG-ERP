@@ -20,6 +20,7 @@ from app.api.kiosk import router as kiosk_router
 from app.api.import_orders import router as import_orders_router
 from app.api.dev_tools import dev_tools_router
 from app.api.generate_operations import router as generate_operations_router
+from app.api.portfolio import router as portfolio_router
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
 from app.models.kiosk import Employee, Kiosk, KioskSession, OperationEvent
@@ -28,8 +29,8 @@ from app.models.technology_library import TechnologyTemplate, TechnologyTemplate
 from app.models.portfolio import (
     PortfolioGroup,
     PortfolioItem,
-    TechnologyTemplate as PortfolioTechnologyTemplate,
-    TechnologyTemplateOperation as PortfolioTechnologyTemplateOperation,
+    PortfolioTechnologyTemplate,
+    PortfolioTechnologyTemplateOperation,
 )
 
 
@@ -65,6 +66,7 @@ app.include_router(kiosk_router, prefix="/kiosk", tags=["kiosk"])
 app.include_router(import_orders_router, prefix="/import", tags=["import"])
 app.include_router(dev_tools_router, prefix="/dev", tags=["dev"])
 app.include_router(generate_operations_router, prefix="/generate", tags=["generate"])
+app.include_router(portfolio_router, prefix="/portfolio", tags=["portfolio"])
 
 
 @app.get("/")

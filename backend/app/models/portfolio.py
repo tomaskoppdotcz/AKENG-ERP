@@ -32,14 +32,14 @@ class PortfolioItem(Base):
 
     customer: Mapped["Customer"] = relationship("Customer")
     group: Mapped["PortfolioGroup | None"] = relationship("PortfolioGroup", back_populates="items")
-    technology_templates: Mapped[list["TechnologyTemplate"]] = relationship(
-        "TechnologyTemplate",
+    technology_templates: Mapped[list["PortfolioTechnologyTemplate"]] = relationship(
+        "PortfolioTechnologyTemplate",
         back_populates="portfolio_item",
         cascade="all, delete-orphan",
     )
 
 
-class TechnologyTemplate(Base):
+class PortfolioTechnologyTemplate(Base):
     __tablename__ = "portfolio_technology_templates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -49,15 +49,15 @@ class TechnologyTemplate(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     portfolio_item: Mapped["PortfolioItem"] = relationship("PortfolioItem", back_populates="technology_templates")
-    operations: Mapped[list["TechnologyTemplateOperation"]] = relationship(
-        "TechnologyTemplateOperation",
+    operations: Mapped[list["PortfolioTechnologyTemplateOperation"]] = relationship(
+        "PortfolioTechnologyTemplateOperation",
         back_populates="template",
         cascade="all, delete-orphan",
-        order_by="TechnologyTemplateOperation.operation_no.asc()",
+        order_by="PortfolioTechnologyTemplateOperation.operation_no.asc()",
     )
 
 
-class TechnologyTemplateOperation(Base):
+class PortfolioTechnologyTemplateOperation(Base):
     __tablename__ = "portfolio_technology_template_operations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -71,5 +71,5 @@ class TechnologyTemplateOperation(Base):
     outsourcing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    template: Mapped["TechnologyTemplate"] = relationship("TechnologyTemplate", back_populates="operations")
+    template: Mapped["PortfolioTechnologyTemplate"] = relationship("PortfolioTechnologyTemplate", back_populates="operations")
 
