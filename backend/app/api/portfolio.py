@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import inspect as sa_inspect, select, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.models.master_data import Customer
+from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.portfolio import (
     PortfolioGroup,
     PortfolioItem,
@@ -15,9 +17,40 @@ from app.models.portfolio import (
 router = APIRouter()
 
 
+def ensure_portfolio_technology_operation_library_fks(engine: Engine) -> None:
+    """SQLite: add FK columns to template operations if missing (create_all does not migrate)."""
+    try:
+        url = str(engine.url)
+    except Exception:
+        return
+    if not url.startswith("sqlite"):
+        return
+
+    insp = sa_inspect(engine)
+    if "portfolio_technology_template_operations" not in insp.get_table_names():
+        return
+
+    cols = {c["name"] for c in insp.get_columns("portfolio_technology_template_operations")}
+    stmts: list[str] = []
+    if "operation_library_item_id" not in cols:
+        stmts.append(
+            "ALTER TABLE portfolio_technology_template_operations ADD COLUMN operation_library_item_id INTEGER"
+        )
+    if "workplace_library_item_id" not in cols:
+        stmts.append(
+            "ALTER TABLE portfolio_technology_template_operations ADD COLUMN workplace_library_item_id INTEGER"
+        )
+    if not stmts:
+        return
+
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
 class PortfolioOperationUpsert(BaseModel):
-    operation_name: str
-    machine_code: str | None = None
+    operation_library_item_id: int | None = None
+    workplace_library_item_id: int | None = None
     setup_time_min: float = 0
     labor_time_per_piece_min: float = 0
     control_required: bool = False
@@ -31,8 +64,8 @@ class ReorderOperationsBody(BaseModel):
 
 class PortfolioOperationUpdate(BaseModel):
     operation_no: int | None = None
-    operation_name: str | None = None
-    machine_code: str | None = None
+    operation_library_item_id: int | None = None
+    workplace_library_item_id: int | None = None
     setup_time_min: float | None = None
     labor_time_per_piece_min: float | None = None
     control_required: bool | None = None
@@ -41,11 +74,19 @@ class PortfolioOperationUpdate(BaseModel):
 
 
 def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
+    op_name = op.operation_name
+    if op.operation_library_item_id is not None and op.operation_library_item is not None:
+        op_name = op.operation_library_item.name
+    machine = op.workplace
+    if op.workplace_library_item_id is not None and op.workplace_library_item is not None:
+        machine = op.workplace_library_item.name
     return {
         "id": op.id,
         "operation_no": op.operation_no,
-        "operation_name": op.operation_name,
-        "machine_code": op.workplace,
+        "operation_name": op_name,
+        "machine_code": machine,
+        "operation_library_item_id": op.operation_library_item_id,
+        "workplace_library_item_id": op.workplace_library_item_id,
         "setup_time_min": op.setup_min,
         "labor_time_per_piece_min": op.run_min_per_piece,
         "control_required": op.control_required,
@@ -271,6 +312,14 @@ def get_portfolio_item_technology(item_id: int, db: Session = Depends(get_db)):
     template = db.scalar(
         select(PortfolioTechnologyTemplate)
         .where(PortfolioTechnologyTemplate.portfolio_item_id == item_id, PortfolioTechnologyTemplate.is_active.is_(True))
+        .options(
+            selectinload(PortfolioTechnologyTemplate.operations).selectinload(
+                PortfolioTechnologyTemplateOperation.operation_library_item
+            ),
+            selectinload(PortfolioTechnologyTemplate.operations).selectinload(
+                PortfolioTechnologyTemplateOperation.workplace_library_item
+            ),
+        )
         .order_by(PortfolioTechnologyTemplate.id.asc())
     )
 
@@ -343,11 +392,30 @@ def create_template_operation(
     )
     next_operation_no = (last_operation.operation_no + 10) if last_operation else 10
 
+    if payload.operation_library_item_id is None:
+        raise HTTPException(status_code=422, detail="operation_library_item_id is required")
+
+    op_lib = db.scalar(
+        select(OperationLibraryItem).where(OperationLibraryItem.id == payload.operation_library_item_id)
+    )
+    if not op_lib:
+        raise HTTPException(status_code=404, detail="Operation library item not found")
+
+    wp_lib: WorkplaceLibraryItem | None = None
+    if payload.workplace_library_item_id is not None:
+        wp_lib = db.scalar(
+            select(WorkplaceLibraryItem).where(WorkplaceLibraryItem.id == payload.workplace_library_item_id)
+        )
+        if not wp_lib:
+            raise HTTPException(status_code=404, detail="Workplace library item not found")
+
     row = PortfolioTechnologyTemplateOperation(
         template_id=template_id,
         operation_no=next_operation_no,
-        operation_name=payload.operation_name,
-        workplace=payload.machine_code,
+        operation_name=op_lib.name,
+        workplace=wp_lib.name if wp_lib else None,
+        operation_library_item_id=op_lib.id,
+        workplace_library_item_id=wp_lib.id if wp_lib else None,
         setup_min=payload.setup_time_min,
         run_min_per_piece=payload.labor_time_per_piece_min,
         control_required=payload.control_required,
@@ -357,6 +425,14 @@ def create_template_operation(
     db.add(row)
     db.commit()
     db.refresh(row)
+    row = db.scalar(
+        select(PortfolioTechnologyTemplateOperation)
+        .where(PortfolioTechnologyTemplateOperation.id == row.id)
+        .options(
+            selectinload(PortfolioTechnologyTemplateOperation.operation_library_item),
+            selectinload(PortfolioTechnologyTemplateOperation.workplace_library_item),
+        )
+    )
     return _operation_to_payload(row)
 
 
@@ -418,10 +494,28 @@ def update_template_operation(
     if "operation_no" in data and data["operation_no"] is not None and data["operation_no"] <= 0:
         raise HTTPException(status_code=422, detail="operation_no must be integer > 0")
 
-    if "operation_name" in data:
-        row.operation_name = data["operation_name"]
-    if "machine_code" in data:
-        row.workplace = data["machine_code"]
+    if "operation_library_item_id" in data:
+        oid = data["operation_library_item_id"]
+        if oid is None:
+            row.operation_library_item_id = None
+        else:
+            op_lib = db.scalar(select(OperationLibraryItem).where(OperationLibraryItem.id == oid))
+            if not op_lib:
+                raise HTTPException(status_code=404, detail="Operation library item not found")
+            row.operation_library_item_id = oid
+            row.operation_name = op_lib.name
+
+    if "workplace_library_item_id" in data:
+        wid = data["workplace_library_item_id"]
+        if wid is None:
+            row.workplace_library_item_id = None
+        else:
+            wp_lib = db.scalar(select(WorkplaceLibraryItem).where(WorkplaceLibraryItem.id == wid))
+            if not wp_lib:
+                raise HTTPException(status_code=404, detail="Workplace library item not found")
+            row.workplace_library_item_id = wid
+            row.workplace = wp_lib.name
+
     if "setup_time_min" in data:
         row.setup_min = data["setup_time_min"]
     if "labor_time_per_piece_min" in data:
@@ -449,6 +543,14 @@ def update_template_operation(
 
     db.commit()
     db.refresh(row)
+    row = db.scalar(
+        select(PortfolioTechnologyTemplateOperation)
+        .where(PortfolioTechnologyTemplateOperation.id == row.id)
+        .options(
+            selectinload(PortfolioTechnologyTemplateOperation.operation_library_item),
+            selectinload(PortfolioTechnologyTemplateOperation.workplace_library_item),
+        )
+    )
     return _operation_to_payload(row)
 
 

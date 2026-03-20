@@ -5,7 +5,7 @@ from app.core.database import SessionLocal, engine
 from app.models.base import Base
 
 from app.api.master_data import router as master_data_router
-from app.api.master_libraries import router as master_libraries_router
+from app.api.master_libraries import ensure_master_libraries_sqlite_schema, router as master_libraries_router
 from app.api.orders import router as orders_router
 from app.api.orders_overview import router as orders_overview_router
 from app.api.order_detail import router as order_detail_router
@@ -21,7 +21,7 @@ from app.api.kiosk import router as kiosk_router
 from app.api.import_orders import router as import_orders_router
 from app.api.dev_tools import dev_tools_router
 from app.api.generate_operations import router as generate_operations_router
-from app.api.portfolio import router as portfolio_router
+from app.api.portfolio import ensure_portfolio_technology_operation_library_fks, router as portfolio_router
 from app.api.portfolio import seed_portfolio_demo_data
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
@@ -51,6 +51,8 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
+    ensure_master_libraries_sqlite_schema(engine)
+    ensure_portfolio_technology_operation_library_fks(engine)
     db = SessionLocal()
     try:
         seed_portfolio_demo_data(db)

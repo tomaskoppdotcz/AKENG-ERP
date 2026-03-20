@@ -15,6 +15,8 @@ export type PortfolioTechnologyOperation = {
   operation_no: number;
   operation_name: string;
   machine_code: string | null;
+  operation_library_item_id: number | null;
+  workplace_library_item_id: number | null;
   setup_time_min: number;
   labor_time_per_piece_min: number;
   control_required: boolean;
@@ -28,9 +30,10 @@ export type PortfolioItemTechnologyResponse = {
   operations: PortfolioTechnologyOperation[];
 };
 
-export type PortfolioOperationPayload = {
-  operation_name: string;
-  machine_code: string | null;
+/** POST /portfolio/templates/{id}/operations */
+export type PortfolioTechnologyOperationCreatePayload = {
+  operation_library_item_id: number;
+  workplace_library_item_id: number | null;
   setup_time_min: number;
   labor_time_per_piece_min: number;
   control_required: boolean;
@@ -38,11 +41,56 @@ export type PortfolioOperationPayload = {
   note: string | null;
 };
 
+/** PUT /portfolio/template-operations/{id} — partial updates */
+export type PortfolioTechnologyOperationUpdatePayload = {
+  operation_no?: number;
+  operation_library_item_id?: number | null;
+  workplace_library_item_id?: number | null;
+  setup_time_min?: number;
+  labor_time_per_piece_min?: number;
+  control_required?: boolean;
+  outsourcing?: boolean;
+  note?: string | null;
+};
+
 export type CreatePortfolioTechnologyTemplateResponse = {
   template_id: number;
   template_name: string;
   created: boolean;
 };
+
+export type OperationLibraryItem = {
+  id: number;
+  code: string | null;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+};
+
+export type WorkplaceLibraryItem = {
+  id: number;
+  code: string | null;
+  name: string;
+  workplace_type: string | null;
+  hourly_rate: number | null;
+  is_active: boolean;
+};
+
+export async function getOperationLibraryItems(): Promise<OperationLibraryItem[]> {
+  const res = await fetch(`${API_BASE}/libraries/operations`);
+  if (!res.ok) {
+    throw new Error("Nepodarilo se nacist knihovnu operaci.");
+  }
+  return res.json();
+}
+
+export async function getWorkplaceLibraryItems(): Promise<WorkplaceLibraryItem[]> {
+  const res = await fetch(`${API_BASE}/libraries/workplaces`);
+  if (!res.ok) {
+    throw new Error("Nepodarilo se nacist knihovnu pracovist.");
+  }
+  return res.json();
+}
 
 export async function getPortfolioItems(): Promise<PortfolioItem[]> {
   const res = await fetch(`${API_BASE}/portfolio/items`);
@@ -79,7 +127,7 @@ export async function reorderPortfolioTechnologyOperations(
 
 export async function createPortfolioTechnologyOperation(
   templateId: number,
-  payload: PortfolioOperationPayload
+  payload: PortfolioTechnologyOperationCreatePayload
 ): Promise<PortfolioTechnologyOperation> {
   const res = await fetch(`${API_BASE}/portfolio/templates/${templateId}/operations`, {
     method: "POST",
@@ -94,7 +142,7 @@ export async function createPortfolioTechnologyOperation(
 
 export async function updatePortfolioTechnologyOperation(
   operationId: number,
-  payload: PortfolioOperationPayload
+  payload: PortfolioTechnologyOperationUpdatePayload
 ): Promise<PortfolioTechnologyOperation> {
   const res = await fetch(`${API_BASE}/portfolio/template-operations/${operationId}`, {
     method: "PUT",

@@ -4,11 +4,15 @@ import {
   createPortfolioTechnologyTemplate,
   createPortfolioTechnologyOperation,
   deletePortfolioTechnologyOperation,
+  getOperationLibraryItems,
   getPortfolioItemTechnology,
+  getWorkplaceLibraryItems,
   reorderPortfolioTechnologyOperations,
   updatePortfolioTechnologyOperation,
+  type OperationLibraryItem,
   type PortfolioItem,
   type PortfolioTechnologyOperation,
+  type WorkplaceLibraryItem,
 } from "../services/portfolioApi";
 
 type Props = {
@@ -45,8 +49,12 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
   const [showAddOperationForm, setShowAddOperationForm] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingOperationId, setEditingOperationId] = useState<number | null>(null);
-  const [operationName, setOperationName] = useState("");
-  const [workplace, setWorkplace] = useState("");
+  const [operationLibraryId, setOperationLibraryId] = useState<number | null>(null);
+  const [workplaceLibraryId, setWorkplaceLibraryId] = useState<number | null>(null);
+  const [legacyOperationLabel, setLegacyOperationLabel] = useState<string | null>(null);
+  const [legacyWorkplaceLabel, setLegacyWorkplaceLabel] = useState<string | null>(null);
+  const [editStartedWithOperationFk, setEditStartedWithOperationFk] = useState(false);
+  const [editStartedWithWorkplaceFk, setEditStartedWithWorkplaceFk] = useState(false);
   const [setupMin, setSetupMin] = useState("0");
   const [runMinPerPiece, setRunMinPerPiece] = useState("0");
   const [controlRequired, setControlRequired] = useState(false);
@@ -58,6 +66,31 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
   const [techError, setTechError] = useState<string | null>(null);
   const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [reorderBusy, setReorderBusy] = useState(false);
+  const [operationLibraryItems, setOperationLibraryItems] = useState<OperationLibraryItem[]>([]);
+  const [workplaceLibraryItems, setWorkplaceLibraryItems] = useState<WorkplaceLibraryItem[]>([]);
+  const [librariesLoading, setLibrariesLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+
+  const activeOperationLibrary = useMemo(
+    () => operationLibraryItems.filter((o) => o.is_active),
+    [operationLibraryItems]
+  );
+  const activeWorkplaceLibrary = useMemo(
+    () => workplaceLibraryItems.filter((w) => w.is_active),
+    [workplaceLibraryItems]
+  );
+
+  const operationSelectValue = useMemo(() => {
+    if (operationLibraryId != null) return String(operationLibraryId);
+    if (legacyOperationLabel) return "__legacy_op__";
+    return "";
+  }, [operationLibraryId, legacyOperationLabel]);
+
+  const workplaceSelectValue = useMemo(() => {
+    if (workplaceLibraryId != null) return String(workplaceLibraryId);
+    if (legacyWorkplaceLabel) return "__legacy_wp__";
+    return "";
+  }, [workplaceLibraryId, legacyWorkplaceLabel]);
 
   const detail = useMemo(
     () => ({
@@ -101,11 +134,40 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.id]);
 
+  useEffect(() => {
+    if (!showAddOperationForm) return;
+    let cancelled = false;
+    setLibrariesLoading(true);
+    setLibraryError(null);
+    Promise.all([getOperationLibraryItems(), getWorkplaceLibraryItems()])
+      .then(([ops, wps]) => {
+        if (!cancelled) {
+          setOperationLibraryItems(ops);
+          setWorkplaceLibraryItems(wps);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setLibraryError(e instanceof Error ? e.message : "Nepodarilo se nacist knihovny.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLibrariesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showAddOperationForm]);
+
   function resetForm() {
     setIsEditMode(false);
     setEditingOperationId(null);
-    setOperationName("");
-    setWorkplace("");
+    setOperationLibraryId(null);
+    setWorkplaceLibraryId(null);
+    setLegacyOperationLabel(null);
+    setLegacyWorkplaceLabel(null);
+    setEditStartedWithOperationFk(false);
+    setEditStartedWithWorkplaceFk(false);
     setSetupMin("0");
     setRunMinPerPiece("0");
     setControlRequired(false);
@@ -114,13 +176,34 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
     setShowAddOperationForm(false);
   }
 
+  function onOperationSelectChange(value: string) {
+    if (value === "" || value === "__legacy_op__") {
+      if (value === "") {
+        setOperationLibraryId(null);
+        setLegacyOperationLabel(null);
+      }
+      return;
+    }
+    setOperationLibraryId(Number(value));
+    setLegacyOperationLabel(null);
+  }
+
+  function onWorkplaceSelectChange(value: string) {
+    if (value === "" || value === "__legacy_wp__") {
+      if (value === "") {
+        setWorkplaceLibraryId(null);
+        setLegacyWorkplaceLabel(null);
+      }
+      return;
+    }
+    setWorkplaceLibraryId(Number(value));
+    setLegacyWorkplaceLabel(null);
+  }
+
   async function saveOperation() {
-    if (!operationName.trim()) return;
     if (!templateId) return;
 
-    const payload = {
-      operation_name: operationName.trim(),
-      machine_code: workplace.trim() || null,
+    const baseFields = {
       setup_time_min: Number(setupMin) || 0,
       labor_time_per_piece_min: Number(runMinPerPiece) || 0,
       control_required: controlRequired,
@@ -130,22 +213,52 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
 
     try {
       if (isEditMode && editingOperationId != null) {
-        await updatePortfolioTechnologyOperation(editingOperationId, payload);
+        const body: Record<string, unknown> = { ...baseFields };
+        if (operationLibraryId != null) {
+          body.operation_library_item_id = operationLibraryId;
+        } else if (editStartedWithOperationFk) {
+          body.operation_library_item_id = null;
+        }
+        if (workplaceLibraryId != null) {
+          body.workplace_library_item_id = workplaceLibraryId;
+        } else if (editStartedWithWorkplaceFk) {
+          body.workplace_library_item_id = null;
+        }
+        await updatePortfolioTechnologyOperation(editingOperationId, body);
       } else {
-        await createPortfolioTechnologyOperation(templateId, payload);
+        if (operationLibraryId == null) {
+          setTechError("Vyberte operaci z knihovny.");
+          return;
+        }
+        await createPortfolioTechnologyOperation(templateId, {
+          operation_library_item_id: operationLibraryId,
+          workplace_library_item_id: workplaceLibraryId,
+          ...baseFields,
+        });
       }
+      setTechError(null);
       await loadTechnology();
       resetForm();
     } catch (e: unknown) {
-      setTechError(e instanceof Error ? e.message : "Nepodarilo se ulozit operaci.");
+      setTechError(e instanceof Error ? e.message : "Nepodařilo se uložit operaci.");
     }
   }
 
   function startEdit(op: PortfolioTechnologyOperation) {
     setIsEditMode(true);
     setEditingOperationId(op.id);
-    setOperationName(op.operation_name);
-    setWorkplace(op.machine_code ?? "");
+    setEditStartedWithOperationFk(op.operation_library_item_id != null);
+    setEditStartedWithWorkplaceFk(op.workplace_library_item_id != null);
+    setOperationLibraryId(op.operation_library_item_id ?? null);
+    setWorkplaceLibraryId(op.workplace_library_item_id ?? null);
+    setLegacyOperationLabel(
+      op.operation_library_item_id == null && op.operation_name ? op.operation_name : null
+    );
+    const wpLegacy =
+      op.workplace_library_item_id == null && op.machine_code && op.machine_code.trim()
+        ? op.machine_code
+        : null;
+    setLegacyWorkplaceLabel(wpLegacy);
     setSetupMin(String(op.setup_time_min));
     setRunMinPerPiece(String(op.labor_time_per_piece_min));
     setControlRequired(op.control_required);
@@ -310,14 +423,50 @@ export default function PortfolioItemDetailPage({ item, onBack }: Props) {
 
             {showAddOperationForm ? (
               <div style={{ ...UI.card, padding: 12, marginBottom: 12 }}>
+                {librariesLoading ? (
+                  <div style={{ ...UI.sectionSubtitle, marginBottom: 10 }}>Načítám knihovny…</div>
+                ) : null}
+                {libraryError ? (
+                  <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{libraryError}</div>
+                ) : null}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
                   <div>
                     <div style={UI.inputs.label}>Operace</div>
-                    <input value={operationName} onChange={(e) => setOperationName(e.target.value)} style={UI.inputs.base} />
+                    <select
+                      value={operationSelectValue}
+                      onChange={(e) => onOperationSelectChange(e.target.value)}
+                      style={UI.inputs.base}
+                      disabled={librariesLoading}
+                    >
+                      <option value="">Vyberte operaci</option>
+                      {legacyOperationLabel ? (
+                        <option value="__legacy_op__">{legacyOperationLabel} (uloženo)</option>
+                      ) : null}
+                      {activeOperationLibrary.map((o) => (
+                        <option key={o.id} value={String(o.id)}>
+                          {o.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <div style={UI.inputs.label}>Pracoviště</div>
-                    <input value={workplace} onChange={(e) => setWorkplace(e.target.value)} style={UI.inputs.base} />
+                    <select
+                      value={workplaceSelectValue}
+                      onChange={(e) => onWorkplaceSelectChange(e.target.value)}
+                      style={UI.inputs.base}
+                      disabled={librariesLoading}
+                    >
+                      <option value="">Vyberte pracoviště</option>
+                      {legacyWorkplaceLabel ? (
+                        <option value="__legacy_wp__">{legacyWorkplaceLabel} (uloženo)</option>
+                      ) : null}
+                      {activeWorkplaceLibrary.map((w) => (
+                        <option key={w.id} value={String(w.id)}>
+                          {w.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <div style={UI.inputs.label}>Setup</div>
