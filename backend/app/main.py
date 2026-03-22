@@ -37,6 +37,7 @@ from app.models.portfolio import (
 )
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
+from app.models.material_stock import MaterialStockItem, MaterialStockMovement
 
 
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
