@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
-import { getMaterialLibraryItems, type MaterialLibraryItem } from "../services/materialLibraryApi";
+import { getMaterialGroups, getMaterialLibraryItems, type MaterialGroup, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import {
   createMaterialStockItem,
   getMaterialStockItems,
@@ -22,7 +22,10 @@ function norm(value: string): string {
 export default function MaterialStockPage({ onOpenDetail }: Props) {
   const [rows, setRows] = useState<MaterialStockRow[]>([]);
   const [libraryItems, setLibraryItems] = useState<MaterialLibraryItem[]>([]);
+  const [groups, setGroups] = useState<MaterialGroup[]>([]);
   const [query, setQuery] = useState("");
+  const [groupFilter, setGroupFilter] = useState<number | "">("");
+  const [formFilter, setFormFilter] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<number | null>(null);
@@ -41,7 +44,11 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [stockItems, libItems] = await Promise.all([getMaterialStockItems(), getMaterialLibraryItems()]);
+      const [stockItems, libItems, groupItems] = await Promise.all([
+        getMaterialStockItems(),
+        getMaterialLibraryItems(),
+        getMaterialGroups(),
+      ]);
       const byMaterialId = new Map<number, MaterialLibraryItem>();
       for (const item of libItems) byMaterialId.set(item.id, item);
       const mapped = stockItems.map((s) => ({
@@ -50,24 +57,21 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
       }));
       setRows(mapped);
       setLibraryItems(libItems);
+      setGroups(groupItems);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Nepodařilo se načíst sklad materiálu.");
       setRows([]);
       setLibraryItems([]);
+      setGroups([]);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    let cancelled = false;
     loadData().catch(() => {
       // handled in loadData
     });
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   function parseOptionalNumber(value: string): number | null {
@@ -128,13 +132,20 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
 
   const filtered = useMemo(() => {
     const q = norm(query);
-    if (!q) return rows;
-    return rows.filter((r) =>
-      norm(
-        `${r.material_name} ${r.material_code} ${r.material_dimension ?? ""} ${r.location ?? ""} ${r.unit ?? ""}`
-      ).includes(q)
-    );
-  }, [rows, query]);
+    return rows.filter((r) => {
+      const matchesText = !q || norm(
+        `${r.material_name} ${r.material_code} ${r.material_form ?? ""} ${r.material_dimension ?? ""} ${r.location ?? ""} ${r.unit ?? ""}`
+      ).includes(q);
+      const matchesGroup = groupFilter === "" || r.material_group_id === groupFilter;
+      const matchesForm = !formFilter || r.material_form === formFilter;
+      return matchesText && matchesGroup && matchesForm;
+    });
+  }, [rows, query, groupFilter, formFilter]);
+
+  const formFilterOptions = useMemo(() => {
+    const forms = new Set(rows.map((r) => r.material_form?.trim()).filter((v): v is string => Boolean(v)));
+    return Array.from(forms).sort((a, b) => a.localeCompare(b, "cs"));
+  }, [rows]);
 
   return (
     <div style={UI.container}>
@@ -159,6 +170,31 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
               placeholder="Hledat materiál, kód, rozměr, lokaci..."
               style={UI.inputs.base}
             />
+            <select
+              value={groupFilter === "" ? "" : String(groupFilter)}
+              onChange={(e) => setGroupFilter(e.target.value ? Number(e.target.value) : "")}
+              style={{ ...UI.inputs.base, width: 220 }}
+            >
+              <option value="">Skupina: vše</option>
+              {groups.map((g) => (
+                <option key={g.id} value={String(g.id)}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={formFilter}
+              onChange={(e) => setFormFilter(e.target.value)}
+              style={{ ...UI.inputs.base, width: 220 }}
+              title="Forma"
+            >
+              <option value="">Forma: vše</option>
+              {formFilterOptions.map((form) => (
+                <option key={form} value={form}>
+                  {form}
+                </option>
+              ))}
+            </select>
           </div>
 
           {loading ? <div style={UI.sectionSubtitle}>Načítám sklad materiálu...</div> : null}
@@ -231,7 +267,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["Materiál", "Kód", "Rozměr", "Lokace", "Stav", "Min. zásoba"].map((h) => (
+                    {["Materiál", "Skupina", "Forma", "Kód", "Rozměr", "Lokace", "Stav", "Min. zásoba"].map((h) => (
                       <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                         {h}
                       </th>
@@ -248,6 +284,8 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                       style={{ cursor: "pointer", background: hoverId === row.id ? "#eff6ff" : "#fff" }}
                     >
                       <td style={{ ...UI.td, padding: "10px 10px", fontWeight: 800 }}>{row.material_name}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_group_name || "—"}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_form || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_code || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_dimension || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.location || "—"}</td>
@@ -261,7 +299,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                   ))}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={6} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={8} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Žádné výsledky.
                       </td>
                     </tr>

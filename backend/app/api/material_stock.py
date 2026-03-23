@@ -20,11 +20,15 @@ ALLOWED_MOVEMENT_TYPES = frozenset({"prijem", "vydej", "korekce"})
 
 def _stock_item_payload(row: MaterialStockItem) -> dict:
     lib = row.material_library_item
+    group = lib.material_group if lib else None
     return {
         "id": row.id,
         "material_library_item_id": row.material_library_item_id,
         "material_code": lib.code if lib else "",
         "material_name": lib.name if lib else "",
+        "material_form": lib.form if lib else None,
+        "material_group_id": group.id if group else None,
+        "material_group_name": group.name if group else None,
         "location": row.location,
         "current_qty": row.current_qty,
         "min_qty": row.min_qty,
@@ -126,7 +130,9 @@ def list_stock_items(db: Session = Depends(get_db)):
     rows = db.scalars(
         select(MaterialStockItem)
         .join(MaterialLibraryItem, MaterialStockItem.material_library_item_id == MaterialLibraryItem.id)
-        .options(joinedload(MaterialStockItem.material_library_item))
+        .options(
+            joinedload(MaterialStockItem.material_library_item).joinedload(MaterialLibraryItem.material_group)
+        )
         .order_by(MaterialLibraryItem.name.asc())
     ).unique().all()
     stock_ids = [r.id for r in rows]
@@ -168,7 +174,9 @@ def create_stock_item(payload: StockItemCreate, db: Session = Depends(get_db)):
     row = db.scalar(
         select(MaterialStockItem)
         .where(MaterialStockItem.id == row.id)
-        .options(joinedload(MaterialStockItem.material_library_item))
+        .options(
+            joinedload(MaterialStockItem.material_library_item).joinedload(MaterialLibraryItem.material_group)
+        )
     )
     reserved_map = _reserved_totals_by_stock_id(db, [row.id])
     return _stock_item_list_payload(row, reserved_map.get(row.id, 0.0))
@@ -179,7 +187,9 @@ def update_stock_item(item_id: int, payload: StockItemUpdate, db: Session = Depe
     row = db.scalar(
         select(MaterialStockItem)
         .where(MaterialStockItem.id == item_id)
-        .options(joinedload(MaterialStockItem.material_library_item))
+        .options(
+            joinedload(MaterialStockItem.material_library_item).joinedload(MaterialLibraryItem.material_group)
+        )
     )
     if not row:
         raise HTTPException(status_code=404, detail="Stock item not found")

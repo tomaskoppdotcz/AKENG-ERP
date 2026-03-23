@@ -3,8 +3,10 @@ import { UI } from "../styles/ui";
 import {
   createMaterialLibraryItem,
   deleteMaterialLibraryItem,
+  getMaterialGroups,
   getMaterialLibraryItems,
   updateMaterialLibraryItem,
+  type MaterialGroup,
   type MaterialLibraryItem,
 } from "../services/materialLibraryApi";
 
@@ -15,6 +17,25 @@ function norm(s: string) {
 function formatMoney(v: number | null): string {
   if (v == null) return "—";
   return v.toLocaleString("cs-CZ", { maximumFractionDigits: 2 });
+}
+
+const fmtKgPerMm = new Intl.NumberFormat("cs-CZ", {
+  minimumFractionDigits: 6,
+  maximumFractionDigits: 6,
+});
+const fmtPricePerMm = new Intl.NumberFormat("cs-CZ", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+function formatKgPerMm(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return fmtKgPerMm.format(v);
+}
+
+function formatPricePerMm(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return fmtPricePerMm.format(v);
 }
 
 function parseOptionalFloat(s: string): number | null {
@@ -40,9 +61,12 @@ const MATERIAL_FORM_OPTION_SET = new Set<string>(MATERIAL_FORM_OPTIONS);
 
 export default function MaterialLibraryPage() {
   const [rows, setRows] = useState<MaterialLibraryItem[]>([]);
+  const [groups, setGroups] = useState<MaterialGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [groupFilter, setGroupFilter] = useState<number | "">("");
+  const [formFilter, setFormFilter] = useState<string>("");
   const [dimensionSort, setDimensionSort] = useState<"asc" | "desc" | null>("asc");
 
   const [showForm, setShowForm] = useState(false);
@@ -50,24 +74,26 @@ export default function MaterialLibraryPage() {
   const [saving, setSaving] = useState(false);
   const [formCode, setFormCode] = useState("");
   const [formName, setFormName] = useState("");
-  const [formMaterialType, setFormMaterialType] = useState("");
   const [formForm, setFormForm] = useState("");
   const [formDimension, setFormDimension] = useState("");
   const [formUnit, setFormUnit] = useState("");
   const [formDensity, setFormDensity] = useState("");
   const [formPriceKg, setFormPriceKg] = useState("");
   const [formPriceUnit, setFormPriceUnit] = useState("");
+  const [formMaterialGroupId, setFormMaterialGroupId] = useState<number | "">("");
   const [formActive, setFormActive] = useState(true);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await getMaterialLibraryItems();
+      const [data, groupData] = await Promise.all([getMaterialLibraryItems(), getMaterialGroups()]);
       setRows(data);
+      setGroups(groupData);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Nepodařilo se načíst data.");
       setRows([]);
+      setGroups([]);
     } finally {
       setLoading(false);
     }
@@ -79,11 +105,22 @@ export default function MaterialLibraryPage() {
 
   const filtered = useMemo(() => {
     const q = norm(query);
-    if (!q) return rows;
-    return rows.filter((r) =>
-      norm(`${r.code} ${r.name} ${r.material_type} ${r.form} ${r.dimension}`).includes(q)
-    );
-  }, [rows, query]);
+    return rows.filter((r) => {
+      const groupLabel = r.material_group_name ?? "";
+      const matchesText =
+        !q || norm(`${r.code} ${r.name} ${groupLabel} ${r.form} ${r.dimension}`).includes(q);
+      const matchesGroup = groupFilter === "" || r.material_group_id === groupFilter;
+      const matchesForm = !formFilter || r.form === formFilter;
+      return matchesText && matchesGroup && matchesForm;
+    });
+  }, [rows, query, groupFilter, formFilter]);
+
+  const formFilterOptions = useMemo(() => {
+    const fromRows = new Set(rows.map((r) => r.form?.trim()).filter((v): v is string => Boolean(v)));
+    const fixed = [...MATERIAL_FORM_OPTIONS];
+    const extras = Array.from(fromRows).filter((v) => !MATERIAL_FORM_OPTION_SET.has(v)).sort((a, b) => a.localeCompare(b, "cs"));
+    return [...fixed, ...extras];
+  }, [rows]);
 
   const filteredAndSorted = useMemo(() => {
     if (!dimensionSort) return filtered;
@@ -106,13 +143,13 @@ export default function MaterialLibraryPage() {
     setEditingId(null);
     setFormCode("");
     setFormName("");
-    setFormMaterialType("");
     setFormForm("");
     setFormDimension("");
     setFormUnit("");
     setFormDensity("");
     setFormPriceKg("");
     setFormPriceUnit("");
+    setFormMaterialGroupId("");
     setFormActive(true);
     setShowForm(true);
     setError(null);
@@ -122,13 +159,13 @@ export default function MaterialLibraryPage() {
     setEditingId(r.id);
     setFormCode(r.code);
     setFormName(r.name);
-    setFormMaterialType(r.material_type);
     setFormForm(r.form);
     setFormDimension(r.dimension);
     setFormUnit(r.unit);
     setFormDensity(r.density != null ? String(r.density) : "");
     setFormPriceKg(r.price_per_kg != null ? String(r.price_per_kg) : "");
     setFormPriceUnit(r.price_per_unit != null ? String(r.price_per_unit) : "");
+    setFormMaterialGroupId(r.material_group_id ?? "");
     setFormActive(r.is_active);
     setShowForm(true);
     setError(null);
@@ -171,13 +208,14 @@ export default function MaterialLibraryPage() {
     const payload = {
       code,
       name,
-      material_type: formMaterialType.trim(),
+      material_type: "",
       form: formForm.trim(),
       dimension: formDimension.trim(),
       unit: formUnit.trim(),
       density,
       price_per_kg: priceKg,
       price_per_unit: priceUnit,
+      material_group_id: formMaterialGroupId === "" ? null : formMaterialGroupId,
       is_active: formActive,
     };
     try {
@@ -222,9 +260,34 @@ export default function MaterialLibraryPage() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Hledat materiál, kód nebo rozměr..."
+          placeholder="Hledat kód, název, skupinu, formu nebo rozměr…"
           style={{ ...UI.inputs.base, flex: "1 1 280px", minWidth: 200, maxWidth: 480 }}
         />
+        <select
+          value={groupFilter === "" ? "" : String(groupFilter)}
+          onChange={(e) => setGroupFilter(e.target.value ? Number(e.target.value) : "")}
+          style={{ ...UI.inputs.base, width: 220 }}
+        >
+          <option value="">Skupina: vše</option>
+          {groups.map((g) => (
+            <option key={g.id} value={String(g.id)}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={formFilter}
+          onChange={(e) => setFormFilter(e.target.value)}
+          style={{ ...UI.inputs.base, width: 220 }}
+          title="Forma"
+        >
+          <option value="">Forma: vše</option>
+          {formFilterOptions.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
         <button type="button" style={UI.buttons.primary} onClick={openCreate}>
           Nový materiál
         </button>
@@ -253,10 +316,6 @@ export default function MaterialLibraryPage() {
               <input value={formName} onChange={(e) => setFormName(e.target.value)} style={UI.inputs.base} />
             </div>
             <div>
-              <div style={UI.inputs.label}>Typ materiálu</div>
-              <input value={formMaterialType} onChange={(e) => setFormMaterialType(e.target.value)} style={UI.inputs.base} />
-            </div>
-            <div>
               <div style={UI.inputs.label}>Forma</div>
               <select
                 value={formForm}
@@ -270,6 +329,21 @@ export default function MaterialLibraryPage() {
                 {MATERIAL_FORM_OPTIONS.map((opt) => (
                   <option key={opt} value={opt}>
                     {opt}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div style={UI.inputs.label}>Skupina</div>
+              <select
+                value={formMaterialGroupId === "" ? "" : String(formMaterialGroupId)}
+                onChange={(e) => setFormMaterialGroupId(e.target.value ? Number(e.target.value) : "")}
+                style={UI.inputs.base}
+              >
+                <option value="">Bez skupiny</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={String(g.id)}>
+                    {g.name}
                   </option>
                 ))}
               </select>
@@ -327,8 +401,8 @@ export default function MaterialLibraryPage() {
               <tr style={{ background: "#f8fafc" }}>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Kód</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Název</th>
-                <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Typ</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Forma</th>
+                <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Skupina</th>
                 <th
                   style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }}
                   onClick={toggleDimensionSort}
@@ -339,6 +413,8 @@ export default function MaterialLibraryPage() {
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Jednotka</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Cena/kg</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Cena/jednotka</th>
+                <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>kg / mm</th>
+                <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Kč / mm</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Aktivní</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Akce</th>
               </tr>
@@ -348,12 +424,14 @@ export default function MaterialLibraryPage() {
                 <tr key={r.id}>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.code}</td>
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.name}</td>
-                  <td style={{ ...UI.td, padding: "10px 10px" }}>{r.material_type || "—"}</td>
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.form || "—"}</td>
+                  <td style={{ ...UI.td, padding: "10px 10px" }}>{r.material_group_name || "—"}</td>
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.dimension || "—"}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.unit || "—"}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatMoney(r.price_per_kg)}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatMoney(r.price_per_unit)}</td>
+                  <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatKgPerMm(r.kg_per_mm)}</td>
+                  <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatPricePerMm(r.price_per_mm)}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.is_active ? "ANO" : "NE"}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button type="button" style={UI.buttons.secondary} onClick={() => openEdit(r)}>

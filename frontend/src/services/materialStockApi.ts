@@ -6,6 +6,9 @@ export type MaterialStockItem = {
   material_library_item_id: number;
   material_code: string;
   material_name: string;
+  material_form: string | null;
+  material_group_id: number | null;
+  material_group_name: string | null;
   location: string | null;
   current_qty: number;
   min_qty: number | null;
