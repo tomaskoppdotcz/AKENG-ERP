@@ -1,0 +1,65 @@
+const API_BASE =
+  (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+export type MaterialStockItem = {
+  id: number;
+  material_library_item_id: number;
+  material_code: string;
+  material_name: string;
+  location: string | null;
+  current_qty: number;
+  min_qty: number | null;
+  unit: string | null;
+  is_active: boolean;
+};
+
+export type MaterialStockMovement = {
+  id: number;
+  movement_type: "prijem" | "vydej" | "korekce";
+  qty: number;
+  movement_date: string;
+  reference: string | null;
+  note: string | null;
+};
+
+export type MaterialStockMovementCreatePayload = {
+  movement_type: "prijem" | "vydej" | "korekce";
+  qty: number;
+  movement_date: string;
+  reference: string | null;
+  note: string | null;
+};
+
+export async function getMaterialStockItems(): Promise<MaterialStockItem[]> {
+  const res = await fetch(`${API_BASE}/material-stock/items`);
+  if (!res.ok) throw new Error("Nepodařilo se načíst sklad materiálu.");
+  return res.json();
+}
+
+export async function getMaterialStockMovements(stockItemId: number): Promise<MaterialStockMovement[]> {
+  const res = await fetch(`${API_BASE}/material-stock/items/${stockItemId}/movements`);
+  if (!res.ok) throw new Error("Nepodařilo se načíst pohyby materiálu.");
+  return res.json();
+}
+
+export async function createMaterialStockMovement(
+  stockItemId: number,
+  payload: MaterialStockMovementCreatePayload
+): Promise<MaterialStockMovement> {
+  const res = await fetch(`${API_BASE}/material-stock/items/${stockItemId}/movements`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = "Nepodařilo se uložit pohyb.";
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string" && data.detail) detail = data.detail;
+    } catch {
+      // ignore json parse fail
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}

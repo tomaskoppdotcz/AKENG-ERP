@@ -6,10 +6,13 @@ import OrderItemDetailPage from "./pages/OrderItemDetailPage.tsx";
 import DrawingsPage from "./pages/DrawingsPage.tsx";
 import PortfolioPage from "./pages/PortfolioPage";
 import PortfolioItemDetailPage from "./pages/PortfolioItemDetailPage";
+import MaterialStockPage from "./pages/MaterialStockPage";
+import MaterialStockDetailPage from "./pages/MaterialStockDetailPage";
 import SettingsPage from "./pages/SettingsPage";
 import TopNav from "./components/TopNav.tsx";
 import { UI } from "./styles/ui";
 import type { PortfolioItem } from "./services/portfolioApi";
+import type { MaterialStockItem } from "./services/materialStockApi";
 
 const NAV_ITEMS = [
   "Nástěnka",
@@ -44,6 +47,7 @@ export default function App() {
     source: "orders" | "drawings";
   } | null>(null);
   const [selectedPortfolioItem, setSelectedPortfolioItem] = useState<PortfolioItem | null>(null);
+  const [selectedMaterialStockItem, setSelectedMaterialStockItem] = useState<(MaterialStockItem & { material_dimension?: string | null }) | null>(null);
   /** Po otevření portfolia z detailu zakázky/výkresů — zpět vrátí na stejnou položku. */
   const [portfolioReturnFromOrderItem, setPortfolioReturnFromOrderItem] = useState<{
     id: number;
@@ -59,6 +63,7 @@ export default function App() {
   function handleTopNavNavigate(module: string) {
     setSelectedItem(null);
     setSelectedPortfolioItem(null);
+    setSelectedMaterialStockItem(null);
     setPortfolioReturnFromOrderItem(null);
     setActiveModule(module);
   }
@@ -107,6 +112,14 @@ export default function App() {
               }
             }}
           />
+        ) : selectedMaterialStockItem ? (
+          <MaterialStockDetailPage
+            item={selectedMaterialStockItem}
+            onBack={() => {
+              setSelectedMaterialStockItem(null);
+              setActiveModule("Sklad materiálu");
+            }}
+          />
         ) : activeModule === "Nástěnka" ? (
           <DashboardPage />
         ) : activeModule === "Zakázky" ? (
@@ -128,6 +141,12 @@ export default function App() {
           <PortfolioPage
             onOpenItemDetail={(item) => {
               setSelectedPortfolioItem(item);
+            }}
+          />
+        ) : activeModule === "Sklad materiálu" ? (
+          <MaterialStockPage
+            onOpenDetail={(item) => {
+              setSelectedMaterialStockItem(item);
             }}
           />
         ) : activeModule === "Nastavení" ? (
