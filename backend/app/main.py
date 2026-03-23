@@ -28,8 +28,12 @@ from app.api.material_library import (
     seed_material_groups,
 )
 from app.api.material_stock import router as material_stock_router
-from app.api.portfolio import ensure_portfolio_technology_operation_library_fks, router as portfolio_router
-from app.api.portfolio import seed_portfolio_demo_data
+from app.api.portfolio import (
+    ensure_portfolio_items_sqlite_schema,
+    ensure_portfolio_technology_operation_library_fks,
+    router as portfolio_router,
+)
+from app.api.customers import ensure_customers_sqlite_schema, router as customers_router
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
 from app.models.kiosk import Employee, Kiosk, KioskSession, OperationEvent
@@ -44,8 +48,6 @@ from app.models.portfolio import (
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
 from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
-
-
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
 
 app.add_middleware(
@@ -61,13 +63,14 @@ app.add_middleware(
 def startup():
     Base.metadata.create_all(bind=engine)
     ensure_master_libraries_sqlite_schema(engine)
+    ensure_customers_sqlite_schema(engine)
     ensure_material_library_sqlite_schema(engine)
     ensure_portfolio_technology_operation_library_fks(engine)
+    ensure_portfolio_items_sqlite_schema(engine)
     db = SessionLocal()
     try:
         seed_material_groups(db)
         normalize_nerez_material_groups(db)
-        seed_portfolio_demo_data(db)
     finally:
         db.close()
 
@@ -92,6 +95,7 @@ app.include_router(import_orders_router, prefix="/import", tags=["import"])
 app.include_router(dev_tools_router, prefix="/dev", tags=["dev"])
 app.include_router(generate_operations_router, prefix="/generate", tags=["generate"])
 app.include_router(portfolio_router, prefix="/portfolio", tags=["portfolio"])
+app.include_router(customers_router)
 
 
 @app.get("/")

@@ -2,23 +2,25 @@ import React, { useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
 import { getMaterialLibraryItems, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import {
+  getOperationLibraryItems,
+  getWorkplaceLibraryItems,
+  type OperationLibraryItem,
+  type WorkplaceLibraryItem,
+} from "../services/masterLibrariesApi";
+import {
   createPortfolioTechnologyMaterial,
   createPortfolioTechnologyTemplate,
   createPortfolioTechnologyOperation,
   deletePortfolioTechnologyMaterial,
   deletePortfolioTechnologyOperation,
   getPortfolioTechnologyMaterials,
-  getOperationLibraryItems,
   getPortfolioItemTechnology,
-  getWorkplaceLibraryItems,
   reorderPortfolioTechnologyOperations,
   updatePortfolioTechnologyMaterial,
   updatePortfolioTechnologyOperation,
-  type OperationLibraryItem,
   type PortfolioItem,
   type PortfolioTechnologyMaterial,
   type PortfolioTechnologyOperation,
-  type WorkplaceLibraryItem,
 } from "../services/portfolioApi";
 
 type Props = {
@@ -32,23 +34,15 @@ type PortfolioDetailSubtab = "Přehled" | "Technologický postup" | "Dokumenty" 
 
 const SUBTABS: PortfolioDetailSubtab[] = ["Přehled", "Technologický postup", "Dokumenty", "Historie"];
 
-const FALLBACK = {
-  id: 0,
-  gpn: "—",
-  name: "Neznámá portfolio položka",
-  customer_id: 0,
-  group_id: null as number | null,
-  active_template_id: null as number | null,
-  drawing_no: "DRW-PORT-001",
-  revision: "A",
-  material: "Ocel 11 353.1",
-  logistic_mode: "vyroba_zakaznik",
-};
-
 function logisticLabel(mode: string) {
   if (mode === "sklad") return "Sklad";
   if (mode === "sklad_zakaznik") return "Sklad zákazník";
   return "Výroba zákazník";
+}
+
+function formatSalePriceCzk(value: number | null | undefined): string {
+  if (value == null) return "—";
+  return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
 }
 
 export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Props) {
@@ -126,18 +120,23 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   }, [workplaceLibraryId, legacyWorkplaceLabel]);
 
   const detail = useMemo(
-    () => ({
-      id: item?.id ?? FALLBACK.id,
-      gpn: item?.gpn ?? FALLBACK.gpn,
-      name: item?.name ?? FALLBACK.name,
-      customer_id: item?.customer_id ?? FALLBACK.customer_id,
-      group_id: item?.group_id ?? FALLBACK.group_id,
-      active_template_id: item?.active_template_id ?? FALLBACK.active_template_id,
-      drawing_no: FALLBACK.drawing_no,
-      revision: FALLBACK.revision,
-      material: FALLBACK.material,
-      logistic_mode: FALLBACK.logistic_mode,
-    }),
+    () =>
+      item
+        ? {
+            id: item.id,
+            gpn: item.gpn,
+            name: item.name,
+            customer_id: item.customer_id,
+            customer_name: item.customer_name ?? null,
+            group_id: item.group_id,
+            group_name: item.group_name ?? null,
+            active_template_id: item.active_template_id,
+            drawing_no: item.drawing_no ?? null,
+            revision: item.revision ?? null,
+            material_default: item.material_default ?? null,
+            logistic_mode: item.logistic_mode ?? null,
+          }
+        : null,
     [item]
   );
 
@@ -486,11 +485,28 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   return (
     <div style={UI.container}>
       <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
+        {!detail ? (
+          <div
+            style={{
+              ...UI.card,
+              borderRadius: 14,
+              padding: 20,
+              border: "1px solid #e2e8f0",
+              background: "#f8fafc",
+              color: "#64748b",
+              fontWeight: 700,
+            }}
+          >
+            Portfolio položka nebyla nalezena nebo nebyla načtena z backendu.
+          </div>
+        ) : null}
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button type="button" style={UI.buttons.secondary} onClick={onBack}>
             {backLabel ?? "Zpět na portfolio"}
           </button>
         </div>
+        {!detail ? null : (
+          <>
 
         <div style={UI.pageHeaderRow}>
           <div>
@@ -500,11 +516,15 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
           <div style={{ ...UI.summaryTilesGrid, width: "auto", gap: 8 }}>
             <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
               <div style={UI.summaryTileLabel}>Zákazník</div>
-              <div style={UI.summaryTileValue}>{detail.customer_id || "—"}</div>
+              <div style={UI.summaryTileValue}>
+                {detail.customer_name?.trim() ? detail.customer_name : "—"}
+              </div>
             </div>
             <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
               <div style={UI.summaryTileLabel}>Skupina</div>
-              <div style={UI.summaryTileValue}>{detail.group_id ?? "—"}</div>
+              <div style={UI.summaryTileValue}>
+                {detail.group_name?.trim() ? detail.group_name : "—"}
+              </div>
             </div>
             <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
               <div style={UI.summaryTileLabel}>Technologie</div>
@@ -518,19 +538,23 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
         <div style={UI.summaryTilesGrid}>
           <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
             <div style={UI.summaryTileLabel}>Výkres</div>
-            <div style={UI.summaryTileValue}>{detail.drawing_no}</div>
+            <div style={UI.summaryTileValue}>{detail.drawing_no ?? "—"}</div>
           </div>
           <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
             <div style={UI.summaryTileLabel}>Revize</div>
-            <div style={UI.summaryTileValue}>{detail.revision}</div>
+            <div style={UI.summaryTileValue}>{detail.revision ?? "—"}</div>
           </div>
           <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
             <div style={UI.summaryTileLabel}>Materiál</div>
-            <div style={UI.summaryTileValue}>{detail.material}</div>
+            <div style={UI.summaryTileValue}>{detail.material_default ?? "—"}</div>
           </div>
           <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
             <div style={UI.summaryTileLabel}>Logistický režim</div>
-            <div style={UI.summaryTileValue}>{logisticLabel(detail.logistic_mode)}</div>
+            <div style={UI.summaryTileValue}>{logisticLabel(detail.logistic_mode ?? "vyroba_zakaznik")}</div>
+          </div>
+          <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+            <div style={UI.summaryTileLabel}>Prodejní cena / ks (bez DPH)</div>
+            <div style={UI.summaryTileValue}>{formatSalePriceCzk(detail.sale_price_per_piece)}</div>
           </div>
         </div>
 
@@ -570,9 +594,16 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
             <div style={{ display: "grid", gap: 8 }}>
               <div><strong>GPN:</strong> {detail.gpn}</div>
               <div><strong>Název:</strong> {detail.name}</div>
-              <div><strong>Zákazník:</strong> {detail.customer_id || "—"}</div>
-              <div><strong>Skupina:</strong> {detail.group_id ?? "—"}</div>
+              <div>
+                <strong>Zákazník:</strong> {detail.customer_name?.trim() ? detail.customer_name : "—"}
+              </div>
+              <div>
+                <strong>Skupina:</strong> {detail.group_name?.trim() ? detail.group_name : "—"}
+              </div>
               <div><strong>Technologie:</strong> {detail.active_template_id ? "ANO" : "NE"}</div>
+              <div>
+                <strong>Prodejní cena / ks (bez DPH):</strong> {formatSalePriceCzk(detail.sale_price_per_piece)}
+              </div>
             </div>
           </div>
         ) : activeTab === "Technologický postup" ? (
@@ -930,6 +961,8 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
               Modul Historie pro tuto portfolio položku je ve vývoji.
             </div>
           </div>
+        )}
+          </>
         )}
       </div>
     </div>

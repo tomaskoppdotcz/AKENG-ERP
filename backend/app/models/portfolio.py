@@ -36,6 +36,7 @@ class PortfolioItem(Base):
     revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
     material_default: Mapped[str | None] = mapped_column(String(255), nullable=True)
     logistic_mode: Mapped[str] = mapped_column(String(40), default="vyroba_zakaznik", nullable=False)
+    sale_price_per_piece: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     customer: Mapped["Customer"] = relationship("Customer")

@@ -51,6 +51,25 @@ def ensure_portfolio_technology_operation_library_fks(engine: Engine) -> None:
             conn.execute(text(stmt))
 
 
+def ensure_portfolio_items_sqlite_schema(engine: Engine) -> None:
+    """SQLite: doplnění sloupců u portfolio_items (create_all nemigruje existující tabulku)."""
+    try:
+        url = str(engine.url)
+    except Exception:
+        return
+    if not url.startswith("sqlite"):
+        return
+
+    insp = sa_inspect(engine)
+    if "portfolio_items" not in insp.get_table_names():
+        return
+
+    cols = {c["name"] for c in insp.get_columns("portfolio_items")}
+    if "sale_price_per_piece" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE portfolio_items ADD COLUMN sale_price_per_piece FLOAT"))
+
+
 class PortfolioOperationUpsert(BaseModel):
     operation_library_item_id: int | None = None
     workplace_library_item_id: int | None = None
@@ -101,6 +120,7 @@ class PortfolioItemCreatePayload(BaseModel):
     revision: str | None = None
     material_default: str | None = None
     logistic_mode: str = "vyroba_zakaznik"
+    sale_price_per_piece: float | None = None
     is_active: bool = True
 
     @field_validator("gpn", "name")
@@ -121,6 +141,7 @@ class PortfolioItemUpdatePayload(BaseModel):
     revision: str | None = None
     material_default: str | None = None
     logistic_mode: str | None = None
+    sale_price_per_piece: float | None = None
     is_active: bool | None = None
 
 
@@ -240,6 +261,7 @@ def _portfolio_item_payload(item: PortfolioItem) -> dict:
         "revision": item.revision,
         "material_default": item.material_default,
         "logistic_mode": item.logistic_mode,
+        "sale_price_per_piece": item.sale_price_per_piece,
         "is_active": item.is_active,
         "active_template_id": active_template_id,
     }
@@ -367,6 +389,7 @@ def create_portfolio_item(payload: PortfolioItemCreatePayload, db: Session = Dep
         revision=payload.revision.strip() if payload.revision else None,
         material_default=payload.material_default.strip() if payload.material_default else None,
         logistic_mode=(payload.logistic_mode or "vyroba_zakaznik").strip() or "vyroba_zakaznik",
+        sale_price_per_piece=payload.sale_price_per_piece,
         is_active=payload.is_active,
     )
     db.add(row)
@@ -406,6 +429,7 @@ def copy_portfolio_item(item_id: int, payload: PortfolioItemCreatePayload, db: S
         revision=payload.revision.strip() if payload.revision else None,
         material_default=payload.material_default.strip() if payload.material_default else None,
         logistic_mode=(payload.logistic_mode or "vyroba_zakaznik").strip() or "vyroba_zakaznik",
+        sale_price_per_piece=payload.sale_price_per_piece,
         is_active=payload.is_active,
     )
     db.add(new_item)
@@ -502,6 +526,8 @@ def update_portfolio_item(item_id: int, payload: PortfolioItemUpdatePayload, db:
     if "logistic_mode" in data and data["logistic_mode"] is not None:
         mode = str(data["logistic_mode"]).strip()
         row.logistic_mode = mode or row.logistic_mode
+    if "sale_price_per_piece" in data:
+        row.sale_price_per_piece = data["sale_price_per_piece"]
     if "is_active" in data and data["is_active"] is not None:
         row.is_active = bool(data["is_active"])
 

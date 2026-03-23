@@ -45,6 +45,7 @@ export type PortfolioItem = {
   revision?: string | null;
   material_default?: string | null;
   logistic_mode?: string;
+  sale_price_per_piece?: number | null;
   is_active?: boolean;
   active_template_id: number | null;
 };
@@ -58,6 +59,7 @@ export type PortfolioItemCreatePayload = {
   revision: string | null;
   material_default: string | null;
   logistic_mode: string;
+  sale_price_per_piece: number | null;
   is_active: boolean;
 };
 

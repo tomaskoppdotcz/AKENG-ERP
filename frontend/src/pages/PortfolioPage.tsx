@@ -34,6 +34,11 @@ function logisticLabel(mode: string | null | undefined): string {
   return "Výroba zákazník";
 }
 
+function formatCzk(value: number | null | undefined): string {
+  if (value == null) return "—";
+  return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
+}
+
 export default function PortfolioPage({ onOpenItemDetail }: Props) {
   const [items, setItems] = useState<PortfolioItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +64,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
   const [formRevision, setFormRevision] = useState("");
   const [formMaterialDefault, setFormMaterialDefault] = useState("");
   const [formLogisticMode, setFormLogisticMode] = useState("vyroba_zakaznik");
+  const [formSalePrice, setFormSalePrice] = useState("");
   const [formActive, setFormActive] = useState(true);
   const customerRows = Array.isArray(customers) ? customers : [];
 
@@ -159,6 +165,8 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
         i.material_default ?? "",
         i.logistic_mode ?? "",
         logisticLabel(i.logistic_mode),
+        i.sale_price_per_piece != null ? String(i.sale_price_per_piece) : "",
+        formatCzk(i.sale_price_per_piece),
       ]
         .join(" ")
         .toLowerCase()
@@ -210,6 +218,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
     setFormRevision("");
     setFormMaterialDefault("");
     setFormLogisticMode("vyroba_zakaznik");
+    setFormSalePrice("");
     setFormActive(true);
     setShowForm(true);
   }
@@ -225,6 +234,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
     setFormRevision(item.revision ?? "");
     setFormMaterialDefault(item.material_default ?? "");
     setFormLogisticMode(item.logistic_mode ?? "vyroba_zakaznik");
+    setFormSalePrice(item.sale_price_per_piece != null ? String(item.sale_price_per_piece) : "");
     setFormActive(item.is_active ?? true);
     setShowForm(true);
   }
@@ -247,6 +257,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
     setFormRevision(item.revision ?? "");
     setFormMaterialDefault(item.material_default ?? "");
     setFormLogisticMode(item.logistic_mode ?? "vyroba_zakaznik");
+    setFormSalePrice(item.sale_price_per_piece != null ? String(item.sale_price_per_piece) : "");
     setFormActive(item.is_active ?? true);
     setError(null);
     setShowForm(true);
@@ -261,6 +272,13 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
     if (!formCustomerId.trim() || !Number.isFinite(customerId) || customerId <= 0) {
       return setError("Vyberte zákazníka.");
     }
+    const priceRaw = formSalePrice.trim().replace(/\s/g, "").replace(",", ".");
+    let sale_price_per_piece: number | null = null;
+    if (priceRaw !== "") {
+      const n = Number(priceRaw);
+      if (!Number.isFinite(n)) return setError("Neplatná prodejní cena.");
+      sale_price_per_piece = n;
+    }
     const payload = {
       gpn,
       name,
@@ -270,6 +288,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
       revision: formRevision.trim() || null,
       material_default: formMaterialDefault.trim() || null,
       logistic_mode: formLogisticMode,
+      sale_price_per_piece,
       is_active: formActive,
     };
     setSaving(true);
@@ -440,6 +459,18 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                     <option value="sklad">Sklad</option>
                   </select>
                 </div>
+                <div>
+                  <div style={UI.inputs.label}>Prodejní cena / ks (bez DPH)</div>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="any"
+                    value={formSalePrice}
+                    onChange={(e) => setFormSalePrice(e.target.value)}
+                    style={UI.inputs.base}
+                    placeholder="—"
+                  />
+                </div>
                 <div style={{ display: "flex", alignItems: "center", paddingTop: 20 }}>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}>
                     <input type="checkbox" checked={formActive} onChange={(e) => setFormActive(e.target.checked)} />
@@ -511,6 +542,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                       "Revize",
                       "Materiál",
                       "Logistický režim",
+                      "Prodejní cena / ks",
                       "Technologie",
                       "Akce",
                     ].map((h) => (
@@ -537,6 +569,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.revision)}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.material_default)}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{logisticLabel(item.logistic_mode)}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatCzk(item.sale_price_per_piece)}</td>
                       <td
                         style={{
                           ...UI.td,
@@ -584,7 +617,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                   ))}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={10} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={11} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Žádné výsledky.
                       </td>
                     </tr>
