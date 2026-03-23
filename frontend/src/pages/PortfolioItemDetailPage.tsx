@@ -135,6 +135,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
             revision: item.revision ?? null,
             material_default: item.material_default ?? null,
             logistic_mode: item.logistic_mode ?? null,
+            sale_price_per_piece: item.sale_price_per_piece ?? null,
           }
         : null,
     [item]
