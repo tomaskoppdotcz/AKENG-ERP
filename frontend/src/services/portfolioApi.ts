@@ -1,14 +1,67 @@
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const j = await res.json();
+    if (typeof j.detail === "string") return j.detail;
+    if (Array.isArray(j.detail)) {
+      const parts = j.detail.map((x: { msg?: string }) => x.msg).filter(Boolean);
+      if (parts.length) return parts.join("; ");
+    }
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+export type PortfolioGroup = {
+  id: number;
+  name: string;
+  code: string | null;
+  customer_id: number;
+  is_active: boolean;
+};
+
+export type PortfolioGroupCreatePayload = {
+  name: string;
+  customer_id: number;
+  code: string | null;
+  is_active: boolean;
+};
+
+export type PortfolioGroupUpdatePayload = Partial<PortfolioGroupCreatePayload>;
+
 export type PortfolioItem = {
   id: number;
   gpn: string;
   name: string;
   customer_id: number;
+  customer_name?: string | null;
   group_id: number | null;
+  group_name?: string | null;
+  portfolio_group_id?: number | null;
+  drawing_no?: string | null;
+  revision?: string | null;
+  material_default?: string | null;
+  logistic_mode?: string;
+  is_active?: boolean;
   active_template_id: number | null;
 };
+
+export type PortfolioItemCreatePayload = {
+  gpn: string;
+  name: string;
+  customer_id: number;
+  portfolio_group_id: number | null;
+  drawing_no: string | null;
+  revision: string | null;
+  material_default: string | null;
+  logistic_mode: string;
+  is_active: boolean;
+};
+
+export type PortfolioItemUpdatePayload = Partial<PortfolioItemCreatePayload>;
 
 export type PortfolioTechnologyOperation = {
   id: number;
@@ -98,35 +151,46 @@ export type CreatePortfolioTechnologyTemplateResponse = {
   created: boolean;
 };
 
-export type OperationLibraryItem = {
-  id: number;
-  code: string | null;
-  name: string;
-  description: string | null;
-  is_active: boolean;
-};
-
-export type WorkplaceLibraryItem = {
-  id: number;
-  code: string | null;
-  name: string;
-  workplace_type: string | null;
-  hourly_rate: number | null;
-  is_active: boolean;
-};
-
-export async function getOperationLibraryItems(): Promise<OperationLibraryItem[]> {
-  const res = await fetch(`${API_BASE}/libraries/operations`);
+export async function getPortfolioGroups(customerId?: number | null): Promise<PortfolioGroup[]> {
+  const url = new URL(`${API_BASE}/portfolio/groups`);
+  if (customerId != null && Number.isFinite(customerId) && customerId > 0) {
+    url.searchParams.set("customer_id", String(customerId));
+  }
+  const res = await fetch(url.toString());
   if (!res.ok) {
-    throw new Error("Nepodarilo se nacist knihovnu operaci.");
+    throw new Error("Nepodařilo se načíst skupiny portfolia.");
   }
   return res.json();
 }
 
-export async function getWorkplaceLibraryItems(): Promise<WorkplaceLibraryItem[]> {
-  const res = await fetch(`${API_BASE}/libraries/workplaces`);
+export async function createPortfolioGroup(payload: PortfolioGroupCreatePayload): Promise<PortfolioGroup> {
+  const res = await fetch(`${API_BASE}/portfolio/groups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
   if (!res.ok) {
-    throw new Error("Nepodarilo se nacist knihovnu pracovist.");
+    throw new Error(await readErrorMessage(res, "Nepodařilo se vytvořit skupinu portfolia."));
+  }
+  return res.json();
+}
+
+export async function updatePortfolioGroup(id: number, payload: PortfolioGroupUpdatePayload): Promise<PortfolioGroup> {
+  const res = await fetch(`${API_BASE}/portfolio/groups/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se upravit skupinu portfolia."));
+  }
+  return res.json();
+}
+
+export async function deletePortfolioGroup(id: number): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/portfolio/groups/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se smazat skupinu portfolia."));
   }
   return res.json();
 }
@@ -135,6 +199,50 @@ export async function getPortfolioItems(): Promise<PortfolioItem[]> {
   const res = await fetch(`${API_BASE}/portfolio/items`);
   if (!res.ok) {
     throw new Error("Nepodarilo se nacist portfolio polozky.");
+  }
+  return res.json();
+}
+
+export async function createPortfolioItem(payload: PortfolioItemCreatePayload): Promise<PortfolioItem> {
+  const res = await fetch(`${API_BASE}/portfolio/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error("Nepodarilo se vytvořit portfolio položku.");
+  }
+  return res.json();
+}
+
+export async function updatePortfolioItem(id: number, payload: PortfolioItemUpdatePayload): Promise<PortfolioItem> {
+  const res = await fetch(`${API_BASE}/portfolio/items/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error("Nepodarilo se upravit portfolio položku.");
+  }
+  return res.json();
+}
+
+export async function deletePortfolioItem(id: number): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/portfolio/items/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error("Nepodarilo se smazat portfolio položku.");
+  }
+  return res.json();
+}
+
+export async function copyPortfolioItem(id: number, payload: PortfolioItemCreatePayload): Promise<PortfolioItem> {
+  const res = await fetch(`${API_BASE}/portfolio/items/${id}/copy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se zkopírovat portfolio položku."));
   }
   return res.json();
 }

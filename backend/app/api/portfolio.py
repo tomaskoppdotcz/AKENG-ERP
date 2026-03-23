@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, selectinload
@@ -92,6 +92,70 @@ class PortfolioTechnologyMaterialUpdate(BaseModel):
     note: str | None = None
 
 
+class PortfolioItemCreatePayload(BaseModel):
+    gpn: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    customer_id: int
+    portfolio_group_id: int | None = None
+    drawing_no: str | None = None
+    revision: str | None = None
+    material_default: str | None = None
+    logistic_mode: str = "vyroba_zakaznik"
+    is_active: bool = True
+
+    @field_validator("gpn", "name")
+    @classmethod
+    def required_trimmed(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Pole je povinné.")
+        return s
+
+
+class PortfolioItemUpdatePayload(BaseModel):
+    gpn: str | None = None
+    name: str | None = None
+    customer_id: int | None = None
+    portfolio_group_id: int | None = None
+    drawing_no: str | None = None
+    revision: str | None = None
+    material_default: str | None = None
+    logistic_mode: str | None = None
+    is_active: bool | None = None
+
+
+class PortfolioGroupCreatePayload(BaseModel):
+    name: str = Field(..., min_length=1)
+    customer_id: int
+    code: str | None = None
+    is_active: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def name_trim(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Název je povinný.")
+        return s
+
+
+class PortfolioGroupUpdatePayload(BaseModel):
+    name: str | None = None
+    customer_id: int | None = None
+    code: str | None = None
+    is_active: bool | None = None
+
+
+def _portfolio_group_dict(r: PortfolioGroup) -> dict:
+    return {
+        "id": r.id,
+        "name": r.name,
+        "code": r.code,
+        "customer_id": r.customer_id,
+        "is_active": r.is_active,
+    }
+
+
 def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
     op_name = op.operation_name
     if op.operation_library_item_id is not None and op.operation_library_item is not None:
@@ -155,212 +219,307 @@ def _material_to_payload(
     }
 
 
-def seed_portfolio_demo_data(db: Session) -> None:
-    # Safe seed: only for brand-new clean portfolio tables.
-    already_seeded = db.scalar(select(PortfolioItem.id).limit(1))
-    if already_seeded is not None:
-        return
-
-    customers = db.scalars(select(Customer).order_by(Customer.id.asc()).limit(2)).all()
-    if len(customers) < 2:
-        demo_customer_specs = [
-            ("DEMO-CUST-001", "John Crane"),
-            ("DEMO-CUST-002", "EXCALIBUR ARMY spol. s r.o."),
-        ]
-        for code, name in demo_customer_specs:
-            existing = db.scalar(select(Customer).where(Customer.code == code))
-            if existing is None:
-                db.add(Customer(code=code, name=name, is_active=True))
-        db.flush()
-        customers = db.scalars(select(Customer).order_by(Customer.id.asc()).limit(2)).all()
-        if len(customers) < 2:
-            return
-
-    c1, c2 = customers[0], customers[1]
-
-    g1 = PortfolioGroup(customer_id=c1.id, name="Přesné obrábění", code="PG-OBR", is_active=True)
-    g2 = PortfolioGroup(customer_id=c2.id, name="Svařence a montáž", code="PG-SVA", is_active=True)
-    db.add_all([g1, g2])
-    db.flush()
-
-    items = [
-        PortfolioItem(
-            customer_id=c1.id,
-            portfolio_group_id=g1.id,
-            gpn="102-045-772",
-            name="Převlečná objímka (duplex)",
-            drawing_no="DWG-102045772",
-            revision="A",
-            material_default="Ocel 11 353.1",
-            logistic_mode="vyroba_zakaznik",
-            is_active=True,
-        ),
-        PortfolioItem(
-            customer_id=c1.id,
-            portfolio_group_id=g1.id,
-            gpn="107-118-504",
-            name="Distanční kroužek (ring)",
-            drawing_no="DWG-107118504",
-            revision="B",
-            material_default="Legovaná ocel",
-            logistic_mode="sklad_zakaznik",
-            is_active=True,
-        ),
-        PortfolioItem(
-            customer_id=c1.id,
-            portfolio_group_id=g1.id,
-            gpn="114-030-919",
-            name="Těleso spojky (sleeve)",
-            drawing_no="DWG-114030919",
-            revision="A",
-            material_default="Ocel 16 111",
-            logistic_mode="vyroba_zakaznik",
-            is_active=True,
-        ),
-        PortfolioItem(
-            customer_id=c2.id,
-            portfolio_group_id=g2.id,
-            gpn="121-090-281",
-            name="Spojovací pouzdro",
-            drawing_no="DWG-121090281",
-            revision="C",
-            material_default="Ocel 11 460",
-            logistic_mode="sklad",
-            is_active=True,
-        ),
-        PortfolioItem(
-            customer_id=c2.id,
-            portfolio_group_id=g2.id,
-            gpn="136-002-441",
-            name="Výztuha rámu",
-            drawing_no="DWG-136002441",
-            revision="A",
-            material_default="Ocel S355",
-            logistic_mode="vyroba_zakaznik",
-            is_active=True,
-        ),
-    ]
-    db.add_all(items)
-    db.flush()
-
-    t1 = PortfolioTechnologyTemplate(portfolio_item_id=items[0].id, name="TP - Převlečná objímka", version="A", is_active=True)
-    t2 = PortfolioTechnologyTemplate(portfolio_item_id=items[1].id, name="TP - Distanční kroužek", version="A", is_active=True)
-    t4 = PortfolioTechnologyTemplate(portfolio_item_id=items[3].id, name="TP - Spojovací pouzdro", version="B", is_active=True)
-    db.add_all([t1, t2, t4])
-    db.flush()
-
-    db.add_all(
-        [
-            PortfolioTechnologyTemplateOperation(
-                template_id=t1.id,
-                operation_no=10,
-                operation_name="Řezání polotovaru",
-                workplace="PILA-01",
-                setup_min=12,
-                run_min_per_piece=0.7,
-                control_required=False,
-                outsourcing=False,
-                note="Řez na délku + odjehlení",
-            ),
-            PortfolioTechnologyTemplateOperation(
-                template_id=t1.id,
-                operation_no=20,
-                operation_name="Soustružení",
-                workplace="CNC-SOU-03",
-                setup_min=18,
-                run_min_per_piece=2.4,
-                control_required=True,
-                outsourcing=False,
-                note=None,
-            ),
-            PortfolioTechnologyTemplateOperation(
-                template_id=t1.id,
-                operation_no=30,
-                operation_name="Zinkování",
-                workplace="KOOP-ZN",
-                setup_min=0,
-                run_min_per_piece=3.2,
-                control_required=False,
-                outsourcing=True,
-                note="Kooperace externě",
-            ),
-            PortfolioTechnologyTemplateOperation(
-                template_id=t1.id,
-                operation_no=40,
-                operation_name="Výstupní kontrola",
-                workplace="KONTROLA-01",
-                setup_min=8,
-                run_min_per_piece=0.9,
-                control_required=True,
-                outsourcing=False,
-                note=None,
-            ),
-            PortfolioTechnologyTemplateOperation(
-                template_id=t2.id,
-                operation_no=10,
-                operation_name="Broušení",
-                workplace="BRUSKA-02",
-                setup_min=10,
-                run_min_per_piece=1.6,
-                control_required=True,
-                outsourcing=False,
-                note=None,
-            ),
-            PortfolioTechnologyTemplateOperation(
-                template_id=t4.id,
-                operation_no=10,
-                operation_name="Finální kontrola",
-                workplace="KONTROLA-02",
-                setup_min=6,
-                run_min_per_piece=0.8,
-                control_required=True,
-                outsourcing=False,
-                note=None,
-            ),
-        ]
-    )
-    db.commit()
-
-
-@router.get("/items")
-def get_portfolio_items(db: Session = Depends(get_db)):
-    seed_portfolio_demo_data(db)
-    items = db.scalars(select(PortfolioItem).order_by(PortfolioItem.gpn.asc())).all()
-
-    result = []
-    for item in items:
-        active_template_id = None
-        for template in item.technology_templates:
-            if template.is_active:
-                active_template_id = template.id
-                break
-
-        result.append(
-            {
-                "id": item.id,
-                "gpn": item.gpn,
-                "name": item.name,
-                "customer_id": item.customer_id,
-                "group_id": item.portfolio_group_id,
-                "active_template_id": active_template_id,
-            }
-        )
-    return result
-
-
-@router.get("/items/{item_id}")
-def get_portfolio_item(item_id: int, db: Session = Depends(get_db)):
-    item = db.scalar(select(PortfolioItem).where(PortfolioItem.id == item_id))
-    if not item:
-        raise HTTPException(status_code=404, detail="Portfolio item not found")
-
+def _portfolio_item_payload(item: PortfolioItem) -> dict:
+    active_template_id = None
+    for template in item.technology_templates:
+        if template.is_active:
+            active_template_id = template.id
+            break
+    customer_name = item.customer.name if item.customer is not None else None
+    group_name = item.group.name if item.group is not None else None
     return {
         "id": item.id,
         "gpn": item.gpn,
         "name": item.name,
         "customer_id": item.customer_id,
+        "customer_name": customer_name,
         "group_id": item.portfolio_group_id,
+        "group_name": group_name,
+        "portfolio_group_id": item.portfolio_group_id,
+        "drawing_no": item.drawing_no,
+        "revision": item.revision,
+        "material_default": item.material_default,
+        "logistic_mode": item.logistic_mode,
+        "is_active": item.is_active,
+        "active_template_id": active_template_id,
     }
+
+
+def _load_portfolio_item_for_payload(db: Session, item_id: int) -> PortfolioItem | None:
+    return db.scalar(
+        select(PortfolioItem)
+        .where(PortfolioItem.id == item_id)
+        .options(
+            selectinload(PortfolioItem.customer),
+            selectinload(PortfolioItem.group),
+            selectinload(PortfolioItem.technology_templates),
+        )
+    )
+
+
+def _validate_portfolio_refs(db: Session, customer_id: int, portfolio_group_id: int | None) -> None:
+    customer = db.scalar(select(Customer).where(Customer.id == customer_id))
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Zákazník nebyl nalezen.")
+    if portfolio_group_id is not None:
+        grp = db.scalar(select(PortfolioGroup).where(PortfolioGroup.id == portfolio_group_id))
+        if grp is None:
+            raise HTTPException(status_code=404, detail="Portfolio skupina nebyla nalezena.")
+
+
+@router.get("/groups")
+def list_portfolio_groups(
+    customer_id: int | None = Query(
+        default=None,
+        description="Volitelně vrátí jen skupiny daného zákazníka (stejné customer_id jako u položky portfolia).",
+    ),
+    db: Session = Depends(get_db),
+):
+    stmt = select(PortfolioGroup).order_by(PortfolioGroup.name.asc())
+    if customer_id is not None:
+        stmt = stmt.where(PortfolioGroup.customer_id == customer_id)
+    rows = db.scalars(stmt).all()
+    return [_portfolio_group_dict(r) for r in rows]
+
+
+@router.post("/groups")
+def create_portfolio_group(payload: PortfolioGroupCreatePayload, db: Session = Depends(get_db)):
+    cust = db.scalar(select(Customer).where(Customer.id == payload.customer_id))
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Zákazník nebyl nalezen.")
+    code = payload.code.strip() if payload.code else None
+    row = PortfolioGroup(
+        customer_id=payload.customer_id,
+        name=payload.name.strip(),
+        code=code or None,
+        is_active=payload.is_active,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _portfolio_group_dict(row)
+
+
+@router.put("/groups/{group_id}")
+def update_portfolio_group(group_id: int, payload: PortfolioGroupUpdatePayload, db: Session = Depends(get_db)):
+    row = db.scalar(select(PortfolioGroup).where(PortfolioGroup.id == group_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skupina portfolia nebyla nalezena.")
+    data = payload.model_dump(exclude_unset=True)
+    if "customer_id" in data and data["customer_id"] is not None:
+        cust = db.scalar(select(Customer).where(Customer.id == data["customer_id"]))
+        if cust is None:
+            raise HTTPException(status_code=404, detail="Zákazník nebyl nalezen.")
+        row.customer_id = data["customer_id"]
+    if "name" in data and data["name"] is not None:
+        nm = str(data["name"]).strip()
+        if not nm:
+            raise HTTPException(status_code=422, detail="Název nesmí být prázdný.")
+        row.name = nm
+    if "code" in data:
+        row.code = data["code"].strip() if data["code"] else None
+    if "is_active" in data and data["is_active"] is not None:
+        row.is_active = bool(data["is_active"])
+    db.commit()
+    db.refresh(row)
+    return _portfolio_group_dict(row)
+
+
+@router.delete("/groups/{group_id}")
+def delete_portfolio_group(group_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(select(PortfolioGroup).where(PortfolioGroup.id == group_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skupina portfolia nebyla nalezena.")
+    n_refs = db.scalar(select(func.count()).select_from(PortfolioItem).where(PortfolioItem.portfolio_group_id == group_id)) or 0
+    if n_refs > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Skupinu nelze smazat — jsou k ní přiřazené portfolio položky.",
+        )
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.get("/items")
+def get_portfolio_items(db: Session = Depends(get_db)):
+    items = db.scalars(
+        select(PortfolioItem)
+        .options(
+            selectinload(PortfolioItem.customer),
+            selectinload(PortfolioItem.group),
+            selectinload(PortfolioItem.technology_templates),
+        )
+        .order_by(PortfolioItem.gpn.asc())
+    ).all()
+    return [_portfolio_item_payload(item) for item in items]
+
+
+@router.post("/items")
+def create_portfolio_item(payload: PortfolioItemCreatePayload, db: Session = Depends(get_db)):
+    _validate_portfolio_refs(db, payload.customer_id, payload.portfolio_group_id)
+    row = PortfolioItem(
+        gpn=payload.gpn,
+        name=payload.name,
+        customer_id=payload.customer_id,
+        portfolio_group_id=payload.portfolio_group_id,
+        drawing_no=payload.drawing_no.strip() if payload.drawing_no else None,
+        revision=payload.revision.strip() if payload.revision else None,
+        material_default=payload.material_default.strip() if payload.material_default else None,
+        logistic_mode=(payload.logistic_mode or "vyroba_zakaznik").strip() or "vyroba_zakaznik",
+        is_active=payload.is_active,
+    )
+    db.add(row)
+    db.commit()
+    loaded = _load_portfolio_item_for_payload(db, row.id)
+    if loaded is None:
+        raise HTTPException(status_code=500, detail="Nepodařilo se načíst vytvořenou položku.")
+    return _portfolio_item_payload(loaded)
+
+
+@router.post("/items/{item_id}/copy")
+def copy_portfolio_item(item_id: int, payload: PortfolioItemCreatePayload, db: Session = Depends(get_db)):
+    src = db.scalar(
+        select(PortfolioItem)
+        .where(PortfolioItem.id == item_id)
+        .options(
+            selectinload(PortfolioItem.technology_templates).selectinload(PortfolioTechnologyTemplate.operations),
+            selectinload(PortfolioItem.technology_templates).selectinload(PortfolioTechnologyTemplate.materials),
+        )
+    )
+    if src is None:
+        raise HTTPException(status_code=404, detail="Portfolio item not found")
+
+    gpn = payload.gpn.strip()
+    dup = db.scalar(select(PortfolioItem.id).where(PortfolioItem.gpn == gpn))
+    if dup is not None:
+        raise HTTPException(status_code=400, detail="Položka s tímto GPN již existuje.")
+
+    _validate_portfolio_refs(db, payload.customer_id, payload.portfolio_group_id)
+
+    new_item = PortfolioItem(
+        gpn=payload.gpn,
+        name=payload.name,
+        customer_id=payload.customer_id,
+        portfolio_group_id=payload.portfolio_group_id,
+        drawing_no=payload.drawing_no.strip() if payload.drawing_no else None,
+        revision=payload.revision.strip() if payload.revision else None,
+        material_default=payload.material_default.strip() if payload.material_default else None,
+        logistic_mode=(payload.logistic_mode or "vyroba_zakaznik").strip() or "vyroba_zakaznik",
+        is_active=payload.is_active,
+    )
+    db.add(new_item)
+    db.flush()
+
+    templates = sorted(src.technology_templates, key=lambda t: t.id)
+    for tmpl in templates:
+        new_tmpl = PortfolioTechnologyTemplate(
+            portfolio_item_id=new_item.id,
+            name=tmpl.name,
+            version=tmpl.version,
+            is_active=tmpl.is_active,
+        )
+        db.add(new_tmpl)
+        db.flush()
+        for op in sorted(tmpl.operations, key=lambda o: (o.operation_no, o.id)):
+            db.add(
+                PortfolioTechnologyTemplateOperation(
+                    template_id=new_tmpl.id,
+                    operation_no=op.operation_no,
+                    operation_name=op.operation_name,
+                    workplace=op.workplace,
+                    operation_library_item_id=op.operation_library_item_id,
+                    workplace_library_item_id=op.workplace_library_item_id,
+                    setup_min=op.setup_min,
+                    run_min_per_piece=op.run_min_per_piece,
+                    control_required=op.control_required,
+                    outsourcing=op.outsourcing,
+                    note=op.note,
+                )
+            )
+        for mat in tmpl.materials:
+            db.add(
+                PortfolioTechnologyTemplateMaterial(
+                    template_id=new_tmpl.id,
+                    material_library_item_id=mat.material_library_item_id,
+                    consumption_per_piece=mat.consumption_per_piece,
+                    consumption_unit=mat.consumption_unit,
+                    scrap_allowance=mat.scrap_allowance,
+                    note=mat.note,
+                )
+            )
+
+    db.commit()
+    loaded = _load_portfolio_item_for_payload(db, new_item.id)
+    if loaded is None:
+        raise HTTPException(status_code=500, detail="Nepodařilo se načíst zkopírovanou položku.")
+    return _portfolio_item_payload(loaded)
+
+
+@router.get("/items/{item_id}")
+def get_portfolio_item(item_id: int, db: Session = Depends(get_db)):
+    item = _load_portfolio_item_for_payload(db, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Portfolio item not found")
+
+    return {
+        **_portfolio_item_payload(item),
+    }
+
+
+@router.put("/items/{item_id}")
+def update_portfolio_item(item_id: int, payload: PortfolioItemUpdatePayload, db: Session = Depends(get_db)):
+    row = db.scalar(select(PortfolioItem).where(PortfolioItem.id == item_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Portfolio item not found")
+
+    data = payload.model_dump(exclude_unset=True)
+    if "customer_id" in data and data["customer_id"] is not None:
+        _validate_portfolio_refs(db, data["customer_id"], data.get("portfolio_group_id", row.portfolio_group_id))
+    elif "portfolio_group_id" in data:
+        _validate_portfolio_refs(db, row.customer_id, data["portfolio_group_id"])
+
+    if "gpn" in data and data["gpn"] is not None:
+        gpn = str(data["gpn"]).strip()
+        if not gpn:
+            raise HTTPException(status_code=422, detail="gpn je povinné pole")
+        row.gpn = gpn
+    if "name" in data and data["name"] is not None:
+        name = str(data["name"]).strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name je povinné pole")
+        row.name = name
+    if "customer_id" in data and data["customer_id"] is not None:
+        row.customer_id = data["customer_id"]
+    if "portfolio_group_id" in data:
+        row.portfolio_group_id = data["portfolio_group_id"]
+    if "drawing_no" in data:
+        row.drawing_no = data["drawing_no"].strip() if data["drawing_no"] else None
+    if "revision" in data:
+        row.revision = data["revision"].strip() if data["revision"] else None
+    if "material_default" in data:
+        row.material_default = data["material_default"].strip() if data["material_default"] else None
+    if "logistic_mode" in data and data["logistic_mode"] is not None:
+        mode = str(data["logistic_mode"]).strip()
+        row.logistic_mode = mode or row.logistic_mode
+    if "is_active" in data and data["is_active"] is not None:
+        row.is_active = bool(data["is_active"])
+
+    db.commit()
+    loaded = _load_portfolio_item_for_payload(db, row.id)
+    if loaded is None:
+        raise HTTPException(status_code=500, detail="Nepodařilo se načíst upravenou položku.")
+    return _portfolio_item_payload(loaded)
+
+
+@router.delete("/items/{item_id}")
+def delete_portfolio_item(item_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(select(PortfolioItem).where(PortfolioItem.id == item_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Portfolio item not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.get("/items/{item_id}/technology")

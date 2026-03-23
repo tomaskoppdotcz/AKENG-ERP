@@ -44,7 +44,10 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
   const [query, setQuery] = useState("");
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
+  /** Režim úpravy existující položky (null = nová položka nebo kopie). */
   const [editingId, setEditingId] = useState<number | null>(null);
+  /** Zdroj pro kopírování (POST …/copy); vzájemně se vylučuje s editingId. */
+  const [copySourceId, setCopySourceId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [formGpn, setFormGpn] = useState("");
   const [formName, setFormName] = useState("");
@@ -57,13 +60,6 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
   const [formMaterialDefault, setFormMaterialDefault] = useState("");
   const [formLogisticMode, setFormLogisticMode] = useState("vyroba_zakaznik");
   const [formActive, setFormActive] = useState(true);
-  const [copyingFromId, setCopyingFromId] = useState<number | null>(null);
-  const [copyGpn, setCopyGpn] = useState("");
-  const [copyName, setCopyName] = useState("");
-  const [copyDrawing, setCopyDrawing] = useState("");
-  const [copyRevision, setCopyRevision] = useState("");
-  const [copySaving, setCopySaving] = useState(false);
-
   const customerRows = Array.isArray(customers) ? customers : [];
 
   async function loadItems() {
@@ -198,6 +194,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
   );
   function openCreateForm() {
     setEditingId(null);
+    setCopySourceId(null);
     setFormGpn("");
     setFormName("");
     const firstMaster = customerRows.find((c) => c.is_active) ?? customerRows[0];
@@ -219,6 +216,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
 
   function openEditForm(item: PortfolioItem) {
     setEditingId(item.id);
+    setCopySourceId(null);
     setFormGpn(item.gpn);
     setFormName(item.name);
     setFormCustomerId(String(item.customer_id));
@@ -234,6 +232,24 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
   function closeForm() {
     setShowForm(false);
     setEditingId(null);
+    setCopySourceId(null);
+  }
+
+  function openCopyForm(item: PortfolioItem) {
+    setEditingId(null);
+    setCopySourceId(item.id);
+    const base = (item.gpn ?? "").trim();
+    setFormGpn(base ? `${base}-KOP` : "");
+    setFormName(item.name);
+    setFormCustomerId(String(item.customer_id));
+    setFormPortfolioGroupId(item.portfolio_group_id ?? item.group_id ?? null);
+    setFormDrawingNo(item.drawing_no ?? "");
+    setFormRevision(item.revision ?? "");
+    setFormMaterialDefault(item.material_default ?? "");
+    setFormLogisticMode(item.logistic_mode ?? "vyroba_zakaznik");
+    setFormActive(item.is_active ?? true);
+    setError(null);
+    setShowForm(true);
   }
 
   async function handleSave() {
@@ -259,7 +275,9 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
     setSaving(true);
     setError(null);
     try {
-      if (editingId == null) {
+      if (copySourceId != null) {
+        await copyPortfolioItem(copySourceId, payload);
+      } else if (editingId == null) {
         await createPortfolioItem(payload);
       } else {
         await updatePortfolioItem(editingId, payload);
@@ -279,52 +297,9 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
     try {
       await deletePortfolioItem(id);
       await loadItems();
-      if (editingId === id) closeForm();
-      if (copyingFromId === id) closeCopyForm();
+      if (editingId === id || copySourceId === id) closeForm();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Smazání se nezdařilo.");
-    }
-  }
-
-  function openCopyForm(item: PortfolioItem) {
-    setCopyingFromId(item.id);
-    setCopyGpn("");
-    setCopyName(item.name);
-    setCopyDrawing(item.drawing_no ?? "");
-    setCopyRevision(item.revision ?? "");
-    setError(null);
-  }
-
-  function closeCopyForm() {
-    setCopyingFromId(null);
-    setCopyGpn("");
-    setCopyName("");
-    setCopyDrawing("");
-    setCopyRevision("");
-  }
-
-  async function handleCopySave() {
-    if (copyingFromId == null) return;
-    const gpn = copyGpn.trim();
-    if (!gpn) {
-      setError("Vyplňte nové GPN.");
-      return;
-    }
-    setCopySaving(true);
-    setError(null);
-    try {
-      await copyPortfolioItem(copyingFromId, {
-        gpn,
-        name: copyName.trim() || undefined,
-        drawing_no: copyDrawing.trim() || undefined,
-        revision: copyRevision.trim() || undefined,
-      });
-      await loadItems();
-      closeCopyForm();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Kopírování se nezdařilo.");
-    } finally {
-      setCopySaving(false);
     }
   }
 
@@ -365,9 +340,18 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
         <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
           {showForm ? (
             <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-              <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>
-                {editingId == null ? "Nová portfolio položka" : "Upravit portfolio položku"}
+              <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: copySourceId != null ? 6 : 10 }}>
+                {copySourceId != null
+                  ? "Kopie portfolio položky"
+                  : editingId == null
+                    ? "Nová portfolio položka"
+                    : "Upravit portfolio položku"}
               </div>
+              {copySourceId != null ? (
+                <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10, fontWeight: 600 }}>
+                  Zdroj: {items.find((i) => i.id === copySourceId)?.gpn ?? `#${copySourceId}`}
+                </div>
+              ) : null}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
                 <div>
                   <div style={UI.inputs.label}>GPN</div>
@@ -470,49 +454,15 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                   onClick={handleSave}
                   disabled={saving}
                 >
-                  {saving ? "Ukládám..." : editingId == null ? "Uložit položku" : "Uložit změny"}
+                  {saving
+                    ? "Ukládám..."
+                    : copySourceId != null
+                      ? "Uložit kopii"
+                      : editingId == null
+                        ? "Uložit položku"
+                        : "Uložit změny"}
                 </button>
                 <button type="button" style={UI.buttons.secondary} onClick={closeForm} disabled={saving}>
-                  Zrušit
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {copyingFromId != null ? (
-            <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
-              <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Kopírovat portfolio položku</div>
-              <div style={{ fontSize: 13, color: "#166534", marginBottom: 10, fontWeight: 600 }}>
-                Zdroj: {items.find((i) => i.id === copyingFromId)?.gpn ?? copyingFromId}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-                <div>
-                  <div style={UI.inputs.label}>Nové GPN</div>
-                  <input value={copyGpn} onChange={(e) => setCopyGpn(e.target.value)} style={UI.inputs.base} />
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Nový název (volitelné)</div>
-                  <input value={copyName} onChange={(e) => setCopyName(e.target.value)} style={UI.inputs.base} />
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Nový výkres (volitelné)</div>
-                  <input value={copyDrawing} onChange={(e) => setCopyDrawing(e.target.value)} style={UI.inputs.base} />
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Nová revize (volitelné)</div>
-                  <input value={copyRevision} onChange={(e) => setCopyRevision(e.target.value)} style={UI.inputs.base} />
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <button
-                  type="button"
-                  style={{ ...UI.buttons.primary, ...(copySaving ? { opacity: 0.7, cursor: "wait" } : {}) }}
-                  onClick={handleCopySave}
-                  disabled={copySaving}
-                >
-                  {copySaving ? "Kopíruji…" : "Vytvořit kopii"}
-                </button>
-                <button type="button" style={UI.buttons.secondary} onClick={closeCopyForm} disabled={copySaving}>
                   Zrušit
                 </button>
               </div>
