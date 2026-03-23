@@ -8,13 +8,27 @@ export type MaterialLibraryItem = {
   id: number;
   code: string;
   name: string;
-  material_type: string;
+  /** Legacy pole z API; stránka knihovny ho nepoužívá. */
+  material_type?: string;
   form: string;
   dimension: string;
   unit: string;
   density: number | null;
   price_per_kg: number | null;
   price_per_unit: number | null;
+  material_group_id: number | null;
+  material_group_name: string | null;
+  is_active: boolean;
+  /** Pouze výpočet u „Tyč kruhová“ + rozměr + hustota (GET/POST/PUT). */
+  kg_per_mm: number | null;
+  /** Pouze výpočet u „Tyč kruhová“ + cena/kg (GET/POST/PUT). */
+  price_per_mm: number | null;
+};
+
+export type MaterialGroup = {
+  id: number;
+  code: string | null;
+  name: string;
   is_active: boolean;
 };
 
@@ -28,6 +42,7 @@ export type MaterialLibraryPayload = {
   density?: number | null;
   price_per_kg?: number | null;
   price_per_unit?: number | null;
+  material_group_id?: number | null;
   is_active?: boolean;
 };
 
@@ -49,6 +64,14 @@ export async function getMaterialLibraryItems(): Promise<MaterialLibraryItem[]> 
   const res = await fetch(MATERIALS_BASE);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst materiály."));
+  }
+  return res.json();
+}
+
+export async function getMaterialGroups(): Promise<MaterialGroup[]> {
+  const res = await fetch(`${MATERIALS_BASE}groups`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se načíst skupiny materiálů."));
   }
   return res.json();
 }

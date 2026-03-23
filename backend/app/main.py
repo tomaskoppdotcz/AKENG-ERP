@@ -21,7 +21,12 @@ from app.api.kiosk import router as kiosk_router
 from app.api.import_orders import router as import_orders_router
 from app.api.dev_tools import dev_tools_router
 from app.api.generate_operations import router as generate_operations_router
-from app.api.material_library import router as material_library_router
+from app.api.material_library import (
+    ensure_material_library_sqlite_schema,
+    normalize_nerez_material_groups,
+    router as material_library_router,
+    seed_material_groups,
+)
 from app.api.material_stock import router as material_stock_router
 from app.api.portfolio import ensure_portfolio_technology_operation_library_fks, router as portfolio_router
 from app.api.portfolio import seed_portfolio_demo_data
@@ -37,7 +42,7 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplateOperation,
 )
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
-from app.models.material_library import MaterialLibraryItem
+from app.models.material_library import MaterialGroup, MaterialLibraryItem
 from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
 
 
@@ -56,9 +61,12 @@ app.add_middleware(
 def startup():
     Base.metadata.create_all(bind=engine)
     ensure_master_libraries_sqlite_schema(engine)
+    ensure_material_library_sqlite_schema(engine)
     ensure_portfolio_technology_operation_library_fks(engine)
     db = SessionLocal()
     try:
+        seed_material_groups(db)
+        normalize_nerez_material_groups(db)
         seed_portfolio_demo_data(db)
     finally:
         db.close()
