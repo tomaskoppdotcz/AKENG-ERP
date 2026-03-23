@@ -3,7 +3,9 @@ import { UI } from "../styles/ui";
 import { getMaterialGroups, getMaterialLibraryItems, type MaterialGroup, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import {
   createMaterialStockItem,
+  deleteMaterialStockItem,
   getMaterialStockItems,
+  updateMaterialStockItem,
   type MaterialStockItem,
 } from "../services/materialStockApi";
 
@@ -30,13 +32,14 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<number | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [materialLibraryItemId, setMaterialLibraryItemId] = useState<number | null>(null);
   const [location, setLocation] = useState("");
   const [currentQty, setCurrentQty] = useState("0");
   const [minQty, setMinQty] = useState("");
-  const [unit, setUnit] = useState("");
+  const [unit, setUnit] = useState("mm");
   const [note, setNote] = useState("");
   const [isActive, setIsActive] = useState(true);
 
@@ -82,11 +85,12 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
   }
 
   function resetForm() {
+    setEditingId(null);
     setMaterialLibraryItemId(null);
     setLocation("");
     setCurrentQty("0");
     setMinQty("");
-    setUnit("");
+    setUnit("mm");
     setNote("");
     setIsActive(true);
     setFormError(null);
@@ -112,21 +116,58 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
     setSaving(true);
     setFormError(null);
     try {
-      await createMaterialStockItem({
+      const payload = {
         material_library_item_id: materialLibraryItemId,
         location: location.trim() || null,
         current_qty: parsedCurrent,
         min_qty: parsedMin,
-        unit: unit.trim() || null,
+        unit: (unit.trim() || "mm"),
         note: note.trim() || null,
         is_active: isActive,
-      });
+      };
+      if (editingId == null) {
+        await createMaterialStockItem(payload);
+      } else {
+        await updateMaterialStockItem(editingId, {
+          location: payload.location,
+          current_qty: payload.current_qty,
+          min_qty: payload.min_qty,
+          unit: payload.unit,
+          note: payload.note,
+          is_active: payload.is_active,
+        });
+      }
       await loadData();
       resetForm();
     } catch (e: unknown) {
       setFormError(e instanceof Error ? e.message : "Nepodařilo se vytvořit skladovou kartu.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function openEdit(row: MaterialStockRow) {
+    setEditingId(row.id);
+    setMaterialLibraryItemId(row.material_library_item_id);
+    setLocation(row.location ?? "");
+    setCurrentQty(String(row.current_qty));
+    setMinQty(row.min_qty == null ? "" : String(row.min_qty));
+    setUnit(row.unit ?? "mm");
+    setNote(row.note ?? "");
+    setIsActive(row.is_active);
+    setFormError(null);
+    setShowCreateForm(true);
+  }
+
+  async function handleDelete(row: MaterialStockRow) {
+    if (!window.confirm("Opravdu chcete smazat tuto skladovou kartu?")) return;
+    setError(null);
+    try {
+      await deleteMaterialStockItem(row.id);
+      await loadData();
+      if (editingId === row.id) resetForm();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Nepodařilo se smazat skladovou kartu.");
     }
   }
 
@@ -156,7 +197,17 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
             <div style={UI.sectionSubtitle}>Přehled stavu materiálu</div>
           </div>
           <div style={UI.pageHeaderActions}>
-            <button type="button" style={UI.buttons.primary} onClick={() => setShowCreateForm((v) => !v)}>
+            <button
+              type="button"
+              style={UI.buttons.primary}
+              onClick={() => {
+                if (showCreateForm) {
+                  resetForm();
+                } else {
+                  setShowCreateForm(true);
+                }
+              }}
+            >
               Nová skladová karta
             </button>
           </div>
@@ -210,6 +261,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                     value={materialLibraryItemId == null ? "" : String(materialLibraryItemId)}
                     onChange={(e) => setMaterialLibraryItemId(e.target.value ? Number(e.target.value) : null)}
                     style={UI.inputs.base}
+                    disabled={editingId != null}
                   >
                     <option value="">Vyberte materiál</option>
                     {libraryItems.map((m) => (
@@ -224,11 +276,11 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                   <input value={location} onChange={(e) => setLocation(e.target.value)} style={UI.inputs.base} />
                 </div>
                 <div>
-                  <div style={UI.inputs.label}>Stav</div>
+                  <div style={UI.inputs.label}>Aktuální stav (mm)</div>
                   <input value={currentQty} onChange={(e) => setCurrentQty(e.target.value)} style={UI.inputs.base} />
                 </div>
                 <div>
-                  <div style={UI.inputs.label}>Min. zásoba</div>
+                  <div style={UI.inputs.label}>Min. zásoba (mm)</div>
                   <input value={minQty} onChange={(e) => setMinQty(e.target.value)} style={UI.inputs.base} />
                 </div>
                 <div>
@@ -256,7 +308,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                   onClick={handleCreate}
                   disabled={saving}
                 >
-                  {saving ? "Ukládám..." : "Uložit skladovou kartu"}
+                  {saving ? "Ukládám..." : editingId == null ? "Uložit skladovou kartu" : "Uložit změny"}
                 </button>
               </div>
             </div>
@@ -267,7 +319,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["Materiál", "Skupina", "Forma", "Kód", "Rozměr", "Lokace", "Stav", "Min. zásoba"].map((h) => (
+                    {["Materiál", "Skupina", "Forma", "Kód", "Rozměr", "Lokace", "Stav (mm)", "Min. zásoba (mm)", "Akce"].map((h) => (
                       <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                         {h}
                       </th>
@@ -290,16 +342,38 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_dimension || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.location || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {row.current_qty} {row.unit || ""}
+                        {row.current_qty} mm
                       </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {row.min_qty == null ? "—" : `${row.min_qty} ${row.unit || ""}`}
+                        {row.min_qty == null ? "—" : `${row.min_qty} mm`}
+                      </td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6 }}>
+                        <button
+                          type="button"
+                          style={UI.buttons.secondary}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEdit(row);
+                          }}
+                        >
+                          Upravit
+                        </button>
+                        <button
+                          type="button"
+                          style={UI.buttons.secondary}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(row);
+                          }}
+                        >
+                          Smazat
+                        </button>
                       </td>
                     </tr>
                   ))}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={8} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={9} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Žádné výsledky.
                       </td>
                     </tr>

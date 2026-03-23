@@ -39,8 +39,7 @@ def _stock_item_payload(row: MaterialStockItem) -> dict:
 
 
 def _stock_item_list_payload(row: MaterialStockItem, reserved_qty: float = 0.0) -> dict:
-    d = _stock_item_payload(row)
-    out = {k: v for k, v in d.items() if k != "note"}
+    out = _stock_item_payload(row)
     r = float(reserved_qty)
     out["reserved_qty"] = r
     out["available_qty"] = row.current_qty - r
@@ -90,6 +89,14 @@ def _normalize_location(value: str | None) -> str | None:
     return normalized or None
 
 
+def _movement_delta(movement_type: str, qty: float) -> float:
+    if movement_type == "prijem":
+        return qty
+    if movement_type == "vydej":
+        return -qty
+    return qty
+
+
 class StockItemCreate(BaseModel):
     material_library_item_id: int
     location: str | None = None
@@ -110,6 +117,14 @@ class StockItemUpdate(BaseModel):
 
 
 class MovementCreate(BaseModel):
+    movement_type: str = Field(..., min_length=1)
+    qty: float
+    movement_date: datetime
+    reference: str | None = None
+    note: str | None = None
+
+
+class MovementUpdate(BaseModel):
     movement_type: str = Field(..., min_length=1)
     qty: float
     movement_date: datetime
@@ -300,12 +315,7 @@ def create_movement(item_id: int, payload: MovementCreate, db: Session = Depends
     if payload.qty <= 0:
         raise HTTPException(status_code=422, detail="qty must be greater than 0")
 
-    if mtype == "prijem":
-        delta = payload.qty
-    elif mtype == "vydej":
-        delta = -payload.qty
-    else:
-        delta = payload.qty
+    delta = _movement_delta(mtype, payload.qty)
 
     movement = MaterialStockMovement(
         stock_item_id=item_id,
@@ -320,3 +330,49 @@ def create_movement(item_id: int, payload: MovementCreate, db: Session = Depends
     db.commit()
     db.refresh(movement)
     return _movement_payload(movement)
+
+
+@router.put("/movements/{movement_id}")
+def update_movement(movement_id: int, payload: MovementUpdate, db: Session = Depends(get_db)):
+    movement = db.scalar(select(MaterialStockMovement).where(MaterialStockMovement.id == movement_id))
+    if not movement:
+        raise HTTPException(status_code=404, detail="Movement not found")
+    stock = db.scalar(select(MaterialStockItem).where(MaterialStockItem.id == movement.stock_item_id))
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock item not found")
+
+    mtype = payload.movement_type.strip().lower()
+    if mtype not in ALLOWED_MOVEMENT_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="movement_type must be one of: prijem, vydej, korekce",
+        )
+    if payload.qty <= 0:
+        raise HTTPException(status_code=422, detail="qty must be greater than 0")
+
+    old_delta = _movement_delta(movement.movement_type, movement.qty)
+    new_delta = _movement_delta(mtype, payload.qty)
+    stock.current_qty = stock.current_qty - old_delta + new_delta
+
+    movement.movement_type = mtype
+    movement.qty = payload.qty
+    movement.movement_date = payload.movement_date
+    movement.reference = payload.reference
+    movement.note = payload.note
+    db.commit()
+    db.refresh(movement)
+    return _movement_payload(movement)
+
+
+@router.delete("/movements/{movement_id}")
+def delete_movement(movement_id: int, db: Session = Depends(get_db)):
+    movement = db.scalar(select(MaterialStockMovement).where(MaterialStockMovement.id == movement_id))
+    if not movement:
+        raise HTTPException(status_code=404, detail="Movement not found")
+    stock = db.scalar(select(MaterialStockItem).where(MaterialStockItem.id == movement.stock_item_id))
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock item not found")
+    stock.current_qty = stock.current_qty - _movement_delta(movement.movement_type, movement.qty)
+    db.delete(movement)
+    db.commit()
+    return {"status": "ok"}

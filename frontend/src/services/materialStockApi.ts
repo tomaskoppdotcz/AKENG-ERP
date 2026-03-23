@@ -13,6 +13,7 @@ export type MaterialStockItem = {
   current_qty: number;
   min_qty: number | null;
   unit: string | null;
+  note: string | null;
   is_active: boolean;
   reserved_qty: number;
   available_qty: number;
@@ -34,6 +35,8 @@ export type MaterialStockMovementCreatePayload = {
   reference: string | null;
   note: string | null;
 };
+
+export type MaterialStockMovementUpdatePayload = MaterialStockMovementCreatePayload;
 
 export type MaterialStockReservation = {
   id: number;
@@ -62,6 +65,15 @@ export type MaterialStockItemCreatePayload = {
   is_active: boolean;
 };
 
+export type MaterialStockItemUpdatePayload = {
+  location?: string | null;
+  current_qty?: number;
+  min_qty?: number | null;
+  unit?: string | null;
+  note?: string | null;
+  is_active?: boolean;
+};
+
 export async function getMaterialStockItems(): Promise<MaterialStockItem[]> {
   const res = await fetch(`${API_BASE}/material-stock/items`);
   if (!res.ok) throw new Error("Nepodařilo se načíst sklad materiálu.");
@@ -86,6 +98,25 @@ export async function createMaterialStockItem(
     }
     throw new Error(detail);
   }
+  return res.json();
+}
+
+export async function updateMaterialStockItem(
+  id: number,
+  payload: MaterialStockItemUpdatePayload
+): Promise<MaterialStockItem> {
+  const res = await fetch(`${API_BASE}/material-stock/items/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error("Nepodařilo se upravit skladovou kartu.");
+  return res.json();
+}
+
+export async function deleteMaterialStockItem(id: number): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/material-stock/items/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Nepodařilo se smazat skladovou kartu.");
   return res.json();
 }
 
@@ -147,5 +178,24 @@ export async function createMaterialStockMovement(
     }
     throw new Error(detail);
   }
+  return res.json();
+}
+
+export async function updateMaterialStockMovement(
+  movementId: number,
+  payload: MaterialStockMovementUpdatePayload
+): Promise<MaterialStockMovement> {
+  const res = await fetch(`${API_BASE}/material-stock/movements/${movementId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error("Nepodařilo se upravit pohyb.");
+  return res.json();
+}
+
+export async function deleteMaterialStockMovement(movementId: number): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/material-stock/movements/${movementId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Nepodařilo se smazat pohyb.");
   return res.json();
 }

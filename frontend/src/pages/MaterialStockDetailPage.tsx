@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useState } from "react";
 import { UI } from "../styles/ui";
 import {
   createMaterialStockMovement,
+  deleteMaterialStockMovement,
   getMaterialStockItems,
   getMaterialStockMovements,
+  updateMaterialStockMovement,
   type MaterialStockItem,
   type MaterialStockMovement,
 } from "../services/materialStockApi";
@@ -33,6 +35,7 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [editingMovementId, setEditingMovementId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [movementType, setMovementType] = useState<"prijem" | "vydej" | "korekce">("prijem");
@@ -78,23 +81,56 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
     setSaving(true);
     setError(null);
     try {
-      await createMaterialStockMovement(item.id, {
+      const payload = {
         movement_type: movementType,
         qty: parsedQty,
         movement_date: new Date(movementDate).toISOString(),
         reference: reference.trim() || null,
         note: note.trim() || null,
-      });
+      };
+      if (editingMovementId == null) {
+        await createMaterialStockMovement(item.id, payload);
+      } else {
+        await updateMaterialStockMovement(editingMovementId, payload);
+      }
       setQty("");
       setMovementDate(nowLocalDateTimeValue());
       setReference("");
       setNote("");
+      setEditingMovementId(null);
       setShowForm(false);
       await loadData();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Nepodařilo se uložit pohyb.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function openEditMovement(row: MaterialStockMovement) {
+    const d = new Date(row.movement_date);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const localValue = Number.isNaN(d.getTime())
+      ? nowLocalDateTimeValue()
+      : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    setEditingMovementId(row.id);
+    setMovementType(row.movement_type);
+    setQty(String(row.qty));
+    setMovementDate(localValue);
+    setReference(row.reference ?? "");
+    setNote(row.note ?? "");
+    setShowForm(true);
+    setError(null);
+  }
+
+  async function handleDeleteMovement(row: MaterialStockMovement) {
+    if (!window.confirm("Opravdu chcete smazat tento pohyb?")) return;
+    setError(null);
+    try {
+      await deleteMaterialStockMovement(row.id);
+      await loadData();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Nepodařilo se smazat pohyb.");
     }
   }
 
@@ -120,13 +156,13 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
             <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
               <div style={UI.summaryTileLabel}>Aktuální stav</div>
               <div style={UI.summaryTileValue}>
-                {stockItem.current_qty} {stockItem.unit || ""}
+                {stockItem.current_qty} mm
               </div>
             </div>
             <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
               <div style={UI.summaryTileLabel}>Min. zásoba</div>
               <div style={UI.summaryTileValue}>
-                {stockItem.min_qty ?? "—"} {stockItem.unit || ""}
+                {stockItem.min_qty ?? "—"} mm
               </div>
             </div>
           </div>
@@ -136,7 +172,19 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>Pohyby materiálu</div>
             {!showForm ? (
-              <button type="button" style={UI.buttons.primary} onClick={() => setShowForm(true)}>
+              <button
+                type="button"
+                style={UI.buttons.primary}
+                onClick={() => {
+                  setEditingMovementId(null);
+                  setMovementType("prijem");
+                  setQty("");
+                  setMovementDate(nowLocalDateTimeValue());
+                  setReference("");
+                  setNote("");
+                  setShowForm(true);
+                }}
+              >
                 Přidat pohyb
               </button>
             ) : null}
@@ -158,7 +206,7 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
                   </select>
                 </div>
                 <div>
-                  <div style={UI.inputs.label}>Množství</div>
+                  <div style={UI.inputs.label}>Množství (mm)</div>
                   <input value={qty} onChange={(e) => setQty(e.target.value)} style={UI.inputs.base} />
                 </div>
                 <div>
@@ -180,7 +228,15 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
                 </div>
               </div>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-                <button type="button" style={UI.buttons.secondary} onClick={() => setShowForm(false)} disabled={saving}>
+                <button
+                  type="button"
+                  style={UI.buttons.secondary}
+                  onClick={() => {
+                    setShowForm(false);
+                    setEditingMovementId(null);
+                  }}
+                  disabled={saving}
+                >
                   Zrušit
                 </button>
                 <button
@@ -189,7 +245,7 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
                   onClick={handleSaveMovement}
                   disabled={saving}
                 >
-                  {saving ? "Ukládám..." : "Uložit pohyb"}
+                  {saving ? "Ukládám..." : editingMovementId == null ? "Uložit pohyb" : "Uložit změny pohybu"}
                 </button>
               </div>
             </div>
@@ -203,7 +259,7 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["Typ pohybu", "Množství", "Datum", "Reference", "Poznámka"].map((h) => (
+                    {["Typ pohybu", "Množství (mm)", "Datum", "Reference", "Poznámka", "Akce"].map((h) => (
                       <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                         {h}
                       </th>
@@ -214,15 +270,23 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
                   {rows.map((row) => (
                     <tr key={row.id}>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{row.movement_type}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.qty}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.qty} mm</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatDate(row.movement_date)}</td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.reference || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.note || "—"}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6 }}>
+                        <button type="button" style={UI.buttons.secondary} onClick={() => openEditMovement(row)}>
+                          Upravit
+                        </button>
+                        <button type="button" style={UI.buttons.secondary} onClick={() => handleDeleteMovement(row)}>
+                          Smazat
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={5} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={6} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Zatím nejsou evidovány žádné pohyby.
                       </td>
                     </tr>
