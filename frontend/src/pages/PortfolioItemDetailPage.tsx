@@ -429,6 +429,12 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     return parts.join(" | ");
   }
 
+  function stockStatusLabel(status: "neni_skladova_karta" | "pod_minimem" | "skladem"): string {
+    if (status === "neni_skladova_karta") return "Není skladová karta";
+    if (status === "pod_minimem") return "Pod minimem";
+    return "Skladem";
+  }
+
   function startEditMaterial(row: PortfolioTechnologyMaterial) {
     setIsMaterialEditMode(true);
     setEditingMaterialId(row.id);
@@ -874,7 +880,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                 <table style={UI.table}>
                   <thead>
                     <tr style={{ background: "#f8fafc" }}>
-                      {["Materiál", "Kód", "Rozměr", "Spotřeba / ks", "Jednotka", "Prořez / odpad", "Poznámka", "Akce"].map((h) => (
+                      {["Materiál", "Kód", "Rozměr", "Lokace", "Skladem", "Stav skladu", "Spotřeba / ks", "Jednotka", "Prořez / odpad", "Poznámka", "Akce"].map((h) => (
                         <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                           {h}
                         </th>
@@ -889,6 +895,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
                           {materialById.get(row.material_library_item_id)?.dimension || "—"}
                         </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.stock_location || "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.stock_current_qty ?? "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{stockStatusLabel(row.stock_status)}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.consumption_per_piece ?? "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.consumption_unit || "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.scrap_allowance ?? "—"}</td>

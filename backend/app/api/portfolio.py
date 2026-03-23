@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.models.master_data import Customer
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
+from app.models.material_stock import MaterialStockItem
 from app.models.portfolio import (
     PortfolioGroup,
     PortfolioItem,
@@ -113,7 +114,21 @@ def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
     }
 
 
-def _material_to_payload(row: PortfolioTechnologyTemplateMaterial) -> dict:
+def _material_to_payload(
+    row: PortfolioTechnologyTemplateMaterial,
+    stock_by_material_id: dict[int, MaterialStockItem] | None = None,
+) -> dict:
+    stock_row = None
+    if stock_by_material_id is not None:
+        stock_row = stock_by_material_id.get(row.material_library_item_id)
+
+    if stock_row is None:
+        stock_status = "neni_skladova_karta"
+    elif stock_row.min_qty is not None and stock_row.current_qty < stock_row.min_qty:
+        stock_status = "pod_minimem"
+    else:
+        stock_status = "skladem"
+
     return {
         "id": row.id,
         "material_library_item_id": row.material_library_item_id,
@@ -123,6 +138,11 @@ def _material_to_payload(row: PortfolioTechnologyTemplateMaterial) -> dict:
         "consumption_unit": row.consumption_unit,
         "scrap_allowance": row.scrap_allowance,
         "note": row.note,
+        "stock_item_id": stock_row.id if stock_row else None,
+        "stock_location": stock_row.location if stock_row else None,
+        "stock_current_qty": stock_row.current_qty if stock_row else None,
+        "stock_min_qty": stock_row.min_qty if stock_row else None,
+        "stock_status": stock_status,
     }
 
 
@@ -489,9 +509,23 @@ def get_portfolio_item_technology_material(item_id: int, db: Session = Depends(g
         .order_by(PortfolioTechnologyTemplateMaterial.id.asc())
     ).all()
 
+    material_ids = sorted({m.material_library_item_id for m in materials})
+    stock_rows = db.scalars(
+        select(MaterialStockItem)
+        .where(MaterialStockItem.material_library_item_id.in_(material_ids))
+        .order_by(
+            MaterialStockItem.material_library_item_id.asc(),
+            MaterialStockItem.id.asc(),
+        )
+    ).all() if material_ids else []
+    stock_by_material_id: dict[int, MaterialStockItem] = {}
+    for stock in stock_rows:
+        if stock.material_library_item_id not in stock_by_material_id:
+            stock_by_material_id[stock.material_library_item_id] = stock
+
     return {
         "template_id": template.id,
-        "materials": [_material_to_payload(row) for row in materials],
+        "materials": [_material_to_payload(row, stock_by_material_id) for row in materials],
     }
 
 

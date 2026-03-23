@@ -39,6 +39,11 @@ export type PortfolioTechnologyMaterial = {
   consumption_unit: string | null;
   scrap_allowance: number | null;
   note: string | null;
+  stock_item_id: number | null;
+  stock_location: string | null;
+  stock_current_qty: number | null;
+  stock_min_qty: number | null;
+  stock_status: "neni_skladova_karta" | "pod_minimem" | "skladem";
 };
 
 export type PortfolioItemTechnologyMaterialsResponse = {
