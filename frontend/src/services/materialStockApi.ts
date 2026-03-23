@@ -30,9 +30,40 @@ export type MaterialStockMovementCreatePayload = {
   note: string | null;
 };
 
+export type MaterialStockItemCreatePayload = {
+  material_library_item_id: number;
+  location: string | null;
+  current_qty: number;
+  min_qty: number | null;
+  unit: string | null;
+  note: string | null;
+  is_active: boolean;
+};
+
 export async function getMaterialStockItems(): Promise<MaterialStockItem[]> {
   const res = await fetch(`${API_BASE}/material-stock/items`);
   if (!res.ok) throw new Error("Nepodařilo se načíst sklad materiálu.");
+  return res.json();
+}
+
+export async function createMaterialStockItem(
+  payload: MaterialStockItemCreatePayload
+): Promise<MaterialStockItem> {
+  const res = await fetch(`${API_BASE}/material-stock/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = "Nepodařilo se vytvořit skladovou kartu.";
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string" && data.detail) detail = data.detail;
+    } catch {
+      // ignore json parse fail
+    }
+    throw new Error(detail);
+  }
   return res.json();
 }
 
