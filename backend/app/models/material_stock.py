@@ -35,6 +35,12 @@ class MaterialStockItem(Base):
         cascade="all, delete-orphan",
         order_by="MaterialStockMovement.movement_date.desc(), MaterialStockMovement.id.desc()",
     )
+    reservations: Mapped[list["MaterialStockReservation"]] = relationship(
+        "MaterialStockReservation",
+        back_populates="stock_item",
+        cascade="all, delete-orphan",
+        order_by="MaterialStockReservation.created_at.desc(), MaterialStockReservation.id.desc()",
+    )
 
 
 class MaterialStockMovement(Base):
@@ -51,3 +57,17 @@ class MaterialStockMovement(Base):
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     stock_item: Mapped["MaterialStockItem"] = relationship("MaterialStockItem", back_populates="movements")
+
+
+class MaterialStockReservation(Base):
+    __tablename__ = "material_stock_reservations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stock_item_id: Mapped[int] = mapped_column(ForeignKey("material_stock_items.id"), index=True, nullable=False)
+    job_item_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    gpn: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reserved_qty: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    stock_item: Mapped["MaterialStockItem"] = relationship("MaterialStockItem", back_populates="reservations")

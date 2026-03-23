@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
+import { createMaterialReservation } from "../services/materialStockApi";
 import {
   findPortfolioItemByGpn,
   getPortfolioItemTechnology,
@@ -107,8 +108,11 @@ function materialRequirementStatus(
   if (row.stock_item_id == null || row.stock_status === "neni_skladova_karta") {
     return "Není skladová karta";
   }
-  const onHand = row.stock_current_qty ?? 0;
-  return onHand >= totalRequired ? "Dostatek" : "Nedostatek";
+  const available =
+    row.stock_available_qty != null && !Number.isNaN(row.stock_available_qty)
+      ? row.stock_available_qty
+      : (row.stock_current_qty ?? 0);
+  return available >= totalRequired ? "Dostatek" : "Nedostatek";
 }
 
 function getDemoItemDetail(customerOrderId?: number, jobItemId?: number): DemoItemDetail {
@@ -242,11 +246,21 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
     useState<PortfolioItemTechnologyMaterialsResponse | null>(null);
   const [portfolioTechLoading, setPortfolioTechLoading] = useState(false);
   const [portfolioTechError, setPortfolioTechError] = useState<string | null>(null);
+  const [materialReserveError, setMaterialReserveError] = useState<string | null>(null);
+  const [reservingTpMaterialId, setReservingTpMaterialId] = useState<number | null>(null);
+
+  const reloadTechnologyMaterials = useCallback(async () => {
+    const pid = matchedPortfolioItem?.id;
+    if (pid == null) return;
+    const res = await getPortfolioTechnologyMaterials(pid);
+    setPortfolioTechnologyMaterials(res);
+  }, [matchedPortfolioItem?.id]);
 
   useEffect(() => {
     const gpn = data.gpn.trim();
     let cancelled = false;
     setPortfolioTechError(null);
+    setMaterialReserveError(null);
     if (!gpn) {
       setMatchedPortfolioItem(null);
       setPortfolioTechnology(null);
@@ -304,6 +318,26 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
   }, [data.gpn]);
 
   const itemOrderQuantity = useMemo(() => parseItemQuantity(data.mnozstvi), [data.mnozstvi]);
+
+  async function handleReserveTpMaterial(row: PortfolioTechnologyMaterial, totalRequired: number) {
+    if (row.stock_item_id == null || totalRequired <= 0) return;
+    setMaterialReserveError(null);
+    setReservingTpMaterialId(row.id);
+    try {
+      await createMaterialReservation({
+        stock_item_id: row.stock_item_id,
+        job_item_id: jobItemId,
+        gpn: data.gpn.trim() || null,
+        reserved_qty: totalRequired,
+        note: null,
+      });
+      await reloadTechnologyMaterials();
+    } catch (e: unknown) {
+      setMaterialReserveError(e instanceof Error ? e.message : "Nepodařilo se vytvořit rezervaci.");
+    } finally {
+      setReservingTpMaterialId(null);
+    }
+  }
 
   const progressLabel = useMemo(
     () => `Hotovo: ${data.operationsDone} / ${data.operationsTotal} operací`,
@@ -648,6 +682,9 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
             {matchedPortfolioItem && !portfolioTechError ? (
               <div style={{ ...UI.card, borderRadius: 14, padding: 16, marginTop: 4 }}>
                 <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Materiálová potřeba</div>
+                {materialReserveError ? (
+                  <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{materialReserveError}</div>
+                ) : null}
                 {portfolioTechLoading ? (
                   <div style={{ ...UI.sectionSubtitle, fontWeight: 600 }}>Načítám materiálovou potřebu…</div>
                 ) : portfolioTechnologyMaterials == null ? (
@@ -672,7 +709,10 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
                             "Celková potřeba",
                             "Lokace",
                             "Skladem",
+                            "Rezervováno",
+                            "Volně k dispozici",
                             "Stav",
+                            "Akce",
                           ].map((h) => (
                             <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                               {h}
@@ -708,7 +748,30 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
                               <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
                                 {row.stock_current_qty != null ? formatMaterialNumber(row.stock_current_qty) : "—"}
                               </td>
+                              <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                                {row.stock_reserved_qty != null ? formatMaterialNumber(row.stock_reserved_qty) : "—"}
+                              </td>
+                              <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                                {row.stock_available_qty != null ? formatMaterialNumber(row.stock_available_qty) : "—"}
+                              </td>
                               <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{stav}</td>
+                              <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                                {row.stock_item_id != null ? (
+                                  <button
+                                    type="button"
+                                    style={{
+                                      ...UI.buttons.secondary,
+                                      ...(reservingTpMaterialId === row.id ? { opacity: 0.6, cursor: "wait" } : {}),
+                                    }}
+                                    disabled={reservingTpMaterialId != null || totalRequired <= 0}
+                                    onClick={() => handleReserveTpMaterial(row, totalRequired)}
+                                  >
+                                    Rezervovat
+                                  </button>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
                             </tr>
                           );
                         })}

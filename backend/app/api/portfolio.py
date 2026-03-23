@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import inspect as sa_inspect, select, text
+from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, selectinload
 
@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.models.master_data import Customer
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
-from app.models.material_stock import MaterialStockItem
+from app.models.material_stock import MaterialStockItem, MaterialStockReservation
 from app.models.portfolio import (
     PortfolioGroup,
     PortfolioItem,
@@ -117,6 +117,7 @@ def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
 def _material_to_payload(
     row: PortfolioTechnologyTemplateMaterial,
     stock_by_material_id: dict[int, MaterialStockItem] | None = None,
+    reserved_by_stock_id: dict[int, float] | None = None,
 ) -> dict:
     stock_row = None
     if stock_by_material_id is not None:
@@ -124,10 +125,16 @@ def _material_to_payload(
 
     if stock_row is None:
         stock_status = "neni_skladova_karta"
-    elif stock_row.min_qty is not None and stock_row.current_qty < stock_row.min_qty:
-        stock_status = "pod_minimem"
+        stock_reserved_qty = None
+        stock_available_qty = None
     else:
-        stock_status = "skladem"
+        rsum = float(reserved_by_stock_id.get(stock_row.id, 0.0)) if reserved_by_stock_id is not None else 0.0
+        stock_reserved_qty = rsum
+        stock_available_qty = stock_row.current_qty - rsum
+        if stock_row.min_qty is not None and stock_row.current_qty < stock_row.min_qty:
+            stock_status = "pod_minimem"
+        else:
+            stock_status = "skladem"
 
     return {
         "id": row.id,
@@ -142,6 +149,8 @@ def _material_to_payload(
         "stock_location": stock_row.location if stock_row else None,
         "stock_current_qty": stock_row.current_qty if stock_row else None,
         "stock_min_qty": stock_row.min_qty if stock_row else None,
+        "stock_reserved_qty": stock_reserved_qty,
+        "stock_available_qty": stock_available_qty,
         "stock_status": stock_status,
     }
 
@@ -523,9 +532,22 @@ def get_portfolio_item_technology_material(item_id: int, db: Session = Depends(g
         if stock.material_library_item_id not in stock_by_material_id:
             stock_by_material_id[stock.material_library_item_id] = stock
 
+    stock_ids = [s.id for s in stock_by_material_id.values()]
+    reserved_by_stock_id: dict[int, float] = {}
+    if stock_ids:
+        sums = db.execute(
+            select(
+                MaterialStockReservation.stock_item_id,
+                func.coalesce(func.sum(MaterialStockReservation.reserved_qty), 0.0),
+            )
+            .where(MaterialStockReservation.stock_item_id.in_(stock_ids))
+            .group_by(MaterialStockReservation.stock_item_id)
+        ).all()
+        reserved_by_stock_id = {int(sid): float(total) for sid, total in sums}
+
     return {
         "template_id": template.id,
-        "materials": [_material_to_payload(row, stock_by_material_id) for row in materials],
+        "materials": [_material_to_payload(row, stock_by_material_id, reserved_by_stock_id) for row in materials],
     }
 
 

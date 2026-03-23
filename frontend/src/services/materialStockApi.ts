@@ -11,6 +11,8 @@ export type MaterialStockItem = {
   min_qty: number | null;
   unit: string | null;
   is_active: boolean;
+  reserved_qty: number;
+  available_qty: number;
 };
 
 export type MaterialStockMovement = {
@@ -27,6 +29,23 @@ export type MaterialStockMovementCreatePayload = {
   qty: number;
   movement_date: string;
   reference: string | null;
+  note: string | null;
+};
+
+export type MaterialStockReservation = {
+  id: number;
+  job_item_id: number;
+  gpn: string | null;
+  reserved_qty: number;
+  created_at: string;
+  note: string | null;
+};
+
+export type MaterialStockReservationCreatePayload = {
+  stock_item_id: number;
+  job_item_id: number;
+  gpn: string | null;
+  reserved_qty: number;
   note: string | null;
 };
 
@@ -70,6 +89,39 @@ export async function createMaterialStockItem(
 export async function getMaterialStockMovements(stockItemId: number): Promise<MaterialStockMovement[]> {
   const res = await fetch(`${API_BASE}/material-stock/items/${stockItemId}/movements`);
   if (!res.ok) throw new Error("Nepodařilo se načíst pohyby materiálu.");
+  return res.json();
+}
+
+export async function getMaterialStockReservations(stockItemId: number): Promise<MaterialStockReservation[]> {
+  const res = await fetch(`${API_BASE}/material-stock/items/${stockItemId}/reservations`);
+  if (!res.ok) throw new Error("Nepodařilo se načíst rezervace materiálu.");
+  return res.json();
+}
+
+export async function createMaterialReservation(
+  payload: MaterialStockReservationCreatePayload
+): Promise<MaterialStockReservation> {
+  const res = await fetch(`${API_BASE}/material-stock/reservations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = "Nepodařilo se vytvořit rezervaci.";
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string" && data.detail) detail = data.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function deleteMaterialReservation(id: number): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/material-stock/reservations/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Nepodařilo se zrušit rezervaci.");
   return res.json();
 }
 

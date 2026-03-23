@@ -43,6 +43,8 @@ export type PortfolioTechnologyMaterial = {
   stock_location: string | null;
   stock_current_qty: number | null;
   stock_min_qty: number | null;
+  stock_reserved_qty: number | null;
+  stock_available_qty: number | null;
   stock_status: "neni_skladova_karta" | "pod_minimem" | "skladem";
 };
 

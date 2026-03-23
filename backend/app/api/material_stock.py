@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.models.material_library import MaterialLibraryItem
-from app.models.material_stock import MaterialStockItem, MaterialStockMovement
+from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
 
 router = APIRouter()
 
@@ -34,9 +34,38 @@ def _stock_item_payload(row: MaterialStockItem) -> dict:
     }
 
 
-def _stock_item_list_payload(row: MaterialStockItem) -> dict:
+def _stock_item_list_payload(row: MaterialStockItem, reserved_qty: float = 0.0) -> dict:
     d = _stock_item_payload(row)
-    return {k: v for k, v in d.items() if k != "note"}
+    out = {k: v for k, v in d.items() if k != "note"}
+    r = float(reserved_qty)
+    out["reserved_qty"] = r
+    out["available_qty"] = row.current_qty - r
+    return out
+
+
+def _reserved_totals_by_stock_id(db: Session, stock_item_ids: list[int]) -> dict[int, float]:
+    if not stock_item_ids:
+        return {}
+    rows = db.execute(
+        select(
+            MaterialStockReservation.stock_item_id,
+            func.coalesce(func.sum(MaterialStockReservation.reserved_qty), 0.0),
+        )
+        .where(MaterialStockReservation.stock_item_id.in_(stock_item_ids))
+        .group_by(MaterialStockReservation.stock_item_id)
+    ).all()
+    return {int(sid): float(total) for sid, total in rows}
+
+
+def _reservation_payload(row: MaterialStockReservation) -> dict:
+    return {
+        "id": row.id,
+        "job_item_id": row.job_item_id,
+        "gpn": row.gpn,
+        "reserved_qty": row.reserved_qty,
+        "created_at": row.created_at,
+        "note": row.note,
+    }
 
 
 def _movement_payload(row: MaterialStockMovement) -> dict:
@@ -84,6 +113,14 @@ class MovementCreate(BaseModel):
     note: str | None = None
 
 
+class ReservationCreate(BaseModel):
+    stock_item_id: int
+    job_item_id: int
+    gpn: str | None = None
+    reserved_qty: float
+    note: str | None = None
+
+
 @router.get("/items")
 def list_stock_items(db: Session = Depends(get_db)):
     rows = db.scalars(
@@ -92,7 +129,9 @@ def list_stock_items(db: Session = Depends(get_db)):
         .options(joinedload(MaterialStockItem.material_library_item))
         .order_by(MaterialLibraryItem.name.asc())
     ).unique().all()
-    return [_stock_item_list_payload(r) for r in rows]
+    stock_ids = [r.id for r in rows]
+    reserved_map = _reserved_totals_by_stock_id(db, stock_ids)
+    return [_stock_item_list_payload(r, reserved_map.get(r.id, 0.0)) for r in rows]
 
 
 @router.post("/items")
@@ -131,7 +170,8 @@ def create_stock_item(payload: StockItemCreate, db: Session = Depends(get_db)):
         .where(MaterialStockItem.id == row.id)
         .options(joinedload(MaterialStockItem.material_library_item))
     )
-    return _stock_item_list_payload(row)
+    reserved_map = _reserved_totals_by_stock_id(db, [row.id])
+    return _stock_item_list_payload(row, reserved_map.get(row.id, 0.0))
 
 
 @router.put("/items/{item_id}")
@@ -160,7 +200,8 @@ def update_stock_item(item_id: int, payload: StockItemUpdate, db: Session = Depe
 
     db.commit()
     db.refresh(row)
-    return _stock_item_list_payload(row)
+    reserved_map = _reserved_totals_by_stock_id(db, [row.id])
+    return _stock_item_list_payload(row, reserved_map.get(row.id, 0.0))
 
 
 @router.delete("/items/{item_id}")
@@ -185,6 +226,53 @@ def list_movements(item_id: int, db: Session = Depends(get_db)):
         .order_by(MaterialStockMovement.movement_date.desc(), MaterialStockMovement.id.desc())
     ).all()
     return [_movement_payload(r) for r in rows]
+
+
+@router.get("/items/{item_id}/reservations")
+def list_stock_reservations(item_id: int, db: Session = Depends(get_db)):
+    stock = db.scalar(select(MaterialStockItem).where(MaterialStockItem.id == item_id))
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock item not found")
+
+    rows = db.scalars(
+        select(MaterialStockReservation)
+        .where(MaterialStockReservation.stock_item_id == item_id)
+        .order_by(MaterialStockReservation.created_at.desc(), MaterialStockReservation.id.desc())
+    ).all()
+    return [_reservation_payload(r) for r in rows]
+
+
+@router.post("/reservations")
+def create_reservation(payload: ReservationCreate, db: Session = Depends(get_db)):
+    stock = db.scalar(select(MaterialStockItem).where(MaterialStockItem.id == payload.stock_item_id))
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock item not found")
+    if payload.reserved_qty <= 0:
+        raise HTTPException(status_code=422, detail="reserved_qty must be greater than 0")
+
+    gpn_val = payload.gpn.strip() if payload.gpn else None
+    row = MaterialStockReservation(
+        stock_item_id=payload.stock_item_id,
+        job_item_id=payload.job_item_id,
+        gpn=gpn_val,
+        reserved_qty=payload.reserved_qty,
+        created_at=datetime.now(timezone.utc),
+        note=payload.note,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _reservation_payload(row)
+
+
+@router.delete("/reservations/{reservation_id}")
+def delete_reservation(reservation_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(select(MaterialStockReservation).where(MaterialStockReservation.id == reservation_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.post("/items/{item_id}/movements")

@@ -22,6 +22,7 @@ from app.api.import_orders import router as import_orders_router
 from app.api.dev_tools import dev_tools_router
 from app.api.generate_operations import router as generate_operations_router
 from app.api.material_library import router as material_library_router
+from app.api.material_stock import router as material_stock_router
 from app.api.portfolio import ensure_portfolio_technology_operation_library_fks, router as portfolio_router
 from app.api.portfolio import seed_portfolio_demo_data
 
@@ -37,7 +38,7 @@ from app.models.portfolio import (
 )
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
-from app.models.material_stock import MaterialStockItem, MaterialStockMovement
+from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
 
 
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
@@ -66,6 +67,7 @@ def startup():
 app.include_router(master_data_router, prefix="/master-data", tags=["master-data"])
 app.include_router(master_libraries_router, prefix="/libraries", tags=["libraries"])
 app.include_router(material_library_router, prefix="/materials", tags=["materials"])
+app.include_router(material_stock_router, prefix="/material-stock", tags=["material-stock"])
 app.include_router(orders_router, prefix="/orders", tags=["orders"])
 app.include_router(orders_overview_router, tags=["orders-overview"])
 app.include_router(order_detail_router, tags=["order-detail"])
