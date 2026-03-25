@@ -40,13 +40,24 @@ class PortfolioItem(Base):
     logistic_mode: Mapped[str] = mapped_column(String(40), default="vyroba_zakaznik", nullable=False)
     sale_price_per_piece: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    active_template_id: Mapped[int | None] = mapped_column(
+        ForeignKey("portfolio_technology_templates.id"),
+        index=True,
+        nullable=True,
+    )
 
     customer: Mapped["Customer"] = relationship("Customer")
     group: Mapped["PortfolioGroup | None"] = relationship("PortfolioGroup", back_populates="items")
     technology_templates: Mapped[list["PortfolioTechnologyTemplate"]] = relationship(
         "PortfolioTechnologyTemplate",
         back_populates="portfolio_item",
+        foreign_keys="PortfolioTechnologyTemplate.portfolio_item_id",
         cascade="all, delete-orphan",
+    )
+    active_template: Mapped["PortfolioTechnologyTemplate | None"] = relationship(
+        "PortfolioTechnologyTemplate",
+        foreign_keys=[active_template_id],
+        post_update=True,
     )
     product_stock_items: Mapped[list["ProductStockItem"]] = relationship(
         "ProductStockItem",
@@ -64,7 +75,11 @@ class PortfolioTechnologyTemplate(Base):
     version: Mapped[str] = mapped_column(String(20), default="A", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    portfolio_item: Mapped["PortfolioItem"] = relationship("PortfolioItem", back_populates="technology_templates")
+    portfolio_item: Mapped["PortfolioItem"] = relationship(
+        "PortfolioItem",
+        back_populates="technology_templates",
+        foreign_keys=[portfolio_item_id],
+    )
     operations: Mapped[list["PortfolioTechnologyTemplateOperation"]] = relationship(
         "PortfolioTechnologyTemplateOperation",
         back_populates="template",
