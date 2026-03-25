@@ -2,6 +2,11 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
 import { createMaterialReservation } from "../services/materialStockApi";
 import {
+  getJobItemDetailContext,
+  type OrderDetailItem,
+  type OrderDetailResponse,
+} from "../services/ordersApi";
+import {
   findPortfolioItemByGpn,
   getPortfolioItemTechnology,
   getPortfolioTechnologyMaterials,
@@ -31,25 +36,6 @@ type ItemSubtab =
   | "Dodací list"
   | "Náklady";
 
-type DemoItemDetail = {
-  customerOrderId: number;
-  jobItemId: number;
-  zakazka: string;
-  lineNo: number;
-  gpn: string;
-  popis: string;
-  vp: string;
-  stav: string;
-  progressPct: number;
-  operationsDone: number;
-  operationsTotal: number;
-  mnozstvi: string;
-  termin: string;
-  material: string;
-  cenaZaKs: string;
-  stavVyroby: string;
-};
-
 const SUBTABS: ItemSubtab[] = [
   "Dokumenty",
   "Technologický postup",
@@ -63,36 +49,9 @@ const SUBTABS: ItemSubtab[] = [
   "Náklady",
 ];
 
-const DEFAULT_DEMO_ITEM: DemoItemDetail = {
-  customerOrderId: 260061,
-  jobItemId: 2010,
-  zakazka: "ZAK260061",
-  lineNo: 10,
-  gpn: "102-045-772",
-  popis: "Převlečná objímka (duplex) – zinkování",
-  vp: "VP260030",
-  stav: "Ve výrobě",
-  progressPct: 60,
-  operationsDone: 3,
-  operationsTotal: 5,
-  mnozstvi: "120 ks",
-  termin: "2026-03-15",
-  material: "Ocel 11 353.1 – pozink (Z-12)",
-  cenaZaKs: "28 450 Kč/ks",
-  stavVyroby: "Rozpracováno",
-};
-
-function displayStav(stav: string): string {
-  if (stav === "Běží") return "Ve výrobě";
-  return stav;
-}
-
-/** Parsuje množství z řetězce typu "120 ks" (detail položky). */
-function parseItemQuantity(mnozstvi: string): number {
-  const m = mnozstvi.trim().match(/^([\d.,]+)/);
-  if (!m) return 1;
-  const n = Number(m[1].replace(/\s/g, "").replace(",", "."));
-  return Number.isFinite(n) && n > 0 ? n : 1;
+function formatCenaZaKs(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 2 })} Kč/ks`;
 }
 
 function formatMaterialNumber(value: number | null | undefined, empty = "—"): string {
@@ -115,117 +74,11 @@ function materialRequirementStatus(
   return available >= totalRequired ? "Dostatek" : "Nedostatek";
 }
 
-function getDemoItemDetail(customerOrderId?: number, jobItemId?: number): DemoItemDetail {
-  const safeCustomerOrderId = customerOrderId ?? DEFAULT_DEMO_ITEM.customerOrderId;
-  const safeJobItemId = jobItemId ?? DEFAULT_DEMO_ITEM.jobItemId;
-
-  // Demo values mapped to the same job_item_id used in OrderCardPage.
-  switch (safeJobItemId) {
-    case 2010:
-      return {
-        ...DEFAULT_DEMO_ITEM,
-        customerOrderId: safeCustomerOrderId,
-        zakazka: `ZAK${safeCustomerOrderId}`,
-        lineNo: 10,
-        progressPct: 30,
-        operationsDone: 0,
-        operationsTotal: 5,
-        mnozstvi: "120 ks",
-        termin: "2026-03-15",
-        material: "Ocel 11 353.1 – pozink (Z-12)",
-        cenaZaKs: "28 450 Kč/ks",
-        stav: "Plán",
-        stavVyroby: "Naplánováno",
-      };
-    case 2020:
-      return {
-        ...DEFAULT_DEMO_ITEM,
-        customerOrderId: safeCustomerOrderId,
-        zakazka: `ZAK${safeCustomerOrderId}`,
-        jobItemId: 2020,
-        lineNo: 20,
-        gpn: "107-118-504",
-        popis: "Distanční kroužek (ring) – nitridace",
-        vp: "—",
-        stav: "Běží",
-        progressPct: 60,
-        operationsDone: 3,
-        operationsTotal: 5,
-        mnozstvi: "80 ks",
-        termin: "2026-03-16",
-        material: "Legovaná ocel – nitridace (N-09)",
-        cenaZaKs: "19 900 Kč/ks",
-        stavVyroby: "Probíhá",
-      };
-    case 2030:
-      return {
-        ...DEFAULT_DEMO_ITEM,
-        customerOrderId: safeCustomerOrderId,
-        zakazka: `ZAK${safeCustomerOrderId}`,
-        jobItemId: 2030,
-        lineNo: 30,
-        gpn: "114-030-919",
-        popis: "Těleso spojky (sleeve) – broušení",
-        vp: "VP260031",
-        stav: "Hotovo",
-        progressPct: 80,
-        operationsDone: 4,
-        operationsTotal: 5,
-        mnozstvi: "55 ks",
-        termin: "2026-03-18",
-        material: "Ocel 16 111 – broušení (B-03)",
-        cenaZaKs: "24 650 Kč/ks",
-        stavVyroby: "Těsně před dokončením",
-      };
-    case 2040:
-      return {
-        ...DEFAULT_DEMO_ITEM,
-        customerOrderId: safeCustomerOrderId,
-        zakazka: `ZAK${safeCustomerOrderId}`,
-        jobItemId: 2040,
-        lineNo: 40,
-        gpn: "119-207-633",
-        popis: "Vratný kroužek (ring) – povrch AlMg",
-        vp: "—",
-        stav: "Plán",
-        progressPct: 20,
-        operationsDone: 1,
-        operationsTotal: 5,
-        mnozstvi: "140 ks",
-        termin: "2026-03-20",
-        material: "Ocel 15 120 – povrch AlMg (A-17)",
-        cenaZaKs: "15 750 Kč/ks",
-        stavVyroby: "Rozpracováno",
-      };
-    case 2050:
-      return {
-        ...DEFAULT_DEMO_ITEM,
-        customerOrderId: safeCustomerOrderId,
-        zakazka: `ZAK${safeCustomerOrderId}`,
-        jobItemId: 2050,
-        lineNo: 50,
-        gpn: "121-090-281",
-        popis: "Spojovací pouzdro (duplex) – finální kontrola",
-        vp: "VP260032",
-        stav: "Hotovo",
-        progressPct: 100,
-        operationsDone: 5,
-        operationsTotal: 5,
-        mnozstvi: "36 ks",
-        termin: "2026-03-21",
-        material: "Ocel 11 460 – finální kontrola (K-02)",
-        cenaZaKs: "31 200 Kč/ks",
-        stavVyroby: "Dokončeno",
-      };
-    default:
-      return {
-        ...DEFAULT_DEMO_ITEM,
-        customerOrderId: safeCustomerOrderId,
-        zakazka: `ZAK${safeCustomerOrderId}`,
-        jobItemId: safeJobItemId,
-      };
-  }
-}
+type LoadedJobItemDetail = {
+  customerOrderId: number;
+  order: OrderDetailResponse;
+  item: OrderDetailItem;
+};
 
 function PlaceholderCard({ text }: { text: string }) {
   return (
@@ -238,7 +91,9 @@ function PlaceholderCard({ text }: { text: string }) {
 export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenPortfolioItem }: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
   const [hoverTab, setHoverTab] = useState<ItemSubtab | null>(null);
-  const data = useMemo(() => getDemoItemDetail(undefined, jobItemId), [jobItemId]);
+  const [detail, setDetail] = useState<LoadedJobItemDetail | null>(null);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   const [matchedPortfolioItem, setMatchedPortfolioItem] = useState<PortfolioItem | null>(null);
   const [portfolioTechnology, setPortfolioTechnology] = useState<PortfolioItemTechnologyResponse | null>(null);
@@ -257,7 +112,33 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
   }, [matchedPortfolioItem?.id]);
 
   useEffect(() => {
-    const gpn = data.gpn.trim();
+    let cancelled = false;
+    setPageLoading(true);
+    setPageError(null);
+    setDetail(null);
+    getJobItemDetailContext(jobItemId)
+      .then((ctx) => {
+        if (cancelled) return;
+        setDetail(ctx);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setPageError(e instanceof Error ? e.message : "Nepodařilo se načíst položku.");
+          setDetail(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobItemId]);
+
+  const gpnForPortfolio = (detail?.item.gpn ?? "").trim();
+
+  useEffect(() => {
+    const gpn = gpnForPortfolio;
     let cancelled = false;
     setPortfolioTechError(null);
     setMaterialReserveError(null);
@@ -315,9 +196,13 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
     return () => {
       cancelled = true;
     };
-  }, [data.gpn]);
+  }, [gpnForPortfolio]);
 
-  const itemOrderQuantity = useMemo(() => parseItemQuantity(data.mnozstvi), [data.mnozstvi]);
+  const itemOrderQuantity = useMemo(() => {
+    const q = detail?.item.qty;
+    if (q == null || !Number.isFinite(q) || q <= 0) return 1;
+    return q;
+  }, [detail?.item.qty]);
 
   async function handleReserveTpMaterial(row: PortfolioTechnologyMaterial, totalRequired: number) {
     if (row.stock_item_id == null || totalRequired <= 0) return;
@@ -327,7 +212,7 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
       await createMaterialReservation({
         stock_item_id: row.stock_item_id,
         job_item_id: jobItemId,
-        gpn: data.gpn.trim() || null,
+        gpn: (detail?.item.gpn ?? "").trim() || null,
         reserved_qty: totalRequired,
         note: null,
       });
@@ -339,18 +224,81 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
     }
   }
 
-  const progressLabel = useMemo(
-    () => `Hotovo: ${data.operationsDone} / ${data.operationsTotal} operací`,
-    [data.operationsDone, data.operationsTotal]
-  );
+  const stavLabel = "Neuvedeno";
+  const stavBadgeStyle = { background: "#f1f5f9", color: "#475569", border: "1px solid #cbd5e1" };
 
-  const stavLabel = displayStav(data.stav);
-  const stavBadgeStyle =
-    stavLabel === "Hotovo"
-      ? { background: "#dcfce7", color: "#15803d", border: "1px solid #86efac" }
-      : stavLabel === "Ve výrobě"
-        ? { background: "#dbeafe", color: "#1d4ed8", border: "1px solid #93c5fd" }
-        : { background: "#f1f5f9", color: "#475569", border: "1px solid #cbd5e1" };
+  if (pageLoading) {
+    return (
+      <div style={UI.container}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <button onClick={onBack} style={UI.buttonSecondary}>
+            {source === "orders" ? "Zpět na zakázku" : "Zpět na výkresy"}
+          </button>
+          <div style={{ ...UI.card, padding: 24, borderRadius: 14 }}>
+            <div style={UI.sectionSubtitle}>Načítám detail položky…</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (pageError) {
+    return (
+      <div style={UI.container}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <button onClick={onBack} style={UI.buttonSecondary}>
+            {source === "orders" ? "Zpět na zakázku" : "Zpět na výkresy"}
+          </button>
+          <div
+            style={{
+              ...UI.card,
+              padding: 24,
+              borderRadius: 14,
+              border: "1px solid #fecaca",
+              background: "#fef2f2",
+              color: "#991b1b",
+              fontWeight: 700,
+            }}
+          >
+            {pageError}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <div style={UI.container}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <button onClick={onBack} style={UI.buttonSecondary}>
+            {source === "orders" ? "Zpět na zakázku" : "Zpět na výkresy"}
+          </button>
+          <div
+            style={{
+              ...UI.card,
+              padding: 24,
+              borderRadius: 14,
+              border: "1px solid #e2e8f0",
+              background: "#f8fafc",
+              color: "#64748b",
+              fontWeight: 700,
+              textAlign: "center",
+            }}
+          >
+            Položku se nepodařilo najít v datech z backendu (neexistující ID nebo chybí vazba na objednávku).
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const { order, item } = detail;
+  const linkedProductionOrders = item.production_orders ?? [];
+  const vpLabel =
+    linkedProductionOrders.length > 0
+      ? linkedProductionOrders.map((po) => po.vp_code).filter(Boolean).join(", ")
+      : (item.vp_code ?? "—");
 
   return (
     <div style={UI.container}>
@@ -382,10 +330,10 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
                 letterSpacing: "-0.02em",
               }}
             >
-              {data.gpn}
+              {item.gpn}
             </h1>
             <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0, maxWidth: 720 }}>
-              {source === "drawings" ? "Detail položky napříč zakázkami" : data.popis}
+              {source === "drawings" ? "Detail položky napříč zakázkami" : item.description ?? "—"}
             </p>
           </div>
           <div
@@ -405,7 +353,7 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
                 borderRadius: 999,
                 fontSize: 12,
                 fontWeight: 800,
-                ...(data.vp && data.vp !== "—"
+                ...(vpLabel && vpLabel !== "—"
                   ? {
                       background: "#dcfce7",
                       color: "#15803d",
@@ -418,7 +366,7 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
                     }),
               }}
             >
-              VP: {data.vp}
+              VP: {vpLabel}
             </span>
             <span
               style={{
@@ -440,12 +388,12 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
         <div style={UI.summaryTilesGrid}>
           {(
             [
-              ["Zakázka", data.zakazka],
-              ["Řádek", String(data.lineNo)],
-              ["Množství", data.mnozstvi],
-              ["Termín", data.termin],
-              ["Materiál", data.material],
-              ["Cena / ks", data.cenaZaKs],
+              ["Zakázka", order.zakazka ?? "—"],
+              ["Řádek", String(item.line_no)],
+              ["Množství", `${item.qty} ks`],
+              ["Termín", item.due_date ?? "—"],
+              ["Materiál", "—"],
+              ["Cena / ks", formatCenaZaKs(item.sales_price_per_unit ?? undefined)],
             ] as const
           ).map(([label, value]) => (
             <div key={label} style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
@@ -455,44 +403,53 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
           ))}
         </div>
 
-        {/* Sekce 3 — průběh */}
+        <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>
+            Navázané výrobní příkazy
+          </div>
+          {linkedProductionOrders.length === 0 ? (
+            <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600 }}>
+              K této položce zatím nejsou navázané žádné výrobní příkazy.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={UI.table}>
+                <thead>
+                  <tr style={{ background: "#f8fafc" }}>
+                    {["VP", "Typ zdroje", "Logistický režim", "Množství", "Stav"].map((h) => (
+                      <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {linkedProductionOrders.map((po) => (
+                    <tr key={po.id}>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{po.vp_code}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.source_type ?? "—"}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.logistic_mode ?? "—"}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.quantity} ks</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.status ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Sekce 3 — průběh (bez demo dat; napojení na výrobu později) */}
         <div
           style={{
             paddingTop: 4,
             borderTop: "1px solid #e2e8f0",
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 16,
-              marginBottom: 10,
-            }}
-          >
-            <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a" }}>Průběh výroby</div>
-            <div style={{ fontSize: 28, fontWeight: 900, color: "#16a34a", lineHeight: 1 }}>{data.progressPct} %</div>
+          <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a", marginBottom: 8 }}>Průběh výroby</div>
+          <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600, lineHeight: 1.5 }}>
+            Údaj o průběhu zatím není k dispozici z backendu. Po napojení na výrobní data se zde zobrazí stav operací.
           </div>
-          <div
-            style={{
-              width: "100%",
-              height: 12,
-              background: "#e2e8f0",
-              borderRadius: 999,
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                width: `${data.progressPct}%`,
-                height: "100%",
-                background: "#16a34a",
-                borderRadius: 999,
-              }}
-            />
-          </div>
-          <div style={{ fontSize: 13, color: "#64748b", fontWeight: 700, marginTop: 8 }}>{progressLabel}</div>
         </div>
 
         {/* Související moduly */}

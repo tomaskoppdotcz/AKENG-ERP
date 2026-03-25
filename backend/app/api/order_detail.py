@@ -50,6 +50,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "vykresy": 0,
         "kusy_celkem": 0,
         "prodejni_cena": 0,
+        "total_sales_price": 0.0,
       },
       "items": [],
     }
@@ -94,11 +95,16 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         portfolio_item_id_by_item[it.id] = row[idx]
 
   portfolio_name_by_id: dict[int, str | None] = {}
+  portfolio_sale_price_by_id: dict[int, float | None] = {}
   if portfolio_item_id_by_item:
     pids = sorted({int(pid) for pid in portfolio_item_id_by_item.values() if pid is not None})
     if pids:
       p_rows = db.scalars(select(PortfolioItem).where(PortfolioItem.id.in_(pids))).all()
       portfolio_name_by_id = {int(p.id): p.name for p in p_rows}
+      portfolio_sale_price_by_id = {
+        int(p.id): (float(p.sale_price_per_piece) if p.sale_price_per_piece is not None else None)
+        for p in p_rows
+      }
 
   stock_qty_by_portfolio_id: dict[int, float] = {}
   min_qty_by_portfolio_id: dict[int, float] = {}
@@ -114,10 +120,24 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
   vp_rows = db.scalars(
     select(ProductionOrder)
     .where(ProductionOrder.job_item_id.in_([it.id for it in items]))
+    .order_by(ProductionOrder.id.asc())
   ).all()
   vp_by_item: dict[int, str] = {}
+  vp_count_by_item: dict[int, int] = {}
+  vp_list_by_item: dict[int, list[dict]] = {}
   for vp in vp_rows:
     vp_by_item.setdefault(vp.job_item_id, vp.vp_code)
+    vp_count_by_item[vp.job_item_id] = vp_count_by_item.get(vp.job_item_id, 0) + 1
+    vp_list_by_item.setdefault(vp.job_item_id, []).append(
+      {
+        "id": int(vp.id),
+        "vp_code": vp.vp_code,
+        "quantity": int(vp.quantity or 0),
+        "logistic_mode": vp.logistic_mode,
+        "source_type": vp.source_type,
+        "status": vp.status,
+      }
+    )
 
   termin = None
   if items:
@@ -129,6 +149,19 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
   )
   vykresy = len(items)
   kusy_celkem = sum(int(it.qty or 0) for it in items)
+
+  def _item_sale_price_per_piece(job_item_id: int) -> float | None:
+    pid = portfolio_item_id_by_item.get(job_item_id)
+    if pid is None:
+      return None
+    spp = portfolio_sale_price_by_id.get(int(pid))
+    return spp
+
+  total_sales_price = sum(
+    float(spp) * int(it.qty or 0)
+    for it in items
+    if (spp := _item_sale_price_per_piece(it.id)) is not None
+  )
 
   def _allocation_payload(it: JobItem) -> dict[str, float]:
     required_qty = float(it.qty or 0.0)
@@ -168,6 +201,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
       "vykresy": vykresy,
       "kusy_celkem": kusy_celkem,
       "prodejni_cena": prodejni_cena,
+      "total_sales_price": float(total_sales_price),
     },
     "items": [
       {
@@ -178,7 +212,10 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "qty": it.qty,
         "due_date": it.due_date.isoformat() if it.due_date else None,
         "sales_price_per_unit": price_by_id.get(it.id) if have_price_col else None,
+        "sale_price_per_piece": _item_sale_price_per_piece(it.id),
         "vp_code": vp_by_item.get(it.id),
+        "vp_count": int(vp_count_by_item.get(it.id, 0)),
+        "production_orders": vp_list_by_item.get(it.id, []),
         "portfolio_item_id": portfolio_item_id_by_item.get(it.id) if have_portfolio_fk else None,
         "portfolio_item_name": (
           portfolio_name_by_id.get(int(portfolio_item_id_by_item.get(it.id)))

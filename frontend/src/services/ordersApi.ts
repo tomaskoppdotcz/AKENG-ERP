@@ -12,6 +12,8 @@ export type OrdersOverviewRow = {
   prodejni_cena: number;
   naklad: number;
   vykazany_cas: number;
+  zbyvajici_hodiny?: number;
+  planovane_hodiny?: number;
   vykonnost: number;
   hotovo: number;
   customer_order_id: number | null;
@@ -44,7 +46,18 @@ export type OrderDetailItem = {
   qty: number;
   due_date: string | null;
   sales_price_per_unit: number | null;
+  /** Prodejní cena / ks z navázané portfolio položky (bez DPH). */
+  sale_price_per_piece?: number | null;
   vp_code: string | undefined;
+  vp_count?: number;
+  production_orders?: Array<{
+    id: number;
+    vp_code: string;
+    quantity: number;
+    logistic_mode: string | null;
+    source_type: string | null;
+    status: string | null;
+  }>;
   portfolio_item_id?: number | null;
   portfolio_item_name?: string | null;
   required_qty?: number;
@@ -74,6 +87,8 @@ export type OrderDetailResponse = {
     vykresy: number;
     kusy_celkem: number;
     prodejni_cena: number;
+    /** Součet (kusy × cena / ks) jen u položek s cenou z portfolia. */
+    total_sales_price: number;
   };
   items: OrderDetailItem[];
 };
@@ -108,6 +123,23 @@ export type ProductionOrderRow = {
   id: number;
   vp_code: string;
   job_item_id: number;
+  source_type?: string | null;
+  logistic_mode?: string | null;
+  quantity?: number | null;
+  status?: string | null;
+};
+
+export type CreateProductionOrdersResponse = {
+  production_orders: Array<{
+    id: number;
+    vp_code: string;
+    job_item_id: number;
+    source_type: string;
+    logistic_mode: string;
+    quantity: number;
+    status: string;
+    state: "created" | "existing";
+  }>;
 };
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
@@ -155,12 +187,25 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
               note: co.note ?? null,
             }
           : null,
-      summary: raw.summary ?? {
-        termin: null,
-        vykresy: Array.isArray(raw.items) ? raw.items.length : 0,
-        kusy_celkem: 0,
-        prodejni_cena: 0,
-      },
+      summary: (() => {
+        const s = raw.summary;
+        if (s && typeof s === "object") {
+          return {
+            termin: s.termin ?? null,
+            vykresy: Number(s.vykresy ?? 0),
+            kusy_celkem: Number(s.kusy_celkem ?? 0),
+            prodejni_cena: Number(s.prodejni_cena ?? 0),
+            total_sales_price: Number(s.total_sales_price ?? 0),
+          };
+        }
+        return {
+          termin: null,
+          vykresy: Array.isArray(raw.items) ? raw.items.length : 0,
+          kusy_celkem: 0,
+          prodejni_cena: 0,
+          total_sales_price: 0,
+        };
+      })(),
       items: Array.isArray(raw.items) ? raw.items : [],
     };
   }
@@ -184,6 +229,7 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
       vykresy: Number(raw?.vykresy ?? 0),
       kusy_celkem: Number(raw?.kusy_celkem ?? 0),
       prodejni_cena: Number(raw?.prodejni_cena ?? 0),
+      total_sales_price: Number(raw?.total_sales_price ?? 0),
     },
     items: Array.isArray(raw?.items) ? raw.items : [],
   };
@@ -275,6 +321,18 @@ export async function getProductionOrders(): Promise<ProductionOrderRow[]> {
   const res = await fetch(`${API_BASE}/orders/production-orders`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst výrobní příkazy.");
+  }
+  return res.json();
+}
+
+export async function createProductionOrdersFromAllocation(
+  customerOrderId: number
+): Promise<CreateProductionOrdersResponse> {
+  const res = await fetch(`${API_BASE}/orders/${customerOrderId}/create-production-orders`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se vytvořit výrobní příkazy."));
   }
   return res.json();
 }

@@ -3,6 +3,7 @@ import { UI } from "../styles/ui";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
 import { getPortfolioItems, portfolioVariantOptionText, type PortfolioItem } from "../services/portfolioApi";
 import {
+  createProductionOrdersFromAllocation,
   createJobItem,
   deleteCustomerOrder,
   deleteJobItem,
@@ -65,6 +66,20 @@ function formatQty(n: number | null | undefined): string {
   return n.toLocaleString("cs-CZ", { maximumFractionDigits: 2 });
 }
 
+function formatCzk(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
+}
+
+function formatVpCodes(item: OrderDetailItem): string {
+  const codes = (item.production_orders ?? [])
+    .map((po) => po.vp_code?.trim())
+    .filter((v): v is string => !!v);
+  if (codes.length === 0) return "—";
+  if (codes.length <= 2) return codes.join(", ");
+  return `${codes[0]}, ${codes[1]} +${codes.length - 2}`;
+}
+
 export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetail, onOrderDeleted }: Props) {
   const [data, setData] = useState<OrderDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -78,6 +93,8 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [savingItem, setSavingItem] = useState(false);
   const [itemError, setItemError] = useState<string | null>(null);
+  const [creatingVp, setCreatingVp] = useState(false);
+  const [vpError, setVpError] = useState<string | null>(null);
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
   const [customers, setCustomers] = useState<CustomerListItem[]>([]);
   const [jobId, setJobId] = useState<number | null>(null);
@@ -272,6 +289,19 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
     }
   }
 
+  async function handleCreateVp() {
+    setCreatingVp(true);
+    setVpError(null);
+    try {
+      await createProductionOrdersFromAllocation(customerOrderId);
+      await load();
+    } catch (e: unknown) {
+      setVpError(e instanceof Error ? e.message : "Nepodařilo se vytvořit výrobní příkazy.");
+    } finally {
+      setCreatingVp(false);
+    }
+  }
+
   function openItemEdit(item: OrderDetailItem) {
     setEditItemError(null);
     setEditingItemId(item.job_item_id);
@@ -394,7 +424,8 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
     return items.filter((item) => {
-      const haystack = [item.gpn, item.description ?? "", item.vp_code ?? ""].join(" ").toLowerCase();
+      const vpCodes = (item.production_orders ?? []).map((po) => po.vp_code).filter(Boolean).join(" ");
+      const haystack = [item.gpn, item.description ?? "", item.vp_code ?? "", vpCodes].join(" ").toLowerCase();
       const matchesQuery = !q || haystack.includes(q);
 
       const matchesFilters = activeFilters.every((f) => {
@@ -455,6 +486,7 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
   const objednavkaLabel = data.customer_order?.objednavka ?? "—";
   const datumLabel = data.customer_order?.datum ?? "—";
   const kusyCelkem = data.summary?.kusy_celkem ?? 0;
+  const totalSalesPrice = data.summary?.total_sales_price ?? 0;
 
   return (
     <div style={{ paddingTop: 10 }}>
@@ -474,6 +506,9 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
             </button>
             <button type="button" style={UI.buttons.secondary} onClick={handleDeleteOrder}>
               Smazat zakázku
+            </button>
+            <button type="button" style={UI.buttons.secondary} onClick={handleCreateVp} disabled={creatingVp}>
+              {creatingVp ? "Vytvářím VP..." : "Vytvořit VP"}
             </button>
             <button
               type="button"
@@ -499,6 +534,11 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
             </button>
           </div>
         </div>
+        {vpError ? (
+          <div style={{ ...UI.card, borderRadius: 12, padding: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontWeight: 700 }}>
+            {vpError}
+          </div>
+        ) : null}
 
         {showEditHeader ? (
           <div style={{ ...UI.card, padding: 12, borderRadius: 14, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
@@ -567,6 +607,11 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
           <div style={{ ...UI.summaryTile, minWidth: 190, flex: "1 1 190px" }}>
             <div style={UI.summaryTileLabel}>Datum</div>
             <div style={UI.summaryTileValue}>{datumLabel}</div>
+          </div>
+
+          <div style={{ ...UI.summaryTile, minWidth: 200, flex: "1 1 200px" }}>
+            <div style={UI.summaryTileLabel}>Prodejní cena</div>
+            <div style={UI.summaryTileValue}>{formatCzk(totalSalesPrice)}</div>
           </div>
 
           <div
@@ -839,7 +884,7 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
-                        {["GPN", "Název", "Množství", "Termín", "VP", "Portfolio", "Akce"].map((h) => (
+                        {["GPN", "Název", "Množství", "Prodejní cena / ks", "Termín", "Výrobní příkazy", "Portfolio", "Akce"].map((h) => (
                           <th
                             key={h}
                             style={{
@@ -884,19 +929,21 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                             {item.qty} ks
                           </td>
                           <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
+                            {formatCzk(item.sale_price_per_piece)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
                             {item.due_date ?? "—"}
                           </td>
                           <td
                             style={{
                               ...UI.td,
                               padding: "10px 10px",
-                              whiteSpace: "nowrap",
                               borderBottom: "1px solid #f1f5f9",
                               fontWeight: 700,
-                              color: item.vp_code ? "#15803d" : "#64748b",
+                              color: (item.production_orders?.length ?? 0) > 0 ? "#15803d" : "#64748b",
                             }}
                           >
-                            {item.vp_code ?? "—"}
+                            {formatVpCodes(item)}
                           </td>
                           <td
                             style={{
@@ -927,7 +974,7 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                       ))}
                       {filteredItems.length === 0 ? (
                         <tr>
-                          <td colSpan={7} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                          <td colSpan={8} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                             Žádné výsledky.
                           </td>
                         </tr>

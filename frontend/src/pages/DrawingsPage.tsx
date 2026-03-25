@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
+import { getJobItems, getJobs, getProductionOrders } from "../services/ordersApi";
 
 type DrawingItem = {
-  customerOrderId: number;
+  zakazka: string;
   job_item_id: number;
   line_no: number;
   gpn: string;
@@ -10,7 +11,7 @@ type DrawingItem = {
   material: string;
   mnozstvi: string;
   termin: string;
-  vp: string | null;
+  vp: string;
   stav: string;
 };
 
@@ -36,20 +37,15 @@ type DrawingsSubtab = (typeof SUBTABS)[number];
 const FILTERS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
 type DrawingFilter = (typeof FILTERS)[number];
 
-const DEMO_ROWS: DrawingItem[] = [
-  { customerOrderId: 260061, job_item_id: 2010, line_no: 10, gpn: "102-045-772", popis: "Převlečná objímka (duplex) – zinkování", material: "Ocel 11 353.1 – pozink (Z-12)", mnozstvi: "120 ks", termin: "2026-03-15", vp: "VP260030", stav: "Plán" },
-  { customerOrderId: 260061, job_item_id: 2020, line_no: 20, gpn: "107-118-504", popis: "Distanční kroužek (ring) – nitridace", material: "Legovaná ocel – nitridace (N-09)", mnozstvi: "80 ks", termin: "2026-03-16", vp: null, stav: "Ve výrobě" },
-  { customerOrderId: 260061, job_item_id: 2030, line_no: 30, gpn: "114-030-919", popis: "Těleso spojky (sleeve) – broušení", material: "Ocel 16 111 – broušení (B-03)", mnozstvi: "55 ks", termin: "2026-03-18", vp: "VP260031", stav: "Hotovo" },
-  { customerOrderId: 260060, job_item_id: 2040, line_no: 40, gpn: "119-207-633", popis: "Vratný kroužek (ring) – povrch AlMg", material: "Ocel 15 120 – povrch AlMg (A-17)", mnozstvi: "140 ks", termin: "2026-03-20", vp: null, stav: "Plán" },
-  { customerOrderId: 260060, job_item_id: 2050, line_no: 50, gpn: "121-090-281", popis: "Spojovací pouzdro – finální kontrola", material: "Ocel 11 460 – finální kontrola (K-02)", mnozstvi: "36 ks", termin: "2026-03-21", vp: "VP260032", stav: "Hotovo" },
-  { customerOrderId: 260059, job_item_id: 3060, line_no: 60, gpn: "132-774-018", popis: "Příruba ložiska – frézování", material: "Ocel 12 050 – frézování (F-11)", mnozstvi: "64 ks", termin: "2026-03-13", vp: null, stav: "Ve výrobě" },
-  { customerOrderId: 260058, job_item_id: 3070, line_no: 70, gpn: "136-002-441", popis: "Výztuha rámu – svařování", material: "Ocel S355 – svařenec", mnozstvi: "22 ks", termin: "2026-03-09", vp: "VP260041", stav: "Hotovo" },
-  { customerOrderId: 260058, job_item_id: 3080, line_no: 80, gpn: "140-911-320", popis: "Čelo převodovky – vrtání", material: "Ocel 14 220 – obrábění", mnozstvi: "48 ks", termin: "2026-03-12", vp: null, stav: "Plán" },
-  { customerOrderId: 260057, job_item_id: 3090, line_no: 90, gpn: "144-330-507", popis: "Podložka fixační – kalení", material: "Ocel 13 240 – tepelné zpracování", mnozstvi: "300 ks", termin: "2026-03-11", vp: "VP260052", stav: "Ve výrobě" },
-];
-
 function q(v: string) {
   return v.trim().toLowerCase();
+}
+
+function formatVpCodes(codes: string[]): string {
+  const cleaned = codes.map((c) => c.trim()).filter((c) => c.length > 0);
+  if (cleaned.length === 0) return "—";
+  if (cleaned.length <= 2) return cleaned.join(", ");
+  return `${cleaned[0]}, ${cleaned[1]} +${cleaned.length - 2}`;
 }
 
 export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Props) {
@@ -58,16 +54,63 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
   const [query, setQuery] = useState("");
   const [activeFilters, setActiveFilters] = useState<DrawingFilter[]>([]);
   const [hoveredRow, setHoveredRow] = useState<number | null>(null);
+  const [rows, setRows] = useState<DrawingItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    Promise.all([getJobItems(), getJobs(), getProductionOrders()])
+      .then(([jobItems, jobs, productionOrders]) => {
+        if (cancelled) return;
+        const jobById = new Map(jobs.map((j) => [j.id, j]));
+        const vpByItemId = new Map<number, string[]>();
+        for (const vp of productionOrders) {
+          const arr = vpByItemId.get(vp.job_item_id) ?? [];
+          arr.push(vp.vp_code);
+          vpByItemId.set(vp.job_item_id, arr);
+        }
+        const mapped: DrawingItem[] = jobItems.map((row) => {
+          const job = jobById.get(row.job_id);
+          return {
+            zakazka: job?.zak_code ?? "—",
+            job_item_id: row.id,
+            line_no: row.line_no,
+            gpn: row.gpn,
+            popis: "—",
+            material: "—",
+            mnozstvi: `${row.qty} ks`,
+            termin: row.due_date ?? "—",
+            vp: formatVpCodes(vpByItemId.get(row.id) ?? []),
+            stav: "—",
+          };
+        });
+        setRows(mapped);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : "Nepodařilo se načíst výkresy.");
+        setRows([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const filteredRows = useMemo(() => {
     const normalized = q(query);
-    return DEMO_ROWS.filter((row) => {
-      const haystack = [`ZAK${row.customerOrderId}`, row.gpn, row.popis, row.material, row.vp ?? ""].join(" ").toLowerCase();
+    return rows.filter((row) => {
+      const haystack = [row.zakazka, row.gpn, row.popis, row.material, row.vp].join(" ").toLowerCase();
       const matchesQuery = !normalized || haystack.includes(normalized);
       const done = row.stav === "Hotovo";
-      const late = row.termin < "2026-03-12";
+      const late = row.termin !== "—" && row.termin < new Date().toISOString().slice(0, 10);
       const hasDelivery = row.line_no % 2 === 0;
-      const invoiced = done && !!row.vp;
+      const invoiced = done && row.vp !== "—";
 
       const matchesFilters = activeFilters.every((f) => {
         if (f === "Po termínu") return late;
@@ -79,17 +122,17 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
 
       return matchesQuery && matchesFilters;
     });
-  }, [query, activeFilters]);
+  }, [rows, query, activeFilters]);
 
   const kpi = useMemo(() => {
-    const celkemPolozek = DEMO_ROWS.length;
-    const celkemKusu = DEMO_ROWS.reduce((sum, row) => {
+    const celkemPolozek = rows.length;
+    const celkemKusu = rows.reduce((sum, row) => {
       const qty = Number.parseInt(row.mnozstvi.replace(" ks", "").trim(), 10) || 0;
       return sum + qty;
     }, 0);
-    const aktivniPolozky = DEMO_ROWS.filter((row) => row.stav !== "Hotovo").length;
-    const poTerminu = DEMO_ROWS.filter((row) => row.termin < "2026-03-12").length;
-    const kExpedici = DEMO_ROWS.filter((row) => row.stav === "Hotovo").length;
+    const aktivniPolozky = rows.filter((row) => row.stav !== "Hotovo").length;
+    const poTerminu = rows.filter((row) => row.termin !== "—" && row.termin < new Date().toISOString().slice(0, 10)).length;
+    const kExpedici = rows.filter((row) => row.stav === "Hotovo").length;
 
     return [
       { label: "Celkem položek", value: String(celkemPolozek) },
@@ -98,7 +141,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
       { label: "Po termínu", value: String(poTerminu) },
       { label: "K expedici", value: String(kExpedici) },
     ] as const;
-  }, []);
+  }, [rows]);
 
   return (
     <div style={{ paddingTop: 10 }}>
@@ -175,6 +218,23 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
       <div style={{ marginTop: 16, ...UI.card, padding: 16, borderRadius: 14 }}>
         {activeSubtab === "Přehled" ? (
           <>
+            {loading ? <div style={UI.sectionSubtitle}>Načítám výkresy…</div> : null}
+            {error ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{error}</div> : null}
+            {!loading && !error && rows.length === 0 ? (
+              <div
+                style={{
+                  textAlign: "center",
+                  color: "#64748b",
+                  fontWeight: 700,
+                  padding: "24px 12px",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 12,
+                  background: "#f8fafc",
+                }}
+              >
+                Výkresy jsou zatím prázdné. Po načtení reálných položek z backendu se zde objeví seznam.
+              </div>
+            ) : null}
             <div style={UI.ordersFilterBar}>
               <div style={UI.ordersFilterSearchWrap}>
                 <input
@@ -205,6 +265,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
               </div>
             </div>
 
+            {!loading && rows.length > 0 ? (
             <div style={{ overflowX: "auto" }}>
               <table style={UI.table}>
                 <thead>
@@ -219,7 +280,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
                 <tbody>
                   {filteredRows.map((row) => (
                     <tr
-                      key={`${row.customerOrderId}-${row.job_item_id}`}
+                      key={`${row.zakazka}-${row.job_item_id}`}
                       role="button"
                       tabIndex={0}
                       onClick={() => onOpenItemDetail?.(row.job_item_id, "drawings")}
@@ -236,15 +297,15 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
                         background: hoveredRow === row.job_item_id ? "#eff6ff" : "#fff",
                       }}
                     >
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900 }}>{`ZAK${row.customerOrderId}`}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900 }}>{row.zakazka}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.line_no}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{row.gpn}</td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.popis}</td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.material}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.mnozstvi}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.termin}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", color: row.vp ? "#15803d" : "#64748b", fontWeight: 700 }}>
-                        {row.vp ?? "—"}
+                      <td style={{ ...UI.td, padding: "10px 10px", color: row.vp !== "—" ? "#15803d" : "#64748b", fontWeight: 700 }}>
+                        {row.vp}
                       </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900 }}>{row.stav}</td>
                     </tr>
@@ -259,6 +320,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
                 </tbody>
               </table>
             </div>
+            ) : null}
           </>
         ) : (
           <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0, fontWeight: 900 }}>
