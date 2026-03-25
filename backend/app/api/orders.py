@@ -34,9 +34,17 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
         stmts.append("ALTER TABLE customer_orders ADD COLUMN requested_ship_date DATE")
     if "note" not in cols:
         stmts.append("ALTER TABLE customer_orders ADD COLUMN note VARCHAR(500)")
+    if "order_type" not in cols:
+        stmts.append("ALTER TABLE customer_orders ADD COLUMN order_type VARCHAR(20)")
     with engine.begin() as conn:
         for stmt in stmts:
             conn.execute(text(stmt))
+        conn.execute(
+            text(
+                "UPDATE customer_orders SET order_type = 'customer' "
+                "WHERE order_type IS NULL OR TRIM(COALESCE(order_type, '')) = ''"
+            )
+        )
 
     # job_items columns used by manual create flow
     if "job_items" in insp.get_table_names():
@@ -156,6 +164,22 @@ def _next_zak_code(db: Session) -> str:
     return f"ZAK-{int(row_id) + 1:06d}"
 
 
+def _next_internal_code(db: Session) -> str:
+    jobs = db.scalars(select(Job).where(Job.zak_code.like("INT-%")).order_by(Job.id.asc())).all()
+    max_num = 0
+    for j in jobs:
+        code = (j.zak_code or "").strip()
+        if not code.startswith("INT-"):
+            continue
+        try:
+            num = int(code.split("-", 1)[1])
+        except Exception:
+            continue
+        if num > max_num:
+            max_num = num
+    return f"INT-{max_num + 1:06d}"
+
+
 def _next_line_no(db: Session, job_id: int) -> int:
     row = db.scalar(select(JobItem.line_no).where(JobItem.job_id == job_id).order_by(JobItem.line_no.desc()).limit(1))
     return (int(row) + 10) if row is not None else 10
@@ -177,6 +201,39 @@ def _validate_portfolio_item_gpn(db: Session, gpn: str, portfolio_item_id: int |
             status_code=422,
             detail="GPN položky objednávky musí odpovídat GPN vybrané portfolio položky.",
         )
+
+
+def _get_or_create_internal_order_and_job(db: Session) -> tuple[CustomerOrder, Job]:
+    internal_orders = db.scalars(
+        select(CustomerOrder).where(getattr(CustomerOrder, "order_type") == "internal").order_by(CustomerOrder.id.asc())
+    ).all()
+    for co in internal_orders:
+        job = db.scalars(
+            select(Job).where(Job.customer_order_id == co.id).order_by(Job.id.asc())
+        ).first()
+        if job is not None:
+            return co, job
+
+    internal_code = _next_internal_code(db)
+    co = CustomerOrder(
+        customer_po_no=internal_code,
+        customer_name="Interní doplnění skladu",
+        order_date=date.today(),
+        order_type="internal",
+    )
+    setattr(co, "customer_id", None)
+    setattr(co, "requested_ship_date", None)
+    setattr(co, "note", "Automaticky vytvořeno pro doplnění skladu.")
+    db.add(co)
+    db.flush()
+
+    job = Job(
+        zak_code=internal_code,
+        customer_order_id=co.id,
+    )
+    db.add(job)
+    db.flush()
+    return co, job
 
 
 def _job_item_allocation_values(
@@ -205,7 +262,11 @@ def _job_item_allocation_values(
 
 @router.get("/customer-orders")
 def get_customer_orders(db: Session = Depends(get_db)):
-    rows = db.scalars(select(CustomerOrder).order_by(CustomerOrder.id.desc())).all()
+    rows = db.scalars(
+        select(CustomerOrder)
+        .where(getattr(CustomerOrder, "order_type") != "internal")
+        .order_by(CustomerOrder.id.desc())
+    ).all()
     return [
         {
             "id": row.id,
@@ -231,6 +292,7 @@ def create_customer_order(payload: CustomerOrderCreatePayload, db: Session = Dep
         customer_po_no=po_no,
         customer_name=customer.name,
         order_date=payload.order_date,
+        order_type="customer",
     )
     # legacy model zatím nemá explicitní atributy pro nové sloupce
     setattr(co, "customer_id", payload.customer_id)
@@ -473,6 +535,8 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
     has_desc = "description" in cols
 
     result: list[dict] = []
+    internal_co: CustomerOrder | None = None
+    internal_job: Job | None = None
     for it in items:
         row = None
         if has_portfolio or has_desc:
@@ -541,11 +605,19 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                 )
                 continue
 
+            po_customer_order_id = customer_order_id
+            po_job_id = job.id
+            if c["source_type"] == "restock_allocation":
+                if internal_co is None or internal_job is None:
+                    internal_co, internal_job = _get_or_create_internal_order_and_job(db)
+                po_customer_order_id = int(internal_co.id)
+                po_job_id = int(internal_job.id)
+
             po = ProductionOrder(
                 vp_code=_next_vp_code(db),
                 job_item_id=it.id,
-                customer_order_id=customer_order_id,
-                job_id=job.id,
+                customer_order_id=po_customer_order_id,
+                job_id=po_job_id,
                 portfolio_item_id=portfolio_item_id,
                 gpn=it.gpn,
                 description=description,
