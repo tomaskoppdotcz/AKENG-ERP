@@ -42,6 +42,8 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
     if "job_items" in insp.get_table_names():
         item_cols = {c["name"] for c in insp.get_columns("job_items")}
         item_stmts: list[str] = []
+        if "line_no" not in item_cols:
+            item_stmts.append("ALTER TABLE job_items ADD COLUMN line_no INTEGER")
         if "description" not in item_cols:
             item_stmts.append("ALTER TABLE job_items ADD COLUMN description VARCHAR(500)")
         if "portfolio_item_id" not in item_cols:
@@ -49,6 +51,53 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
         with engine.begin() as conn:
             for stmt in item_stmts:
                 conn.execute(text(stmt))
+            # Historická normalizace: vždy přepočítej line_no per job_id na 10,20,30...
+            # podle pořadí id, aby se opravily legacy hodnoty 1,2,3.
+            rows = conn.execute(
+                text("SELECT id, job_id FROM job_items ORDER BY job_id ASC, id ASC")
+            ).fetchall()
+            next_line_by_job: dict[int, int] = {}
+            for row in rows:
+                item_id = int(row[0])
+                job_id = int(row[1]) if row[1] is not None else 0
+                line_no = next_line_by_job.get(job_id, 10)
+                conn.execute(
+                    text("UPDATE job_items SET line_no = :line_no WHERE id = :id"),
+                    {"line_no": line_no, "id": item_id},
+                )
+                next_line_by_job[job_id] = line_no + 10
+
+    # production_orders columns for first VP creation flow from allocation
+    if "production_orders" in insp.get_table_names():
+        po_cols = {c["name"] for c in insp.get_columns("production_orders")}
+        po_stmts: list[str] = []
+        if "customer_order_id" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN customer_order_id INTEGER")
+        if "job_id" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN job_id INTEGER")
+        if "portfolio_item_id" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN portfolio_item_id INTEGER")
+        if "gpn" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN gpn VARCHAR(120)")
+        if "description" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN description VARCHAR(500)")
+        if "quantity" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN quantity INTEGER")
+        if "logistic_mode" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN logistic_mode VARCHAR(40)")
+        if "source_type" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN source_type VARCHAR(40)")
+        if "status" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN status VARCHAR(30)")
+        with engine.begin() as conn:
+            for stmt in po_stmts:
+                conn.execute(text(stmt))
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_production_orders_item_source "
+                    "ON production_orders (job_item_id, source_type)"
+                )
+            )
 
 
 class CustomerOrderCreatePayload(BaseModel):
@@ -84,6 +133,17 @@ class CustomerOrderUpdatePayload(BaseModel):
     note: str | None = None
 
 
+class ProductionOrderCreateFromAllocationRow(BaseModel):
+    id: int
+    vp_code: str
+    job_item_id: int
+    source_type: str
+    logistic_mode: str
+    quantity: int
+    status: str
+    state: str
+
+
 def _normalize_note(v: str | None) -> str | None:
     if v is None:
         return None
@@ -98,7 +158,12 @@ def _next_zak_code(db: Session) -> str:
 
 def _next_line_no(db: Session, job_id: int) -> int:
     row = db.scalar(select(JobItem.line_no).where(JobItem.job_id == job_id).order_by(JobItem.line_no.desc()).limit(1))
-    return int(row or 0) + 1
+    return (int(row) + 10) if row is not None else 10
+
+
+def _next_vp_code(db: Session) -> str:
+    row_id = db.scalar(select(ProductionOrder.id).order_by(ProductionOrder.id.desc()).limit(1)) or 0
+    return f"VP-{int(row_id) + 1:06d}"
 
 
 def _validate_portfolio_item_gpn(db: Session, gpn: str, portfolio_item_id: int | None) -> None:
@@ -112,6 +177,30 @@ def _validate_portfolio_item_gpn(db: Session, gpn: str, portfolio_item_id: int |
             status_code=422,
             detail="GPN položky objednávky musí odpovídat GPN vybrané portfolio položky.",
         )
+
+
+def _job_item_allocation_values(
+    db: Session,
+    item: JobItem,
+    portfolio_item_id: int | None,
+) -> tuple[float, float, float]:
+    required_qty = float(item.qty or 0.0)
+    if portfolio_item_id is None:
+        return (0.0, required_qty, 0.0)
+    stock_rows = db.execute(
+        text(
+            "SELECT COALESCE(SUM(current_qty), 0), COALESCE(SUM(min_qty), 0) "
+            "FROM product_stock_items WHERE portfolio_item_id = :pid"
+        ),
+        {"pid": int(portfolio_item_id)},
+    ).fetchone()
+    stock_qty = float(stock_rows[0] or 0.0) if stock_rows else 0.0
+    min_qty = float(stock_rows[1] or 0.0) if stock_rows else 0.0
+    from_stock_qty = min(required_qty, stock_qty)
+    to_production_qty = max(required_qty - stock_qty, 0.0)
+    remaining_after_allocation = stock_qty - from_stock_qty
+    restock_qty = max(min_qty - remaining_after_allocation, 0.0)
+    return (from_stock_qty, to_production_qty, restock_qty)
 
 
 @router.get("/customer-orders")
@@ -227,7 +316,7 @@ def get_job_items(db: Session = Depends(get_db)):
     rows_cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
     has_desc = "description" in rows_cols
     has_portfolio = "portfolio_item_id" in rows_cols
-    rows = db.scalars(select(JobItem).order_by(JobItem.id.asc())).all()
+    rows = db.scalars(select(JobItem).order_by(JobItem.job_id.asc(), JobItem.line_no.asc(), JobItem.id.asc())).all()
     out = []
     for row in rows:
         item = {
@@ -363,6 +452,127 @@ def delete_job_item(item_id: int, db: Session = Depends(get_db)):
     return {"status": "ok"}
 
 
+@router.post("/{customer_order_id}/create-production-orders")
+def create_production_orders_from_allocation(customer_order_id: int, db: Session = Depends(get_db)):
+    co = db.get(CustomerOrder, customer_order_id)
+    if co is None:
+        raise HTTPException(status_code=404, detail="Objednávka nebyla nalezena.")
+
+    job = db.scalars(
+        select(Job).where(Job.customer_order_id == customer_order_id).order_by(Job.id.asc())
+    ).first()
+    if job is None:
+        return {"production_orders": []}
+
+    items = db.scalars(select(JobItem).where(JobItem.job_id == job.id).order_by(JobItem.line_no.asc())).all()
+    if not items:
+        return {"production_orders": []}
+
+    cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
+    has_portfolio = "portfolio_item_id" in cols
+    has_desc = "description" in cols
+
+    result: list[dict] = []
+    for it in items:
+        row = None
+        if has_portfolio or has_desc:
+            sel = "portfolio_item_id, description" if (has_portfolio and has_desc) else (
+                "portfolio_item_id" if has_portfolio else "description"
+            )
+            row = db.execute(text(f"SELECT {sel} FROM job_items WHERE id = :id"), {"id": it.id}).fetchone()
+        portfolio_item_id = None
+        description = None
+        if row is not None:
+            if has_portfolio and has_desc:
+                portfolio_item_id = row[0]
+                description = row[1]
+            elif has_portfolio:
+                portfolio_item_id = row[0]
+            elif has_desc:
+                description = row[0]
+
+        from_stock_qty, to_production_qty, restock_qty = _job_item_allocation_values(db, it, portfolio_item_id)
+
+        candidates = []
+        if from_stock_qty > 0:
+            candidates.append(
+                {
+                    "source_type": "stock_allocation",
+                    "logistic_mode": "sklad_zakaznik",
+                    "quantity": int(round(from_stock_qty)),
+                }
+            )
+        if to_production_qty > 0:
+            candidates.append(
+                {
+                    "source_type": "order_allocation",
+                    "logistic_mode": "vyroba_zakaznik",
+                    "quantity": int(round(to_production_qty)),
+                }
+            )
+        if restock_qty > 0:
+            candidates.append(
+                {
+                    "source_type": "restock_allocation",
+                    "logistic_mode": "sklad",
+                    "quantity": int(round(restock_qty)),
+                }
+            )
+
+        for c in candidates:
+            existing = db.scalar(
+                select(ProductionOrder).where(
+                    ProductionOrder.job_item_id == it.id,
+                    ProductionOrder.source_type == c["source_type"],
+                )
+            )
+            if existing is not None:
+                result.append(
+                    {
+                        "id": existing.id,
+                        "vp_code": existing.vp_code,
+                        "job_item_id": existing.job_item_id,
+                        "source_type": existing.source_type or c["source_type"],
+                        "logistic_mode": existing.logistic_mode or c["logistic_mode"],
+                        "quantity": int(existing.quantity or c["quantity"]),
+                        "status": existing.status or "planned",
+                        "state": "existing",
+                    }
+                )
+                continue
+
+            po = ProductionOrder(
+                vp_code=_next_vp_code(db),
+                job_item_id=it.id,
+                customer_order_id=customer_order_id,
+                job_id=job.id,
+                portfolio_item_id=portfolio_item_id,
+                gpn=it.gpn,
+                description=description,
+                quantity=int(c["quantity"]),
+                logistic_mode=c["logistic_mode"],
+                source_type=c["source_type"],
+                status="planned",
+            )
+            db.add(po)
+            db.flush()
+            result.append(
+                {
+                    "id": po.id,
+                    "vp_code": po.vp_code,
+                    "job_item_id": po.job_item_id,
+                    "source_type": po.source_type,
+                    "logistic_mode": po.logistic_mode,
+                    "quantity": int(po.quantity or 0),
+                    "status": po.status or "planned",
+                    "state": "created",
+                }
+            )
+
+    db.commit()
+    return {"production_orders": result}
+
+
 @router.get("/production-orders")
 def get_production_orders(db: Session = Depends(get_db)):
     rows = db.scalars(select(ProductionOrder).order_by(ProductionOrder.id.asc())).all()
@@ -371,6 +581,15 @@ def get_production_orders(db: Session = Depends(get_db)):
             "id": row.id,
             "vp_code": row.vp_code,
             "job_item_id": row.job_item_id,
+            "customer_order_id": row.customer_order_id,
+            "job_id": row.job_id,
+            "portfolio_item_id": row.portfolio_item_id,
+            "gpn": row.gpn,
+            "description": row.description,
+            "quantity": row.quantity,
+            "logistic_mode": row.logistic_mode,
+            "source_type": row.source_type,
+            "status": row.status,
         }
         for row in rows
     ]
