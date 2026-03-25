@@ -3,6 +3,7 @@ const API_BASE =
 
 export type MaterialStockItem = {
   id: number;
+  scan_code?: string | null;
   material_library_item_id: number;
   material_code: string;
   material_name: string;

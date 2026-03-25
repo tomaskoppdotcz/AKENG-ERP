@@ -125,6 +125,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
         ? {
             id: item.id,
             gpn: item.gpn,
+            scan_code: item.scan_code ?? null,
             name: item.name,
             customer_id: item.customer_id,
             customer_name: item.customer_name ?? null,
@@ -533,6 +534,10 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                 {detail.active_template_id ? "ANO" : "NE"}
               </div>
             </div>
+            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
+              <div style={UI.summaryTileLabel}>Scan kód</div>
+              <div style={UI.summaryTileValue}>{detail.scan_code?.trim() ? detail.scan_code : "—"}</div>
+            </div>
           </div>
         </div>
 
@@ -594,6 +599,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 12 }}>Souhrn portfolio položky</div>
             <div style={{ display: "grid", gap: 8 }}>
               <div><strong>GPN:</strong> {detail.gpn}</div>
+              <div>
+                <strong>Scan kód:</strong> {detail.scan_code?.trim() ? detail.scan_code : "—"}
+              </div>
               <div><strong>Název:</strong> {detail.name}</div>
               <div>
                 <strong>Zákazník:</strong> {detail.customer_name?.trim() ? detail.customer_name : "—"}

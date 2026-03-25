@@ -5,11 +5,12 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import inspect as sa_inspect, select, text, update
+from sqlalchemy import func, inspect as sa_inspect, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
+from app.core.scan_code import material_library_scan_code_for_id
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
 
 router = APIRouter()
@@ -51,6 +52,13 @@ def ensure_material_library_sqlite_schema(engine: Engine) -> None:
             col_names = {c["name"] for c in insp.get_columns("material_library_items")}
             if "material_group_id" not in col_names:
                 conn.execute(text("ALTER TABLE material_library_items ADD COLUMN material_group_id INTEGER"))
+            if "scan_code" not in col_names:
+                conn.execute(text("ALTER TABLE material_library_items ADD COLUMN scan_code VARCHAR(32)"))
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_material_library_items_scan_code ON material_library_items (scan_code)"
+                )
+            )
 
 
 def seed_material_groups(db: Session) -> None:
@@ -136,6 +144,7 @@ def _material_to_dict(row: MaterialLibraryItem) -> dict:
     group = row.material_group
     return {
         "id": row.id,
+        "scan_code": row.scan_code,
         "code": row.code,
         "name": row.name,
         "material_type": row.material_type,
@@ -182,6 +191,30 @@ class MaterialLibraryPayload(BaseModel):
         return str(v).strip()
 
 
+class MaterialGroupCreatePayload(BaseModel):
+    name: str = Field(..., min_length=1)
+    code: str | None = None
+    is_active: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def name_strip(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Název je povinný")
+        return s
+
+
+class MaterialGroupUpdatePayload(BaseModel):
+    name: str | None = None
+    code: str | None = None
+    is_active: bool | None = None
+
+
+def _material_group_dict(r: MaterialGroup) -> dict:
+    return {"id": r.id, "code": r.code, "name": r.name, "is_active": r.is_active}
+
+
 @router.get("/")
 def list_materials(db: Session = Depends(get_db)):
     rows = db.scalars(
@@ -195,7 +228,58 @@ def list_materials(db: Session = Depends(get_db)):
 @router.get("/groups")
 def list_material_groups(db: Session = Depends(get_db)):
     rows = db.scalars(select(MaterialGroup).order_by(MaterialGroup.name.asc())).all()
-    return [{"id": r.id, "code": r.code, "name": r.name, "is_active": r.is_active} for r in rows]
+    return [_material_group_dict(r) for r in rows]
+
+
+@router.post("/groups")
+def create_material_group(payload: MaterialGroupCreatePayload, db: Session = Depends(get_db)):
+    code = payload.code.strip() if payload.code else None
+    row = MaterialGroup(name=payload.name.strip(), code=code or None, is_active=payload.is_active)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _material_group_dict(row)
+
+
+@router.put("/groups/{group_id}")
+def update_material_group(group_id: int, payload: MaterialGroupUpdatePayload, db: Session = Depends(get_db)):
+    row = db.scalar(select(MaterialGroup).where(MaterialGroup.id == group_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skupina materiálu nenalezena")
+    data = payload.model_dump(exclude_unset=True)
+    if "name" in data and data["name"] is not None:
+        nm = str(data["name"]).strip()
+        if not nm:
+            raise HTTPException(status_code=422, detail="Název nesmí být prázdný.")
+        row.name = nm
+    if "code" in data:
+        row.code = data["code"].strip() if data["code"] else None
+    if "is_active" in data and data["is_active"] is not None:
+        row.is_active = bool(data["is_active"])
+    db.commit()
+    db.refresh(row)
+    return _material_group_dict(row)
+
+
+@router.delete("/groups/{group_id}")
+def delete_material_group(group_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(select(MaterialGroup).where(MaterialGroup.id == group_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skupina materiálu nenalezena")
+    n_refs = (
+        db.scalar(
+            select(func.count()).select_from(MaterialLibraryItem).where(MaterialLibraryItem.material_group_id == group_id)
+        )
+        or 0
+    )
+    if n_refs > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Skupinu nelze smazat — jsou k ní přiřazené materiály.",
+        )
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.post("/")
@@ -219,6 +303,9 @@ def create_material(payload: MaterialLibraryPayload, db: Session = Depends(get_d
         is_active=payload.is_active,
     )
     db.add(row)
+    db.flush()
+    if not (row.scan_code and str(row.scan_code).strip()):
+        row.scan_code = material_library_scan_code_for_id(row.id)
     db.commit()
     row = db.scalar(
         select(MaterialLibraryItem)

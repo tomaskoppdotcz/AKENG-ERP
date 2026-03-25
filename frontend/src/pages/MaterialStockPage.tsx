@@ -319,7 +319,18 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["Materiál", "Skupina", "Forma", "Kód", "Rozměr", "Lokace", "Stav (mm)", "Min. zásoba (mm)", "Akce"].map((h) => (
+                    {[
+                      "Materiál",
+                      "Skupina",
+                      "Forma",
+                      "Kód",
+                      "Scan kód",
+                      "Rozměr",
+                      "Lokace",
+                      "Stav (mm)",
+                      "Min. zásoba (mm)",
+                      "Akce",
+                    ].map((h) => (
                       <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                         {h}
                       </th>
@@ -339,6 +350,9 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_group_name || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_form || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_code || "—"}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                        {row.scan_code?.trim() ? row.scan_code : "—"}
+                      </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_dimension || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.location || "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
@@ -373,7 +387,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                   ))}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={9} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={10} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Žádné výsledky.
                       </td>
                     </tr>

@@ -31,6 +31,7 @@ class PortfolioItem(Base):
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True, nullable=False)
     portfolio_group_id: Mapped[int | None] = mapped_column(ForeignKey("portfolio_groups.id"), index=True, nullable=True)
     gpn: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    scan_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     drawing_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
     revision: Mapped[str | None] = mapped_column(String(40), nullable=True)

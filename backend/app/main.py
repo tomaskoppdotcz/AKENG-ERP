@@ -27,7 +27,7 @@ from app.api.material_library import (
     router as material_library_router,
     seed_material_groups,
 )
-from app.api.material_stock import router as material_stock_router
+from app.api.material_stock import ensure_material_stock_sqlite_schema, router as material_stock_router
 from app.api.portfolio import (
     ensure_portfolio_items_sqlite_schema,
     ensure_portfolio_technology_operation_library_fks,
@@ -65,6 +65,7 @@ def startup():
     ensure_master_libraries_sqlite_schema(engine)
     ensure_customers_sqlite_schema(engine)
     ensure_material_library_sqlite_schema(engine)
+    ensure_material_stock_sqlite_schema(engine)
     ensure_portfolio_technology_operation_library_fks(engine)
     ensure_portfolio_items_sqlite_schema(engine)
     db = SessionLocal()

@@ -5,6 +5,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
+from app.core.scan_code import portfolio_scan_code_for_id
 from app.models.master_data import Customer
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
@@ -65,9 +66,20 @@ def ensure_portfolio_items_sqlite_schema(engine: Engine) -> None:
         return
 
     cols = {c["name"] for c in insp.get_columns("portfolio_items")}
+    stmts: list[str] = []
     if "sale_price_per_piece" not in cols:
+        stmts.append("ALTER TABLE portfolio_items ADD COLUMN sale_price_per_piece FLOAT")
+    if "scan_code" not in cols:
+        stmts.append("ALTER TABLE portfolio_items ADD COLUMN scan_code VARCHAR(32)")
+    if stmts:
         with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE portfolio_items ADD COLUMN sale_price_per_piece FLOAT"))
+            for stmt in stmts:
+                conn.execute(text(stmt))
+    # Unikátní scan kód (NULL hodnoty SQLite u UNIQUE ignoruje)
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_portfolio_items_scan_code ON portfolio_items (scan_code)")
+        )
 
 
 class PortfolioOperationUpsert(BaseModel):
@@ -251,6 +263,7 @@ def _portfolio_item_payload(item: PortfolioItem) -> dict:
     return {
         "id": item.id,
         "gpn": item.gpn,
+        "scan_code": item.scan_code,
         "name": item.name,
         "customer_id": item.customer_id,
         "customer_name": customer_name,
@@ -393,6 +406,9 @@ def create_portfolio_item(payload: PortfolioItemCreatePayload, db: Session = Dep
         is_active=payload.is_active,
     )
     db.add(row)
+    db.flush()
+    if not (row.scan_code and str(row.scan_code).strip()):
+        row.scan_code = portfolio_scan_code_for_id(row.id)
     db.commit()
     loaded = _load_portfolio_item_for_payload(db, row.id)
     if loaded is None:
@@ -434,6 +450,8 @@ def copy_portfolio_item(item_id: int, payload: PortfolioItemCreatePayload, db: S
     )
     db.add(new_item)
     db.flush()
+    if not (new_item.scan_code and str(new_item.scan_code).strip()):
+        new_item.scan_code = portfolio_scan_code_for_id(new_item.id)
 
     templates = sorted(src.technology_templates, key=lambda t: t.id)
     for tmpl in templates:

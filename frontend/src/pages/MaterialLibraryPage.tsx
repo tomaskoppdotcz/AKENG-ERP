@@ -108,7 +108,8 @@ export default function MaterialLibraryPage() {
     return rows.filter((r) => {
       const groupLabel = r.material_group_name ?? "";
       const matchesText =
-        !q || norm(`${r.code} ${r.name} ${groupLabel} ${r.form} ${r.dimension}`).includes(q);
+        !q ||
+        norm(`${r.scan_code ?? ""} ${r.code} ${r.name} ${groupLabel} ${r.form} ${r.dimension}`).includes(q);
       const matchesGroup = groupFilter === "" || r.material_group_id === groupFilter;
       const matchesForm = !formFilter || r.form === formFilter;
       return matchesText && matchesGroup && matchesForm;
@@ -400,6 +401,7 @@ export default function MaterialLibraryPage() {
             <thead>
               <tr style={{ background: "#f8fafc" }}>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Kód</th>
+                <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Scan kód</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Název</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Forma</th>
                 <th style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>Skupina</th>
@@ -423,6 +425,9 @@ export default function MaterialLibraryPage() {
               {filteredAndSorted.map((r) => (
                 <tr key={r.id}>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.code}</td>
+                  <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                    {r.scan_code?.trim() ? r.scan_code : "—"}
+                  </td>
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.name}</td>
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.form || "—"}</td>
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.material_group_name || "—"}</td>

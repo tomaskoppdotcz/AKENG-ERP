@@ -35,6 +35,7 @@ export type PortfolioGroupUpdatePayload = Partial<PortfolioGroupCreatePayload>;
 export type PortfolioItem = {
   id: number;
   gpn: string;
+  scan_code?: string | null;
   name: string;
   customer_id: number;
   customer_name?: string | null;

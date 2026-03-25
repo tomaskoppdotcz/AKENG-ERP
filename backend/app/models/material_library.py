@@ -23,6 +23,7 @@ class MaterialLibraryItem(Base):
     __tablename__ = "material_library_items"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    scan_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     code: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     material_type: Mapped[str] = mapped_column(String(100), nullable=False)

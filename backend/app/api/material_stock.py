@@ -6,10 +6,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect as sa_inspect, select, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
+from app.core.scan_code import material_stock_scan_code_for_id
 from app.models.material_library import MaterialLibraryItem
 from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
 
@@ -18,11 +20,34 @@ router = APIRouter()
 ALLOWED_MOVEMENT_TYPES = frozenset({"prijem", "vydej", "korekce"})
 
 
+def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
+    """SQLite: doplnění scan_code u material_stock_items."""
+    try:
+        url = str(engine.url)
+    except Exception:
+        return
+    if not url.startswith("sqlite"):
+        return
+
+    insp = sa_inspect(engine)
+    if "material_stock_items" not in insp.get_table_names():
+        return
+
+    cols = {c["name"] for c in insp.get_columns("material_stock_items")}
+    with engine.begin() as conn:
+        if "scan_code" not in cols:
+            conn.execute(text("ALTER TABLE material_stock_items ADD COLUMN scan_code VARCHAR(32)"))
+        conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_material_stock_items_scan_code ON material_stock_items (scan_code)")
+        )
+
+
 def _stock_item_payload(row: MaterialStockItem) -> dict:
     lib = row.material_library_item
     group = lib.material_group if lib else None
     return {
         "id": row.id,
+        "scan_code": row.scan_code,
         "material_library_item_id": row.material_library_item_id,
         "material_code": lib.code if lib else "",
         "material_name": lib.name if lib else "",
@@ -184,8 +209,10 @@ def create_stock_item(payload: StockItemCreate, db: Session = Depends(get_db)):
         is_active=payload.is_active,
     )
     db.add(row)
+    db.flush()
+    if not (row.scan_code and str(row.scan_code).strip()):
+        row.scan_code = material_stock_scan_code_for_id(row.id)
     db.commit()
-    db.refresh(row)
     row = db.scalar(
         select(MaterialStockItem)
         .where(MaterialStockItem.id == row.id)

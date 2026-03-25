@@ -6,6 +6,7 @@ const MATERIALS_BASE = `${API_BASE}/materials/`;
 
 export type MaterialLibraryItem = {
   id: number;
+  scan_code?: string | null;
   code: string;
   name: string;
   /** Legacy pole z API; stránka knihovny ho nepoužívá. */
@@ -72,6 +73,46 @@ export async function getMaterialGroups(): Promise<MaterialGroup[]> {
   const res = await fetch(`${MATERIALS_BASE}groups`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst skupiny materiálů."));
+  }
+  return res.json();
+}
+
+export type MaterialGroupCreatePayload = {
+  name: string;
+  code: string | null;
+  is_active: boolean;
+};
+
+export type MaterialGroupUpdatePayload = Partial<MaterialGroupCreatePayload>;
+
+export async function createMaterialGroup(payload: MaterialGroupCreatePayload): Promise<MaterialGroup> {
+  const res = await fetch(`${MATERIALS_BASE}groups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se vytvořit skupinu materiálů."));
+  }
+  return res.json();
+}
+
+export async function updateMaterialGroup(id: number, payload: MaterialGroupUpdatePayload): Promise<MaterialGroup> {
+  const res = await fetch(`${MATERIALS_BASE}groups/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se upravit skupinu materiálů."));
+  }
+  return res.json();
+}
+
+export async function deleteMaterialGroup(id: number): Promise<{ status: string }> {
+  const res = await fetch(`${MATERIALS_BASE}groups/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se smazat skupinu materiálů."));
   }
   return res.json();
 }

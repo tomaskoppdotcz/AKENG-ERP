@@ -155,6 +155,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
     return items.filter((i) =>
       [
         i.gpn,
+        i.scan_code ?? "",
         i.name,
         String(i.customer_id),
         i.customer_name ?? "",
@@ -535,6 +536,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                   <tr style={{ background: "#f8fafc" }}>
                     {[
                       "GPN",
+                      "Scan kód",
                       "Název",
                       "Zákazník",
                       "Skupina",
@@ -562,6 +564,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                       style={{ cursor: "pointer", background: hoveredId === item.id ? "#eff6ff" : "#fff" }}
                     >
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{dash(item.gpn)}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.scan_code)}</td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{dash(item.name)}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.customer_name)}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.group_name)}</td>
@@ -617,7 +620,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                   ))}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={11} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={12} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Žádné výsledky.
                       </td>
                     </tr>

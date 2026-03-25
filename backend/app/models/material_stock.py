@@ -18,6 +18,7 @@ class MaterialStockItem(Base):
     __tablename__ = "material_stock_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     material_library_item_id: Mapped[int] = mapped_column(
         ForeignKey("material_library_items.id"), index=True, nullable=False
     )
