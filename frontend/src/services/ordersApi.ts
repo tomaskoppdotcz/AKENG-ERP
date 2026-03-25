@@ -24,6 +24,8 @@ export type OrdersOverviewResponse = {
   orders: OrdersOverviewRow[];
 };
 
+export type OrdersOverviewOrderTypeFilter = "customer" | "internal" | "all";
+
 export type CustomerOrderCreatePayload = {
   customer_id: number;
   customer_po_no: string;
@@ -96,7 +98,7 @@ export type OrderDetailResponse = {
 export type JobItemRow = {
   id: number;
   job_id: number;
-  line_no: number;
+  line_no?: number | null;
   gpn: string;
   qty: number;
   due_date: string | null;
@@ -152,8 +154,11 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
   return fallback;
 }
 
-export async function getOrdersOverview(): Promise<OrdersOverviewRow[]> {
-  const res = await fetch(`${API_BASE}/orders-overview/list`);
+export async function getOrdersOverview(
+  orderType: OrdersOverviewOrderTypeFilter = "customer"
+): Promise<OrdersOverviewRow[]> {
+  const q = new URLSearchParams({ order_type: orderType });
+  const res = await fetch(`${API_BASE}/orders-overview/list?${q.toString()}`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst přehled zakázek."));
   }

@@ -2,7 +2,12 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
 import OrderCardPage from "./OrderCardPage";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
-import { createCustomerOrder, getOrdersOverview, type OrdersOverviewRow } from "../services/ordersApi";
+import {
+  createCustomerOrder,
+  getOrdersOverview,
+  type OrdersOverviewOrderTypeFilter,
+  type OrdersOverviewRow,
+} from "../services/ordersApi";
 
 type Props = {
   onOpenOrderCard?: (customerOrderId: number) => void;
@@ -27,6 +32,12 @@ const TABLE_COLUMNS = [
 const ORDER_FILTERS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
 type OrderFilter = (typeof ORDER_FILTERS)[number];
 
+const OVERVIEW_ORDER_TYPE_OPTIONS: { id: OrdersOverviewOrderTypeFilter; label: string }[] = [
+  { id: "customer", label: "Zákaznické" },
+  { id: "internal", label: "Interní" },
+  { id: "all", label: "Vše" },
+];
+
 function formatSearchValue(v: string) {
   return v.trim().toLowerCase();
 }
@@ -36,9 +47,14 @@ function formatMoneyKc(n: number | null | undefined): string {
   return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 0 })} Kč`;
 }
 
+/** Součet z portfolia (shodně s kartou zakázky). */
+function formatProdejniCenaOverview(n: number | null | undefined): string {
+  const v = n == null || Number.isNaN(n) ? 0 : n;
+  return `${v.toLocaleString("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 })} Kč`;
+}
+
 function formatHours(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
-  if (n === 0) return "—";
   return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 1 })} h`;
 }
 
@@ -92,12 +108,13 @@ export default function OrdersPage(_props: Props) {
   const [formOrderDate, setFormOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [formShipDate, setFormShipDate] = useState("");
   const [formNote, setFormNote] = useState("");
+  const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("customer");
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const data = await getOrdersOverview();
+      const data = await getOrdersOverview(overviewOrderType);
       setRows(data);
     } catch (e: unknown) {
       setLoadError(e instanceof Error ? e.message : "Nepodařilo se načíst zakázky.");
@@ -105,7 +122,7 @@ export default function OrdersPage(_props: Props) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [overviewOrderType]);
 
   useEffect(() => {
     loadOverview();
@@ -132,16 +149,21 @@ export default function OrdersPage(_props: Props) {
   const summaryTiles = useMemo(() => {
     const count = rows.length;
     const sumSales = rows.reduce((s, r) => s + (Number(r.prodejni_cena) || 0), 0);
+    const remainingByOrder = (r: OrdersOverviewRow) => Number(r.zbyvajici_hodiny ?? 0);
+    const hasRemaining = (r: OrdersOverviewRow) => remainingByOrder(r) > 0.0001;
+    const nedodelane = rows.filter((r) => hasRemaining(r)).length;
+    const celkemZbyvaHodin = rows.reduce((s, r) => s + Math.max(remainingByOrder(r), 0), 0);
     const poTerminu = rows.filter((r) => {
+      if (!hasRemaining(r)) return false;
       if (!r.termin) return false;
       const t = new Date(r.termin);
       return !Number.isNaN(t.getTime()) && t < startOfToday();
     }).length;
     return [
-      { label: "Celkem objednávky", value: count ? formatMoneyKc(sumSales) : "—" },
+      { label: "Celkem objednávky", value: count ? formatProdejniCenaOverview(sumSales) : "—" },
       { label: "Počet zakázek", value: count ? String(count) : "—" },
-      { label: "Nedodělané zakázky", value: "—" },
-      { label: "Celkem hodin", value: "—" },
+      { label: "Nedodělané zakázky", value: count ? String(nedodelane) : "—" },
+      { label: "Celkem hodin", value: count ? formatHours(celkemZbyvaHodin) : "—" },
       { label: "Po termínu", value: count ? String(poTerminu) : "—" },
       { label: "K expedici", value: "—" },
     ] as const;
@@ -349,6 +371,28 @@ export default function OrdersPage(_props: Props) {
             ) : null}
             {loading ? <div style={{ ...UI.sectionSubtitle, marginBottom: 12 }}>Načítám zakázky…</div> : null}
 
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#475569" }}>Typ přehledu:</span>
+              {OVERVIEW_ORDER_TYPE_OPTIONS.map(({ id, label }) => {
+                const active = overviewOrderType === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setOverviewOrderType(id)}
+                    disabled={loading}
+                    style={{
+                      ...UI.ordersFilterChip,
+                      ...(active ? UI.ordersFilterChipActive : {}),
+                      ...(loading ? { opacity: 0.6, cursor: "wait" } : {}),
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
             {!loading && !loadError && rows.length === 0 ? (
               <div
                 style={{
@@ -440,7 +484,7 @@ export default function OrdersPage(_props: Props) {
                             <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.datum ?? "—"}</td>
                             <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vykresy}</td>
                             <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900, color: "#0f172a" }}>
-                              {formatMoneyKc(row.prodejni_cena)}
+                              {formatProdejniCenaOverview(row.prodejni_cena)}
                             </td>
                             <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900, color: "#0f172a" }}>
                               {formatMoneyKc(row.naklad)}

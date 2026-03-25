@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -19,8 +19,22 @@ def _job_items_have_portfolio_fk(db: Session) -> bool:
   return "portfolio_item_id" in cols
 
 
+def _order_type_value(co: CustomerOrder) -> str:
+  v = getattr(co, "order_type", None)
+  if v is None or str(v).strip() == "":
+    return "customer"
+  return str(v).strip().lower()
+
+
 @router.get("/orders-overview/list")
-def get_orders_overview(db: Session = Depends(get_db)):
+def get_orders_overview(
+  order_type: str = Query("customer", description="customer | internal | all"),
+  db: Session = Depends(get_db),
+):
+  ot = (order_type or "customer").strip().lower()
+  if ot not in ("customer", "internal", "all"):
+    ot = "customer"
+
   jobs = db.scalars(select(Job).order_by(Job.id.desc())).all()
 
   if not jobs:
@@ -28,16 +42,18 @@ def get_orders_overview(db: Session = Depends(get_db)):
 
   # preload customer orders
   customer_ids = {job.customer_order_id for job in jobs if job.customer_order_id is not None}
-  customer_map = {}
+  customer_map: dict[int, CustomerOrder] = {}
   if customer_ids:
     customer_rows = db.scalars(
       select(CustomerOrder).where(CustomerOrder.id.in_(customer_ids))
     ).all()
-    customer_map = {
-      row.id: row
-      for row in customer_rows
-      if getattr(row, "order_type", "customer") != "internal"
-    }
+    full_map = {row.id: row for row in customer_rows}
+    if ot == "customer":
+      customer_map = {k: v for k, v in full_map.items() if _order_type_value(v) != "internal"}
+    elif ot == "internal":
+      customer_map = {k: v for k, v in full_map.items() if _order_type_value(v) == "internal"}
+    else:
+      customer_map = full_map
 
   # preload items per job
   job_ids = [job.id for job in jobs]
