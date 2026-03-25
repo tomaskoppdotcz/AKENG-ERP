@@ -88,9 +88,13 @@ export type PortfolioItemTechnologyResponse = {
 
 export type PortfolioTechnologyMaterial = {
   id: number;
-  material_library_item_id: number;
+  input_type?: "material" | "product_stock";
+  material_library_item_id: number | null;
   material_name: string;
   material_code: string | null;
+  portfolio_item_id?: number | null;
+  portfolio_item_gpn?: string | null;
+  portfolio_item_name?: string | null;
   consumption_per_piece: number | null;
   consumption_unit: string | null;
   scrap_allowance: number | null;
@@ -110,7 +114,9 @@ export type PortfolioItemTechnologyMaterialsResponse = {
 };
 
 export type PortfolioTechnologyMaterialCreatePayload = {
-  material_library_item_id: number;
+  input_type: "material" | "product_stock";
+  material_library_item_id: number | null;
+  portfolio_item_id: number | null;
   consumption_per_piece: number | null;
   consumption_unit: string | null;
   scrap_allowance: number | null;
@@ -118,7 +124,9 @@ export type PortfolioTechnologyMaterialCreatePayload = {
 };
 
 export type PortfolioTechnologyMaterialUpdatePayload = {
-  material_library_item_id?: number;
+  input_type?: "material" | "product_stock";
+  material_library_item_id?: number | null;
+  portfolio_item_id?: number | null;
   consumption_per_piece?: number | null;
   consumption_unit?: string | null;
   scrap_allowance?: number | null;

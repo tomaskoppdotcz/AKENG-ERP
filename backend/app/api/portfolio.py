@@ -10,6 +10,7 @@ from app.models.master_data import Customer
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
 from app.models.material_stock import MaterialStockItem, MaterialStockReservation
+from app.models.product_stock import ProductStockItem
 from app.models.portfolio import (
     PortfolioGroup,
     PortfolioItem,
@@ -50,6 +51,106 @@ def ensure_portfolio_technology_operation_library_fks(engine: Engine) -> None:
     with engine.begin() as conn:
         for stmt in stmts:
             conn.execute(text(stmt))
+
+
+def ensure_portfolio_technology_material_inputs_sqlite_schema(engine: Engine) -> None:
+    """SQLite: rozšíření TP materiálů na obecné vstupy (material/product_stock).
+
+    Pozn.: původní tabulka měla material_library_item_id NOT NULL. Pro product_stock vstupy je potřeba sloupec znepovinnit,
+    proto u SQLite bezpečně rebuildneme tabulku se zachováním dat.
+    """
+    try:
+        url = str(engine.url)
+    except Exception:
+        return
+    if not url.startswith("sqlite"):
+        return
+
+    insp = sa_inspect(engine)
+    if "portfolio_technology_template_materials" not in insp.get_table_names():
+        return
+
+    cols = insp.get_columns("portfolio_technology_template_materials")
+    col_names = {c["name"] for c in cols}
+    notnull_by_name = {c["name"]: bool(c.get("nullable") is False) for c in cols}
+
+    # Nejprve doplníme nové sloupce, pokud chybí.
+    stmts: list[str] = []
+    if "input_type" not in col_names:
+        stmts.append("ALTER TABLE portfolio_technology_template_materials ADD COLUMN input_type VARCHAR(20)")
+    if "portfolio_item_id" not in col_names:
+        stmts.append("ALTER TABLE portfolio_technology_template_materials ADD COLUMN portfolio_item_id INTEGER")
+    if stmts:
+        with engine.begin() as conn:
+            for stmt in stmts:
+                conn.execute(text(stmt))
+
+    # Pokud je material_library_item_id stále NOT NULL, rebuildneme tabulku, aby šel uložit product_stock vstup.
+    # (SQLite neumí ALTER COLUMN DROP NOT NULL.)
+    insp = sa_inspect(engine)  # refresh inspector cache after ALTER TABLE
+    cols_after = insp.get_columns("portfolio_technology_template_materials")
+    col_names_after = {c["name"] for c in cols_after}
+    ml_col = next((c for c in cols_after if c["name"] == "material_library_item_id"), None)
+    material_notnull = bool(ml_col and ml_col.get("nullable") is False)
+    if not material_notnull:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS portfolio_technology_template_materials__new (
+                    id INTEGER PRIMARY KEY,
+                    template_id INTEGER NOT NULL,
+                    input_type VARCHAR(20),
+                    material_library_item_id INTEGER,
+                    portfolio_item_id INTEGER,
+                    consumption_per_piece FLOAT,
+                    consumption_unit VARCHAR(120),
+                    scrap_allowance FLOAT,
+                    note VARCHAR(500)
+                )
+                """
+            )
+        )
+        # Přeneseme data (input_type/portfolio_item_id mohou být NULL u legacy řádků).
+        conn.execute(
+            text(
+                """
+                INSERT INTO portfolio_technology_template_materials__new (
+                    id, template_id, input_type, material_library_item_id, portfolio_item_id,
+                    consumption_per_piece, consumption_unit, scrap_allowance, note
+                )
+                SELECT
+                    id, template_id,
+                    CASE WHEN input_type IS NULL OR TRIM(input_type) = '' THEN NULL ELSE input_type END,
+                    material_library_item_id,
+                    portfolio_item_id,
+                    consumption_per_piece, consumption_unit, scrap_allowance, note
+                FROM portfolio_technology_template_materials
+                """
+            )
+        )
+        conn.execute(text("DROP TABLE portfolio_technology_template_materials"))
+        conn.execute(
+            text("ALTER TABLE portfolio_technology_template_materials__new RENAME TO portfolio_technology_template_materials")
+        )
+        # Recreate indexes (idempotentní).
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_portfolio_technology_template_materials_template_id ON portfolio_technology_template_materials (template_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_portfolio_technology_template_materials_material_library_item_id ON portfolio_technology_template_materials (material_library_item_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_portfolio_technology_template_materials_portfolio_item_id ON portfolio_technology_template_materials (portfolio_item_id)"
+            )
+        )
 
 
 def ensure_portfolio_items_sqlite_schema(engine: Engine) -> None:
@@ -108,7 +209,9 @@ class PortfolioOperationUpdate(BaseModel):
 
 
 class PortfolioTechnologyMaterialUpsert(BaseModel):
-    material_library_item_id: int
+    input_type: str = Field(..., min_length=1)
+    material_library_item_id: int | None = None
+    portfolio_item_id: int | None = None
     consumption_per_piece: float | None = None
     consumption_unit: str | None = None
     scrap_allowance: float | None = None
@@ -116,7 +219,9 @@ class PortfolioTechnologyMaterialUpsert(BaseModel):
 
 
 class PortfolioTechnologyMaterialUpdate(BaseModel):
+    input_type: str | None = None
     material_library_item_id: int | None = None
+    portfolio_item_id: int | None = None
     consumption_per_piece: float | None = None
     consumption_unit: str | None = None
     scrap_allowance: float | None = None
@@ -233,11 +338,61 @@ def _material_to_payload(
         else:
             stock_status = "skladem"
 
+    input_type = (row.input_type or "").strip() or "material"
     return {
         "id": row.id,
+        "input_type": input_type,
         "material_library_item_id": row.material_library_item_id,
         "material_name": row.material_library_item.name if row.material_library_item else "",
         "material_code": row.material_library_item.code if row.material_library_item else None,
+        "portfolio_item_id": row.portfolio_item_id,
+        "portfolio_item_gpn": None,
+        "portfolio_item_name": None,
+        "consumption_per_piece": row.consumption_per_piece,
+        "consumption_unit": row.consumption_unit,
+        "scrap_allowance": row.scrap_allowance,
+        "note": row.note,
+        "stock_item_id": stock_row.id if stock_row else None,
+        "stock_location": stock_row.location if stock_row else None,
+        "stock_current_qty": stock_row.current_qty if stock_row else None,
+        "stock_min_qty": stock_row.min_qty if stock_row else None,
+        "stock_reserved_qty": stock_reserved_qty,
+        "stock_available_qty": stock_available_qty,
+        "stock_status": stock_status,
+    }
+
+
+def _product_input_to_payload(
+    row: PortfolioTechnologyTemplateMaterial,
+    stock_by_portfolio_id: dict[int, ProductStockItem] | None = None,
+) -> dict:
+    """Payload pro vstup typu product_stock (výrobek ze skladu)."""
+    p = row.portfolio_item
+    stock_row = None
+    if stock_by_portfolio_id is not None and row.portfolio_item_id is not None:
+        stock_row = stock_by_portfolio_id.get(row.portfolio_item_id)
+
+    if stock_row is None:
+        stock_status = "neni_skladova_karta"
+        stock_reserved_qty = None
+        stock_available_qty = None
+    else:
+        stock_reserved_qty = None
+        stock_available_qty = None
+        if stock_row.min_qty is not None and stock_row.current_qty < stock_row.min_qty:
+            stock_status = "pod_minimem"
+        else:
+            stock_status = "skladem"
+
+    return {
+        "id": row.id,
+        "input_type": "product_stock",
+        "material_library_item_id": row.material_library_item_id,
+        "material_name": "",
+        "material_code": None,
+        "portfolio_item_id": row.portfolio_item_id,
+        "portfolio_item_gpn": p.gpn if p else None,
+        "portfolio_item_name": p.name if p else None,
         "consumption_per_piece": row.consumption_per_piece,
         "consumption_unit": row.consumption_unit,
         "scrap_allowance": row.scrap_allowance,
@@ -717,11 +872,26 @@ def get_portfolio_item_technology_material(item_id: int, db: Session = Depends(g
     materials = db.scalars(
         select(PortfolioTechnologyTemplateMaterial)
         .where(PortfolioTechnologyTemplateMaterial.template_id == template.id)
-        .options(selectinload(PortfolioTechnologyTemplateMaterial.material_library_item))
+        .options(
+            selectinload(PortfolioTechnologyTemplateMaterial.material_library_item),
+            selectinload(PortfolioTechnologyTemplateMaterial.portfolio_item),
+        )
         .order_by(PortfolioTechnologyTemplateMaterial.id.asc())
     ).all()
 
-    material_ids = sorted({m.material_library_item_id for m in materials})
+    # Legacy řádky bez input_type bereme jako "material".
+    material_rows = [
+        m
+        for m in materials
+        if ((m.input_type or "").strip() or "material") == "material"
+    ]
+    product_rows = [
+        m
+        for m in materials
+        if ((m.input_type or "").strip()) == "product_stock"
+    ]
+
+    material_ids = sorted({m.material_library_item_id for m in material_rows if m.material_library_item_id is not None})
     stock_rows = db.scalars(
         select(MaterialStockItem)
         .where(MaterialStockItem.material_library_item_id.in_(material_ids))
@@ -748,9 +918,31 @@ def get_portfolio_item_technology_material(item_id: int, db: Session = Depends(g
         ).all()
         reserved_by_stock_id = {int(sid): float(total) for sid, total in sums}
 
+    portfolio_ids = sorted({m.portfolio_item_id for m in product_rows if m.portfolio_item_id is not None})
+    product_stock_rows = (
+        db.scalars(
+            select(ProductStockItem)
+            .where(ProductStockItem.portfolio_item_id.in_(portfolio_ids))
+            .order_by(ProductStockItem.portfolio_item_id.asc(), ProductStockItem.id.asc())
+        ).all()
+        if portfolio_ids
+        else []
+    )
+    stock_by_portfolio_id: dict[int, ProductStockItem] = {}
+    for s in product_stock_rows:
+        if s.portfolio_item_id not in stock_by_portfolio_id:
+            stock_by_portfolio_id[s.portfolio_item_id] = s
+
     return {
         "template_id": template.id,
-        "materials": [_material_to_payload(row, stock_by_material_id, reserved_by_stock_id) for row in materials],
+        "materials": [
+            (
+                _material_to_payload(row, stock_by_material_id, reserved_by_stock_id)
+                if ((row.input_type or "").strip() or "material") == "material"
+                else _product_input_to_payload(row, stock_by_portfolio_id)
+            )
+            for row in materials
+        ],
     }
 
 
@@ -764,13 +956,34 @@ def create_template_technology_material(
     if not template:
         raise HTTPException(status_code=404, detail="Technology template not found")
 
-    material = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == payload.material_library_item_id))
-    if not material:
-        raise HTTPException(status_code=404, detail="Material library item not found")
+    input_type = (payload.input_type or "").strip().lower()
+    if input_type not in {"material", "product_stock"}:
+        raise HTTPException(status_code=422, detail="input_type must be: material / product_stock")
+
+    material_id = payload.material_library_item_id
+    portfolio_item_id = payload.portfolio_item_id
+    if input_type == "material":
+        if material_id is None:
+            raise HTTPException(status_code=422, detail="material_library_item_id je povinné pro typ vstupu materiál")
+        material = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == material_id))
+        if not material:
+            raise HTTPException(status_code=404, detail="Material library item not found")
+        portfolio_item_id = None
+    else:
+        if portfolio_item_id is None:
+            raise HTTPException(status_code=422, detail="portfolio_item_id je povinné pro typ vstupu výrobek ze skladu")
+        pitem = db.scalar(select(PortfolioItem).where(PortfolioItem.id == portfolio_item_id))
+        if not pitem:
+            raise HTTPException(status_code=404, detail="Portfolio item not found")
+        if (pitem.logistic_mode or "").strip() != "sklad_zakaznik":
+            raise HTTPException(status_code=422, detail="Pro výrobek ze skladu lze vybrat jen položky s režimem sklad_zakaznik")
+        material_id = None
 
     row = PortfolioTechnologyTemplateMaterial(
         template_id=template_id,
-        material_library_item_id=payload.material_library_item_id,
+        input_type=input_type,
+        material_library_item_id=material_id,
+        portfolio_item_id=portfolio_item_id,
         consumption_per_piece=payload.consumption_per_piece,
         consumption_unit=payload.consumption_unit,
         scrap_allowance=payload.scrap_allowance,
@@ -783,9 +996,14 @@ def create_template_technology_material(
     row = db.scalar(
         select(PortfolioTechnologyTemplateMaterial)
         .where(PortfolioTechnologyTemplateMaterial.id == row.id)
-        .options(selectinload(PortfolioTechnologyTemplateMaterial.material_library_item))
+        .options(
+            selectinload(PortfolioTechnologyTemplateMaterial.material_library_item),
+            selectinload(PortfolioTechnologyTemplateMaterial.portfolio_item),
+        )
     )
-    return _material_to_payload(row)
+    if ((row.input_type or "").strip() or "material") == "material":
+        return _material_to_payload(row)
+    return _product_input_to_payload(row)
 
 
 @router.put("/technology-material/{material_id}")
@@ -802,14 +1020,43 @@ def update_template_technology_material(
 
     data = payload.model_dump(exclude_unset=True)
 
+    # Determine target input_type for validation.
+    target_input_type = (row.input_type or "").strip() or "material"
+    if "input_type" in data and data["input_type"] is not None:
+        t = str(data["input_type"]).strip().lower()
+        if t not in {"material", "product_stock"}:
+            raise HTTPException(status_code=422, detail="input_type must be: material / product_stock")
+        target_input_type = t
+
     if "material_library_item_id" in data:
         mid = data["material_library_item_id"]
-        if mid is None:
-            raise HTTPException(status_code=422, detail="material_library_item_id cannot be null")
-        material = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == mid))
-        if not material:
-            raise HTTPException(status_code=404, detail="Material library item not found")
-        row.material_library_item_id = mid
+        if target_input_type == "material":
+            if mid is None:
+                raise HTTPException(status_code=422, detail="material_library_item_id je povinné pro typ vstupu materiál")
+            material = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == mid))
+            if not material:
+                raise HTTPException(status_code=404, detail="Material library item not found")
+            row.material_library_item_id = mid
+        else:
+            # product_stock: ignorujeme / vynulujeme materiál
+            row.material_library_item_id = None
+
+    if "portfolio_item_id" in data:
+        pid = data["portfolio_item_id"]
+        if target_input_type == "product_stock":
+            if pid is None:
+                raise HTTPException(status_code=422, detail="portfolio_item_id je povinné pro typ vstupu výrobek ze skladu")
+            pitem = db.scalar(select(PortfolioItem).where(PortfolioItem.id == pid))
+            if not pitem:
+                raise HTTPException(status_code=404, detail="Portfolio item not found")
+            if (pitem.logistic_mode or "").strip() != "sklad_zakaznik":
+                raise HTTPException(status_code=422, detail="Pro výrobek ze skladu lze vybrat jen položky s režimem sklad_zakaznik")
+            row.portfolio_item_id = pid
+        else:
+            row.portfolio_item_id = None
+
+    # Apply input_type last (after we potentially nulled incompatible fields).
+    row.input_type = target_input_type
 
     if "consumption_per_piece" in data:
         row.consumption_per_piece = data["consumption_per_piece"]
@@ -825,9 +1072,14 @@ def update_template_technology_material(
     row = db.scalar(
         select(PortfolioTechnologyTemplateMaterial)
         .where(PortfolioTechnologyTemplateMaterial.id == row.id)
-        .options(selectinload(PortfolioTechnologyTemplateMaterial.material_library_item))
+        .options(
+            selectinload(PortfolioTechnologyTemplateMaterial.material_library_item),
+            selectinload(PortfolioTechnologyTemplateMaterial.portfolio_item),
+        )
     )
-    return _material_to_payload(row)
+    if ((row.input_type or "").strip() or "material") == "material":
+        return _material_to_payload(row)
+    return _product_input_to_payload(row)
 
 
 @router.delete("/technology-material/{material_id}")

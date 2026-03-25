@@ -10,6 +10,7 @@ from app.models.base import Base
 if TYPE_CHECKING:
     from app.models.material_library import MaterialLibraryItem
     from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
+    from app.models.product_stock import ProductStockItem
 
 
 class PortfolioGroup(Base):
@@ -44,6 +45,11 @@ class PortfolioItem(Base):
     group: Mapped["PortfolioGroup | None"] = relationship("PortfolioGroup", back_populates="items")
     technology_templates: Mapped[list["PortfolioTechnologyTemplate"]] = relationship(
         "PortfolioTechnologyTemplate",
+        back_populates="portfolio_item",
+        cascade="all, delete-orphan",
+    )
+    product_stock_items: Mapped[list["ProductStockItem"]] = relationship(
+        "ProductStockItem",
         back_populates="portfolio_item",
         cascade="all, delete-orphan",
     )
@@ -109,7 +115,14 @@ class PortfolioTechnologyTemplateMaterial(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     template_id: Mapped[int] = mapped_column(ForeignKey("portfolio_technology_templates.id"), index=True, nullable=False)
-    material_library_item_id: Mapped[int] = mapped_column(ForeignKey("material_library_items.id"), index=True, nullable=False)
+    # Obecný vstup TP: defaultně materiál (legacy), nově i výrobek ze skladu.
+    input_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    material_library_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("material_library_items.id"),
+        index=True,
+        nullable=True,
+    )
+    portfolio_item_id: Mapped[int | None] = mapped_column(ForeignKey("portfolio_items.id"), index=True, nullable=True)
     consumption_per_piece: Mapped[float | None] = mapped_column(Float, nullable=True)
     consumption_unit: Mapped[str | None] = mapped_column(String(120), nullable=True)
     scrap_allowance: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -119,5 +132,6 @@ class PortfolioTechnologyTemplateMaterial(Base):
         "PortfolioTechnologyTemplate",
         back_populates="materials",
     )
-    material_library_item: Mapped["MaterialLibraryItem"] = relationship("MaterialLibraryItem")
+    material_library_item: Mapped["MaterialLibraryItem | None"] = relationship("MaterialLibraryItem")
+    portfolio_item: Mapped["PortfolioItem | None"] = relationship("PortfolioItem")
 

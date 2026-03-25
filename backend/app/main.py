@@ -28,8 +28,11 @@ from app.api.material_library import (
     seed_material_groups,
 )
 from app.api.material_stock import ensure_material_stock_sqlite_schema, router as material_stock_router
+from app.api.product_stock import ensure_product_stock_sqlite_schema, router as product_stock_router
+from app.api.storage_location import ensure_storage_locations_sqlite_schema, router as storage_location_router
 from app.api.portfolio import (
     ensure_portfolio_items_sqlite_schema,
+    ensure_portfolio_technology_material_inputs_sqlite_schema,
     ensure_portfolio_technology_operation_library_fks,
     router as portfolio_router,
 )
@@ -48,6 +51,8 @@ from app.models.portfolio import (
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
 from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
+from app.models.product_stock import ProductStockItem, ProductStockMovement
+from app.models.storage_location import StorageLocation
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
 
 app.add_middleware(
@@ -66,7 +71,10 @@ def startup():
     ensure_customers_sqlite_schema(engine)
     ensure_material_library_sqlite_schema(engine)
     ensure_material_stock_sqlite_schema(engine)
+    ensure_product_stock_sqlite_schema(engine)
+    ensure_storage_locations_sqlite_schema(engine)
     ensure_portfolio_technology_operation_library_fks(engine)
+    ensure_portfolio_technology_material_inputs_sqlite_schema(engine)
     ensure_portfolio_items_sqlite_schema(engine)
     db = SessionLocal()
     try:
@@ -80,6 +88,8 @@ app.include_router(master_data_router, prefix="/master-data", tags=["master-data
 app.include_router(master_libraries_router, prefix="/libraries", tags=["libraries"])
 app.include_router(material_library_router, prefix="/materials", tags=["materials"])
 app.include_router(material_stock_router, prefix="/material-stock", tags=["material-stock"])
+app.include_router(product_stock_router, prefix="/product-stock", tags=["product-stock"])
+app.include_router(storage_location_router, prefix="/storage-locations", tags=["storage-locations"])
 app.include_router(orders_router, prefix="/orders", tags=["orders"])
 app.include_router(orders_overview_router, tags=["orders-overview"])
 app.include_router(order_detail_router, tags=["order-detail"])

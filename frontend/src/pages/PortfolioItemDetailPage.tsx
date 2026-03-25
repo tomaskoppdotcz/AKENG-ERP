@@ -14,6 +14,7 @@ import {
   deletePortfolioTechnologyMaterial,
   deletePortfolioTechnologyOperation,
   getPortfolioTechnologyMaterials,
+  getPortfolioItems,
   getPortfolioItemTechnology,
   reorderPortfolioTechnologyOperations,
   updatePortfolioTechnologyMaterial,
@@ -78,6 +79,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   const [showAddMaterialForm, setShowAddMaterialForm] = useState(false);
   const [isMaterialEditMode, setIsMaterialEditMode] = useState(false);
   const [editingMaterialId, setEditingMaterialId] = useState<number | null>(null);
+  const [tpInputType, setTpInputType] = useState<"material" | "product_stock">("material");
+  const [portfolioInputItemId, setPortfolioInputItemId] = useState<number | null>(null);
+  const [portfolioInputs, setPortfolioInputs] = useState<PortfolioItem[]>([]);
   const [materialLibraryItems, setMaterialLibraryItems] = useState<MaterialLibraryItem[]>([]);
   const [materialLibraryLoading, setMaterialLibraryLoading] = useState(false);
   const [materialLibraryError, setMaterialLibraryError] = useState<string | null>(null);
@@ -209,6 +213,22 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   }, [activeTab]);
 
   useEffect(() => {
+    if (activeTab !== "Technologický postup") return;
+    let cancelled = false;
+    getPortfolioItems()
+      .then((rows) => {
+        if (cancelled) return;
+        setPortfolioInputs(rows.filter((p) => p.logistic_mode === "sklad_zakaznik"));
+      })
+      .catch(() => {
+        if (!cancelled) setPortfolioInputs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
     if (!showAddOperationForm) return;
     let cancelled = false;
     setLibrariesLoading(true);
@@ -275,7 +295,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   function resetMaterialForm() {
     setIsMaterialEditMode(false);
     setEditingMaterialId(null);
+    setTpInputType("material");
     setMaterialLibraryId(null);
+    setPortfolioInputItemId(null);
     setConsumptionPerPiece("");
     setConsumptionUnit("");
     setScrapAllowance("");
@@ -439,7 +461,10 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   function startEditMaterial(row: PortfolioTechnologyMaterial) {
     setIsMaterialEditMode(true);
     setEditingMaterialId(row.id);
-    setMaterialLibraryId(row.material_library_item_id);
+    const t = row.input_type === "product_stock" ? "product_stock" : "material";
+    setTpInputType(t);
+    setMaterialLibraryId(row.material_library_item_id ?? null);
+    setPortfolioInputItemId(row.portfolio_item_id ?? null);
     setConsumptionPerPiece(row.consumption_per_piece == null ? "" : String(row.consumption_per_piece));
     setConsumptionUnit(row.consumption_unit ?? "");
     setScrapAllowance(row.scrap_allowance == null ? "" : String(row.scrap_allowance));
@@ -449,17 +474,23 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
 
   async function saveMaterial() {
     if (!templateId) return;
-    if (materialLibraryId == null) {
+    const payload = {
+      input_type: tpInputType,
+      material_library_item_id: tpInputType === "material" ? materialLibraryId : null,
+      portfolio_item_id: tpInputType === "product_stock" ? portfolioInputItemId : null,
+      consumption_per_piece: toNumberOrNull(consumptionPerPiece),
+      consumption_unit: consumptionUnit.trim() || null,
+      scrap_allowance: tpInputType === "material" ? toNumberOrNull(scrapAllowance) : null,
+      note: materialNote.trim() || null,
+    };
+    if (tpInputType === "material" && materialLibraryId == null) {
       setMaterialsError("Vyberte materiál z knihovny.");
       return;
     }
-    const payload = {
-      material_library_item_id: materialLibraryId,
-      consumption_per_piece: toNumberOrNull(consumptionPerPiece),
-      consumption_unit: consumptionUnit.trim() || null,
-      scrap_allowance: toNumberOrNull(scrapAllowance),
-      note: materialNote.trim() || null,
-    };
+    if (tpInputType === "product_stock" && portfolioInputItemId == null) {
+      setMaterialsError("Vyberte portfolio položku.");
+      return;
+    }
     try {
       if (isMaterialEditMode && editingMaterialId != null) {
         await updatePortfolioTechnologyMaterial(editingMaterialId, payload);
@@ -810,8 +841,8 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
             )}
           </div>
           <div style={{ ...UI.card, borderRadius: 14, padding: 16, marginTop: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
-              <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>Materiál pro technologický postup</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
+              <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>Vstupy pro technologický postup</div>
               {!showAddMaterialForm ? (
                 <button
                   type="button"
@@ -821,7 +852,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                     setShowAddMaterialForm(true);
                   }}
                 >
-                  Přidat materiál
+                  Přidat vstup
                 </button>
               ) : null}
             </div>
@@ -845,21 +876,51 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                 ) : null}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", rowGap: 16, columnGap: 12 }}>
                   <div style={{ gridColumn: "1 / -1" }}>
-                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Materiál</div>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Typ vstupu</div>
                     <select
-                      value={materialLibraryId == null ? "" : String(materialLibraryId)}
-                      onChange={(e) => setMaterialLibraryId(e.target.value ? Number(e.target.value) : null)}
+                      value={tpInputType}
+                      onChange={(e) => setTpInputType(e.target.value as "material" | "product_stock")}
                       style={{ ...UI.inputs.base, width: "100%", minHeight: 42 }}
-                      disabled={materialLibraryLoading}
                     >
-                      <option value="">Vyberte materiál</option>
-                      {activeMaterialLibrary.map((m) => (
+                      <option value="material">Materiál</option>
+                      <option value="product_stock">Výrobek ze skladu</option>
+                    </select>
+                  </div>
+
+                  {tpInputType === "material" ? (
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Materiál</div>
+                      <select
+                        value={materialLibraryId == null ? "" : String(materialLibraryId)}
+                        onChange={(e) => setMaterialLibraryId(e.target.value ? Number(e.target.value) : null)}
+                        style={{ ...UI.inputs.base, width: "100%", minHeight: 42 }}
+                        disabled={materialLibraryLoading}
+                      >
+                        <option value="">Vyberte materiál</option>
+                        {activeMaterialLibrary.map((m) => (
                           <option key={m.id} value={String(m.id)}>
                             {formatMaterialOptionLabel(m)}
                           </option>
                         ))}
-                    </select>
-                  </div>
+                      </select>
+                    </div>
+                  ) : (
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Portfolio položka</div>
+                      <select
+                        value={portfolioInputItemId == null ? "" : String(portfolioInputItemId)}
+                        onChange={(e) => setPortfolioInputItemId(e.target.value ? Number(e.target.value) : null)}
+                        style={{ ...UI.inputs.base, width: "100%", minHeight: 42 }}
+                      >
+                        <option value="">Vyberte položku</option>
+                        {portfolioInputs.map((p) => (
+                          <option key={p.id} value={String(p.id)}>
+                            {p.gpn} — {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   <div>
                     <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Spotřeba / ks</div>
@@ -869,10 +930,12 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                     <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Jednotka spotřeby</div>
                     <input value={consumptionUnit} onChange={(e) => setConsumptionUnit(e.target.value)} style={UI.inputs.base} />
                   </div>
-                  <div>
-                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Prořez / odpad</div>
-                    <input value={scrapAllowance} onChange={(e) => setScrapAllowance(e.target.value)} style={UI.inputs.base} />
-                  </div>
+                  {tpInputType === "material" ? (
+                    <div>
+                      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Prořez / odpad</div>
+                      <input value={scrapAllowance} onChange={(e) => setScrapAllowance(e.target.value)} style={UI.inputs.base} />
+                    </div>
+                  ) : null}
 
                   <div style={{ gridColumn: "1 / -1" }}>
                     <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Poznámka</div>
@@ -884,7 +947,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                       Zrušit
                     </button>
                     <button type="button" style={{ ...UI.buttons.primary, minHeight: 40 }} onClick={saveMaterial}>
-                      {isMaterialEditMode ? "Uložit změny" : "Uložit materiál"}
+                      {isMaterialEditMode ? "Uložit změny" : "Uložit vstup"}
                     </button>
                   </div>
                 </div>
@@ -906,13 +969,13 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                   alignItems: "flex-start",
                 }}
               >
-                <div style={UI.sectionSubtitle}>Zatím nejsou definovány žádné materiály.</div>
+                <div style={UI.sectionSubtitle}>Zatím nejsou definovány žádné vstupy.</div>
                 <button
                   type="button"
                   style={UI.buttons.primary}
                   onClick={() => setShowAddMaterialForm(true)}
                 >
-                  Přidat první materiál
+                  Přidat první vstup
                 </button>
               </div>
             ) : (
@@ -920,7 +983,18 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                 <table style={UI.table}>
                   <thead>
                     <tr style={{ background: "#f8fafc" }}>
-                      {["Materiál", "Kód", "Rozměr", "Lokace", "Skladem", "Stav skladu", "Spotřeba / ks", "Jednotka", "Prořez / odpad", "Poznámka", "Akce"].map((h) => (
+                      {[
+                        "Typ vstupu",
+                        "Položka",
+                        "Kód / GPN",
+                        "Spotřeba / ks",
+                        "Jednotka",
+                        "Prořez / odpad",
+                        "Lokace",
+                        "Skladem",
+                        "Stav skladu",
+                        "Akce",
+                      ].map((h) => (
                         <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                           {h}
                         </th>
@@ -930,18 +1004,21 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                   <tbody>
                     {materials.map((row) => (
                       <tr key={row.id}>
-                        <td style={{ ...UI.td, padding: "10px 10px" }}>{row.material_name}</td>
-                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_code || "—"}</td>
-                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                          {materialById.get(row.material_library_item_id)?.dimension || "—"}
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                          {row.input_type === "product_stock" ? "Výrobek ze skladu" : "Materiál"}
                         </td>
-                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.stock_location || "—"}</td>
-                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.stock_current_qty ?? "—"}</td>
-                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{stockStatusLabel(row.stock_status)}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px" }}>
+                          {row.input_type === "product_stock" ? (row.portfolio_item_name || "—") : row.material_name}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.input_type === "product_stock" ? (row.portfolio_item_gpn || "—") : (row.material_code || "—")}
+                        </td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.consumption_per_piece ?? "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.consumption_unit || "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.scrap_allowance ?? "—"}</td>
-                        <td style={{ ...UI.td, padding: "10px 10px" }}>{row.note || "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.stock_location || "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.stock_current_qty ?? "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{stockStatusLabel(row.stock_status)}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <button type="button" style={UI.buttons.secondary} onClick={() => startEditMaterial(row)}>
                             Upravit
