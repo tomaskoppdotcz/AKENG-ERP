@@ -4,13 +4,15 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.orders import CustomerOrder, Job, JobItem
+from app.models.portfolio import PortfolioItem
 
 router = APIRouter()
 
 
-def _job_items_have_price_column(db: Session) -> bool:
+def _job_items_have_portfolio_fk(db: Session) -> bool:
   rows = db.execute(text("PRAGMA table_info(job_items)")).fetchall()
-  return any(row[1] == "sales_price_per_unit" for row in rows)
+  cols = {row[1] for row in rows}
+  return "portfolio_item_id" in cols
 
 
 @router.get("/orders-overview/list")
@@ -38,17 +40,37 @@ def get_orders_overview(db: Session = Depends(get_db)):
   for it in items:
     items_by_job.setdefault(it.job_id, []).append(it)
 
-  have_price = _job_items_have_price_column(db)
+  have_portfolio = _job_items_have_portfolio_fk(db)
 
-  price_by_job: dict[int, float] = {}
-  if have_price:
-    rows = db.execute(
-      text(
-        "SELECT job_id, SUM(COALESCE(qty,0) * COALESCE(sales_price_per_unit,0)) "
-        "FROM job_items GROUP BY job_id"
-      )
+  portfolio_id_by_item: dict[int, int | None] = {}
+  if have_portfolio and job_ids:
+    in_list = ",".join(str(int(j)) for j in job_ids)
+    raw_pf = db.execute(
+      text(f"SELECT id, portfolio_item_id FROM job_items WHERE job_id IN ({in_list})")
     ).fetchall()
-    price_by_job = {int(r[0]): float(r[1] or 0) for r in rows}
+    portfolio_id_by_item = {int(r[0]): r[1] for r in raw_pf}
+
+  portfolio_sale_price_by_id: dict[int, float | None] = {}
+  if portfolio_id_by_item:
+    pids = {int(pid) for pid in portfolio_id_by_item.values() if pid is not None}
+    if pids:
+      p_rows = db.scalars(select(PortfolioItem).where(PortfolioItem.id.in_(pids))).all()
+      portfolio_sale_price_by_id = {
+        int(p.id): (float(p.sale_price_per_piece) if p.sale_price_per_piece is not None else None)
+        for p in p_rows
+      }
+
+  def portfolio_sales_total_for_job(job_items: list[JobItem]) -> float:
+    total = 0.0
+    for it in job_items:
+      pid = portfolio_id_by_item.get(it.id)
+      if pid is None:
+        continue
+      spp = portfolio_sale_price_by_id.get(int(pid))
+      if spp is None:
+        continue
+      total += float(spp) * int(it.qty or 0)
+    return total
 
   result = []
 
@@ -63,7 +85,8 @@ def get_orders_overview(db: Session = Depends(get_db)):
 
     vykresy = len(job_items)
     kusy_celkem = sum(int(it.qty or 0) for it in job_items)
-    prodejni_cena = price_by_job.get(job.id, 0.0)
+    # Stejná logika jako order-detail summary.total_sales_price (portfolio sale_price_per_piece)
+    prodejni_cena = portfolio_sales_total_for_job(job_items)
 
     result.append(
       {
