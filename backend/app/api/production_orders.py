@@ -1,0 +1,438 @@
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
+from app.models.material_library import MaterialLibraryItem
+from app.core.scan_code import production_order_operation_scan_code_for_id
+from app.models.orders import (
+    CustomerOrder,
+    Job,
+    JobItem,
+    ProductionOrder,
+    ProductionOrderOperation,
+    ProductionOrderOperationLog,
+)
+from app.models.portfolio import (
+    PortfolioItem,
+    PortfolioTechnologyTemplate,
+    PortfolioTechnologyTemplateMaterial,
+    PortfolioTechnologyTemplateOperation,
+)
+
+router = APIRouter()
+
+class OperationReportPayload(BaseModel):
+    ok_qty: int = Field(ge=0)
+    nok_qty: int = Field(ge=0)
+    reported_minutes: int = Field(ge=0)
+    note: str | None = None
+
+
+def _job_item_optional_map(db: Session, item_ids: list[int]) -> tuple[dict[int, str | None], dict[int, int | None]]:
+    if not item_ids:
+        return ({}, {})
+    cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
+    has_desc = "description" in cols
+    has_portfolio = "portfolio_item_id" in cols
+    if not has_desc and not has_portfolio:
+        return ({}, {})
+    desc_map: dict[int, str | None] = {}
+    portfolio_map: dict[int, int | None] = {}
+    for iid in item_ids:
+        sel = []
+        if has_desc:
+            sel.append("description")
+        if has_portfolio:
+            sel.append("portfolio_item_id")
+        row = db.execute(
+            text("SELECT " + ", ".join(sel) + " FROM job_items WHERE id = :id"),
+            {"id": int(iid)},
+        ).fetchone()
+        if not row:
+            continue
+        idx = 0
+        if has_desc:
+            desc_map[int(iid)] = row[idx]
+            idx += 1
+        if has_portfolio:
+            portfolio_map[int(iid)] = row[idx]
+    return (desc_map, portfolio_map)
+
+
+def _operation_statuses_for_po(
+    db: Session, production_order_id: int, operation_nos: list[int]
+) -> tuple[dict[int, dict], bool, bool]:
+    logs = db.scalars(
+        select(ProductionOrderOperationLog)
+        .where(ProductionOrderOperationLog.production_order_id == int(production_order_id))
+        .order_by(ProductionOrderOperationLog.created_at.asc(), ProductionOrderOperationLog.id.asc())
+    ).all()
+    by_op: dict[int, dict] = {
+        int(no): {
+            "operation_status": "planned",
+            "started_at": None,
+            "last_reported_at": None,
+            "reported_ok_qty_total": 0,
+            "reported_nok_qty_total": 0,
+            "reported_minutes_total": 0,
+        }
+        for no in operation_nos
+    }
+    any_activity = False
+    for log in logs:
+        no = int(log.operation_no)
+        if no not in by_op:
+            continue
+        entry = by_op[no]
+        any_activity = True
+        if log.event_type == "start":
+            if entry["started_at"] is None:
+                entry["started_at"] = log.created_at.isoformat() if log.created_at else None
+            if entry["operation_status"] == "planned":
+                entry["operation_status"] = "in_progress"
+        elif log.event_type == "report":
+            entry["reported_ok_qty_total"] += int(log.ok_qty or 0)
+            entry["reported_nok_qty_total"] += int(log.nok_qty or 0)
+            entry["reported_minutes_total"] += int(log.reported_minutes or 0)
+            entry["last_reported_at"] = log.created_at.isoformat() if log.created_at else None
+            entry["operation_status"] = "done"
+    all_done = bool(by_op) and all(v["operation_status"] == "done" for v in by_op.values())
+    return (by_op, any_activity, all_done)
+
+
+def _recompute_and_set_po_status(db: Session, po: ProductionOrder, operation_nos: list[int]) -> str:
+    _, any_activity, all_done = _operation_statuses_for_po(db, int(po.id), operation_nos)
+    if all_done:
+        po.status = "done"
+    elif any_activity:
+        po.status = "in_progress"
+    elif not po.status:
+        po.status = "planned"
+    return str(po.status or "planned")
+
+
+def _operation_nos_for_po(db: Session, po: ProductionOrder) -> list[int]:
+    mapped_rows = db.scalars(
+        select(ProductionOrderOperation)
+        .where(ProductionOrderOperation.production_order_id == int(po.id))
+        .order_by(ProductionOrderOperation.operation_no.asc(), ProductionOrderOperation.id.asc())
+    ).all()
+    if mapped_rows:
+        return [int(r.operation_no) for r in mapped_rows]
+    portfolio_item_id = int(po.portfolio_item_id) if po.portfolio_item_id is not None else None
+    if portfolio_item_id is None:
+        return []
+    tpl = db.scalars(
+        select(PortfolioTechnologyTemplate)
+        .where(
+            PortfolioTechnologyTemplate.portfolio_item_id == portfolio_item_id,
+            PortfolioTechnologyTemplate.is_active.is_(True),
+        )
+        .order_by(PortfolioTechnologyTemplate.id.asc())
+    ).first()
+    if tpl is None:
+        tpl = db.scalars(
+            select(PortfolioTechnologyTemplate)
+            .where(PortfolioTechnologyTemplate.portfolio_item_id == portfolio_item_id)
+            .order_by(PortfolioTechnologyTemplate.id.asc())
+        ).first()
+    if tpl is None:
+        return []
+    op_rows = db.scalars(
+        select(PortfolioTechnologyTemplateOperation)
+        .where(PortfolioTechnologyTemplateOperation.template_id == int(tpl.id))
+        .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc())
+    ).all()
+    return [int(r.operation_no) for r in op_rows]
+
+
+def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
+    operation_nos = _operation_nos_for_po(db, po)
+    if not operation_nos:
+        return
+    portfolio_item_id = int(po.portfolio_item_id) if po.portfolio_item_id is not None else None
+    if portfolio_item_id is None:
+        return
+    tpl = db.scalars(
+        select(PortfolioTechnologyTemplate)
+        .where(
+            PortfolioTechnologyTemplate.portfolio_item_id == portfolio_item_id,
+            PortfolioTechnologyTemplate.is_active.is_(True),
+        )
+        .order_by(PortfolioTechnologyTemplate.id.asc())
+    ).first()
+    if tpl is None:
+        tpl = db.scalars(
+            select(PortfolioTechnologyTemplate)
+            .where(PortfolioTechnologyTemplate.portfolio_item_id == portfolio_item_id)
+            .order_by(PortfolioTechnologyTemplate.id.asc())
+        ).first()
+    if tpl is None:
+        return
+    tpl_ops = db.scalars(
+        select(PortfolioTechnologyTemplateOperation)
+        .where(PortfolioTechnologyTemplateOperation.template_id == int(tpl.id))
+        .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc(), PortfolioTechnologyTemplateOperation.id.asc())
+    ).all()
+    for op in tpl_ops:
+        ex = db.scalar(
+            select(ProductionOrderOperation).where(
+                ProductionOrderOperation.production_order_id == int(po.id),
+                ProductionOrderOperation.operation_no == int(op.operation_no),
+            )
+        )
+        if ex is None:
+            row = ProductionOrderOperation(
+                production_order_id=int(po.id),
+                operation_no=int(op.operation_no),
+                operation_name=op.operation_name,
+                workplace_name=op.workplace,
+            )
+            db.add(row)
+            db.flush()
+            row.scan_code = production_order_operation_scan_code_for_id(int(row.id))
+
+
+@router.get("")
+def list_production_orders(db: Session = Depends(get_db)):
+    rows = db.scalars(select(ProductionOrder).order_by(ProductionOrder.id.desc())).all()
+    if not rows:
+        return {"items": []}
+
+    job_item_ids = sorted({int(r.job_item_id) for r in rows if r.job_item_id is not None})
+    job_ids = sorted({int(r.job_id) for r in rows if r.job_id is not None})
+    customer_order_ids = sorted({int(r.customer_order_id) for r in rows if r.customer_order_id is not None})
+
+    job_items = db.scalars(select(JobItem).where(JobItem.id.in_(job_item_ids))).all() if job_item_ids else []
+    jobs = db.scalars(select(Job).where(Job.id.in_(job_ids))).all() if job_ids else []
+    customer_orders = (
+        db.scalars(select(CustomerOrder).where(CustomerOrder.id.in_(customer_order_ids))).all()
+        if customer_order_ids
+        else []
+    )
+    item_by_id = {int(i.id): i for i in job_items}
+    job_by_id = {int(j.id): j for j in jobs}
+    co_by_id = {int(c.id): c for c in customer_orders}
+    desc_map, _ = _job_item_optional_map(db, job_item_ids)
+
+    out: list[dict] = []
+    for po in rows:
+        ji = item_by_id.get(int(po.job_item_id)) if po.job_item_id is not None else None
+        job = job_by_id.get(int(po.job_id)) if po.job_id is not None else None
+        co = co_by_id.get(int(po.customer_order_id)) if po.customer_order_id is not None else None
+        out.append(
+            {
+                "id": int(po.id),
+                "vp_code": po.vp_code,
+                "scan_code": po.scan_code,
+                "gpn": po.gpn or (ji.gpn if ji is not None else None),
+                "description": po.description or desc_map.get(int(ji.id)) if ji is not None else po.description,
+                "quantity": int(po.quantity or 0),
+                "logistic_mode": po.logistic_mode,
+                "source_type": po.source_type,
+                "status": po.status,
+                "zakazka": job.zak_code if job is not None else None,
+                "line_no": int(ji.line_no) if ji is not None and ji.line_no is not None else None,
+                "due_date": ji.due_date.isoformat() if ji is not None and ji.due_date is not None else None,
+                "order_type": str(getattr(co, "order_type", "customer") or "customer"),
+            }
+        )
+    return {"items": out}
+
+
+@router.get("/{production_order_id}")
+def get_production_order_detail(production_order_id: int, db: Session = Depends(get_db)):
+    po = db.get(ProductionOrder, production_order_id)
+    if po is None:
+        raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    _ensure_operation_scan_rows(db, po)
+    db.flush()
+
+    ji = db.get(JobItem, po.job_item_id) if po.job_item_id is not None else None
+    job = db.get(Job, po.job_id) if po.job_id is not None else None
+    co = db.get(CustomerOrder, po.customer_order_id) if po.customer_order_id is not None else None
+
+    desc_map, portfolio_map = _job_item_optional_map(db, [int(ji.id)] if ji is not None else [])
+    portfolio_item_id = int(po.portfolio_item_id) if po.portfolio_item_id is not None else portfolio_map.get(int(ji.id)) if ji is not None else None
+    portfolio = db.get(PortfolioItem, int(portfolio_item_id)) if portfolio_item_id is not None else None
+
+    tp_template = None
+    if portfolio is not None:
+        tp_template = db.scalars(
+            select(PortfolioTechnologyTemplate)
+            .where(
+                PortfolioTechnologyTemplate.portfolio_item_id == int(portfolio.id),
+                PortfolioTechnologyTemplate.is_active.is_(True),
+            )
+            .order_by(PortfolioTechnologyTemplate.id.asc())
+        ).first()
+        if tp_template is None:
+            tp_template = db.scalars(
+                select(PortfolioTechnologyTemplate)
+                .where(PortfolioTechnologyTemplate.portfolio_item_id == int(portfolio.id))
+                .order_by(PortfolioTechnologyTemplate.id.asc())
+            ).first()
+
+    operations: list[dict] = []
+    inputs: list[dict] = []
+    operation_nos: list[int] = []
+    op_scan_rows = db.scalars(
+        select(ProductionOrderOperation)
+        .where(ProductionOrderOperation.production_order_id == int(po.id))
+        .order_by(ProductionOrderOperation.operation_no.asc(), ProductionOrderOperation.id.asc())
+    ).all()
+    op_scan_by_no = {int(r.operation_no): r for r in op_scan_rows}
+
+    if tp_template is not None:
+        op_rows = db.scalars(
+            select(PortfolioTechnologyTemplateOperation)
+            .where(PortfolioTechnologyTemplateOperation.template_id == int(tp_template.id))
+            .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc(), PortfolioTechnologyTemplateOperation.id.asc())
+        ).all()
+        for op in op_rows:
+            operation_nos.append(int(op.operation_no))
+            op_lib = db.get(OperationLibraryItem, op.operation_library_item_id) if op.operation_library_item_id is not None else None
+            wp_lib = db.get(WorkplaceLibraryItem, op.workplace_library_item_id) if op.workplace_library_item_id is not None else None
+            operations.append(
+                {
+                    "id": int(op.id),
+                    "operation_no": int(op.operation_no),
+                    "operation_name": op_lib.name if op_lib is not None else op.operation_name,
+                    "workplace_name": wp_lib.name if wp_lib is not None else op.workplace,
+                    "setup_time_min": float(op.setup_min or 0),
+                    "run_min_per_piece": float(op.run_min_per_piece or 0),
+                    "control_required": bool(op.control_required),
+                    "outsourcing": bool(op.outsourcing),
+                    "note": op.note,
+                    "operation_scan_code": (
+                        op_scan_by_no[int(op.operation_no)].scan_code
+                        if int(op.operation_no) in op_scan_by_no
+                        else None
+                    ),
+                }
+            )
+
+        input_rows = db.scalars(
+            select(PortfolioTechnologyTemplateMaterial)
+            .where(PortfolioTechnologyTemplateMaterial.template_id == int(tp_template.id))
+            .order_by(PortfolioTechnologyTemplateMaterial.id.asc())
+        ).all()
+        for row in input_rows:
+            mat = db.get(MaterialLibraryItem, row.material_library_item_id) if row.material_library_item_id is not None else None
+            in_portfolio = db.get(PortfolioItem, row.portfolio_item_id) if row.portfolio_item_id is not None else None
+            inputs.append(
+                {
+                    "id": int(row.id),
+                    "input_type": (row.input_type or "material"),
+                    "material_code": mat.code if mat is not None else None,
+                    "material_name": mat.name if mat is not None else None,
+                    "portfolio_item_gpn": in_portfolio.gpn if in_portfolio is not None else None,
+                    "portfolio_item_name": in_portfolio.name if in_portfolio is not None else None,
+                    "consumption_per_piece": float(row.consumption_per_piece or 0),
+                    "consumption_unit": row.consumption_unit,
+                    "scrap_allowance": float(row.scrap_allowance or 0),
+                    "note": row.note,
+                }
+            )
+
+    op_status_by_no, any_activity, all_done = _operation_statuses_for_po(db, int(po.id), operation_nos)
+    for op in operations:
+        st = op_status_by_no.get(int(op["operation_no"]))
+        if st:
+            op.update(st)
+    if all_done:
+        po_status = "done"
+    elif any_activity:
+        po_status = "in_progress"
+    else:
+        po_status = po.status or "planned"
+
+    return {
+        "id": int(po.id),
+        "vp_code": po.vp_code,
+        "scan_code": po.scan_code,
+        "zakazka": job.zak_code if job is not None else None,
+        "order_type": str(getattr(co, "order_type", "customer") or "customer"),
+        "line_no": int(ji.line_no) if ji is not None and ji.line_no is not None else None,
+        "gpn": po.gpn or (ji.gpn if ji is not None else None),
+        "description": po.description or (desc_map.get(int(ji.id)) if ji is not None else None),
+        "portfolio_item_id": int(portfolio.id) if portfolio is not None else None,
+        "portfolio_item_name": portfolio.name if portfolio is not None else None,
+        "portfolio_item_logistic_mode": portfolio.logistic_mode if portfolio is not None else None,
+        "logistic_mode": po.logistic_mode,
+        "source_type": po.source_type,
+        "status": po_status,
+        "quantity": int(po.quantity or 0),
+        "technology_template": {
+            "id": int(tp_template.id),
+            "name": tp_template.name,
+        }
+        if tp_template is not None
+        else None,
+        "operations": operations,
+        "inputs": inputs,
+    }
+
+
+@router.post("/{production_order_id}/operations/{operation_no}/start")
+def start_production_order_operation(
+    production_order_id: int, operation_no: int, db: Session = Depends(get_db)
+):
+    po = db.get(ProductionOrder, production_order_id)
+    if po is None:
+        raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    _ensure_operation_scan_rows(db, po)
+    operation_nos = _operation_nos_for_po(db, po)
+    if operation_nos and int(operation_no) not in operation_nos:
+        raise HTTPException(status_code=422, detail="Operace pro tento VP neexistuje.")
+
+    db.add(
+        ProductionOrderOperationLog(
+            production_order_id=int(po.id),
+            operation_no=int(operation_no),
+            event_type="start",
+            created_at=datetime.utcnow(),
+        )
+    )
+
+    new_status = _recompute_and_set_po_status(db, po, operation_nos)
+    db.commit()
+    return {"status": "ok", "po_status": new_status}
+
+
+@router.post("/{production_order_id}/operations/{operation_no}/report")
+def report_production_order_operation(
+    production_order_id: int,
+    operation_no: int,
+    payload: OperationReportPayload,
+    db: Session = Depends(get_db),
+):
+    po = db.get(ProductionOrder, production_order_id)
+    if po is None:
+        raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    _ensure_operation_scan_rows(db, po)
+    operation_nos = _operation_nos_for_po(db, po)
+    if operation_nos and int(operation_no) not in operation_nos:
+        raise HTTPException(status_code=422, detail="Operace pro tento VP neexistuje.")
+
+    db.add(
+        ProductionOrderOperationLog(
+            production_order_id=int(po.id),
+            operation_no=int(operation_no),
+            event_type="report",
+            ok_qty=int(payload.ok_qty),
+            nok_qty=int(payload.nok_qty),
+            reported_minutes=int(payload.reported_minutes),
+            note=(payload.note.strip() if payload.note else None),
+            created_at=datetime.utcnow(),
+        )
+    )
+
+    new_status = _recompute_and_set_po_status(db, po, operation_nos)
+    db.commit()
+    return {"status": "ok", "po_status": new_status}

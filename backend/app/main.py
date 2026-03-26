@@ -6,7 +6,7 @@ from app.models.base import Base
 
 from app.api.master_data import router as master_data_router
 from app.api.master_libraries import ensure_master_libraries_sqlite_schema, router as master_libraries_router
-from app.api.orders import router as orders_router
+from app.api.orders import ensure_orders_sqlite_schema, router as orders_router
 from app.api.orders_overview import router as orders_overview_router
 from app.api.order_detail import router as order_detail_router
 from app.api.technology import router as technology_router
@@ -16,6 +16,8 @@ from app.api.capacity_dashboard import router as capacity_dashboard_router
 from app.api.auto_planner import router as auto_planner_router
 from app.api.shopfloor_kiosk import router as shopfloor_kiosk_router
 from app.api.production import router as production_router
+from app.api.production_orders import router as production_orders_router
+from app.api.scan_lookup import router as scan_lookup_router
 from app.api.seed import router as seed_router
 from app.api.kiosk import router as kiosk_router
 from app.api.import_orders import router as import_orders_router
@@ -40,7 +42,15 @@ from app.api.customers import ensure_customers_sqlite_schema, router as customer
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
 from app.models.kiosk import Employee, Kiosk, KioskSession, OperationEvent
-from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
+from app.models.orders import (
+    CustomerOrder,
+    Job,
+    JobItem,
+    JobItemCoverage,
+    ProductionOrder,
+    ProductionOrderOperation,
+    ProductionOrderOperationLog,
+)
 from app.models.technology_library import TechnologyTemplate, TechnologyTemplateOperation
 from app.models.portfolio import (
     PortfolioGroup,
@@ -51,7 +61,7 @@ from app.models.portfolio import (
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
 from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
-from app.models.product_stock import ProductStockItem, ProductStockMovement
+from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.storage_location import StorageLocation
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
 
@@ -68,6 +78,7 @@ app.add_middleware(
 def startup():
     Base.metadata.create_all(bind=engine)
     ensure_master_libraries_sqlite_schema(engine)
+    ensure_orders_sqlite_schema(engine)
     ensure_customers_sqlite_schema(engine)
     ensure_material_library_sqlite_schema(engine)
     ensure_material_stock_sqlite_schema(engine)
@@ -100,6 +111,8 @@ app.include_router(capacity_dashboard_router, prefix="/capacity-dashboard", tags
 app.include_router(auto_planner_router, prefix="/auto-planner", tags=["auto-planner"])
 app.include_router(shopfloor_kiosk_router, prefix="/shopfloor-kiosk", tags=["shopfloor-kiosk"])
 app.include_router(production_router, prefix="/production", tags=["production"])
+app.include_router(production_orders_router, prefix="/production-orders", tags=["production-orders"])
+app.include_router(scan_lookup_router, prefix="/scan-lookup", tags=["scan-lookup"])
 app.include_router(seed_router, prefix="/seed", tags=["seed"])
 app.include_router(kiosk_router, prefix="/kiosk", tags=["kiosk"])
 app.include_router(import_orders_router, prefix="/import", tags=["import"])

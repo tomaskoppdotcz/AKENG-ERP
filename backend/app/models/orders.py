@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Date, ForeignKey
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String
+from datetime import datetime
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
@@ -8,6 +9,7 @@ class CustomerOrder(Base):
 
     id = Column(Integer, primary_key=True)
     customer_po_no = Column(String, nullable=False)
+    scan_code = Column(String(32), nullable=True)
     customer_name = Column(String, nullable=True)
     order_date = Column(Date, nullable=True)
     order_type = Column(String, nullable=False, default="customer")
@@ -33,12 +35,14 @@ class JobItem(Base):
     job_id = Column(Integer, ForeignKey("jobs.id"))
 
     line_no = Column(Integer, nullable=False)
+    scan_code = Column(String(32), nullable=True)
     gpn = Column(String, nullable=False)
     qty = Column(Integer, nullable=False)
     due_date = Column(Date, nullable=True)
 
     job = relationship("Job", back_populates="items")
     production_orders = relationship("ProductionOrder", back_populates="job_item")
+    coverages = relationship("JobItemCoverage", back_populates="job_item")
 
 
 class ProductionOrder(Base):
@@ -46,6 +50,7 @@ class ProductionOrder(Base):
 
     id = Column(Integer, primary_key=True)
     vp_code = Column(String, nullable=False)
+    scan_code = Column(String(32), nullable=True)
     job_item_id = Column(Integer, ForeignKey("job_items.id"))
     customer_order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True)
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=True)
@@ -58,3 +63,43 @@ class ProductionOrder(Base):
     status = Column(String, nullable=True)
 
     job_item = relationship("JobItem", back_populates="production_orders")
+
+
+class JobItemCoverage(Base):
+    __tablename__ = "job_item_coverages"
+
+    id = Column(Integer, primary_key=True)
+    job_item_id = Column(Integer, ForeignKey("job_items.id"), nullable=False)
+    coverage_type = Column(String, nullable=False)  # stock / wip / new_production
+    qty = Column(Integer, nullable=False)
+    source_production_order_id = Column(Integer, ForeignKey("production_orders.id"), nullable=True)
+    source_stock_receipt_id = Column(Integer, ForeignKey("product_stock_receipts.id"), nullable=True)
+    consuming_production_order_id = Column(Integer, ForeignKey("production_orders.id"), nullable=True)
+    note = Column(String, nullable=True)
+
+    job_item = relationship("JobItem", back_populates="coverages")
+
+
+class ProductionOrderOperationLog(Base):
+    __tablename__ = "production_order_operation_logs"
+
+    id = Column(Integer, primary_key=True)
+    production_order_id = Column(Integer, ForeignKey("production_orders.id"), nullable=False)
+    operation_no = Column(Integer, nullable=False)
+    event_type = Column(String(20), nullable=False)  # start / report
+    ok_qty = Column(Integer, nullable=True)
+    nok_qty = Column(Integer, nullable=True)
+    reported_minutes = Column(Integer, nullable=True)
+    note = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ProductionOrderOperation(Base):
+    __tablename__ = "production_order_operations"
+
+    id = Column(Integer, primary_key=True)
+    production_order_id = Column(Integer, ForeignKey("production_orders.id"), nullable=False)
+    operation_no = Column(Integer, nullable=False)
+    operation_name = Column(String, nullable=False)
+    workplace_name = Column(String, nullable=True)
+    scan_code = Column(String(32), nullable=True)
