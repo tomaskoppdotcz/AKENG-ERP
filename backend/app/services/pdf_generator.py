@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import math
 import os
+import re
 from datetime import date, datetime
 
 from reportlab.graphics.barcode import code128
@@ -140,6 +142,34 @@ def _first_non_empty(*values: str | None) -> str | None:
     return None
 
 
+def _parse_dimension_mm(dimension: str | None) -> float | None:
+    if dimension is None:
+        return None
+    raw = str(dimension).strip()
+    if not raw:
+        return None
+    m = re.match(r"^\s*([\d]+(?:[.,]\d+)?)", raw.replace(" ", ""))
+    if not m:
+        return None
+    try:
+        value = float(m.group(1).replace(",", "."))
+    except Exception:
+        return None
+    return value if value > 0 and math.isfinite(value) else None
+
+
+def _kg_per_mm_from_density(density: float | None, dimension: str | None) -> float | None:
+    if density is None:
+        return None
+    d_mm = _parse_dimension_mm(dimension)
+    if d_mm is None:
+        return None
+    # round bar approximation: kg for 1 mm length from diameter + density
+    d_m = d_mm / 1000.0
+    length_m = 1.0 / 1000.0
+    return math.pi * (d_m ** 2) / 4.0 * length_m * float(density)
+
+
 def _resolve_logo_path() -> str | None:
     env_logo_square = os.getenv("AKENG_LOGO_SQUARE_PATH", "").strip()
     env_logo = os.getenv("AKENG_LOGO_PATH", "").strip()
@@ -243,7 +273,10 @@ def _load_material_traceability(db, po: ProductionOrder, portfolio: PortfolioIte
         "material_code": "—",
         "material_name": "—",
         "material_dimension": "—",
+        "length_per_piece_mm": "—",
+        "weight_per_piece_kg": "—",
         "heat_lot": "—",
+        "material_move_scan_code": "—",
     }
     if portfolio is not None:
         out["material_name"] = _first_non_empty(
@@ -267,10 +300,12 @@ def _load_material_traceability(db, po: ProductionOrder, portfolio: PortfolioIte
             .order_by(PortfolioTechnologyTemplate.id.asc())
         ).first()
 
+    kg_per_mm_value: float | None = None
+
     if tpl is not None:
         mat_rows = db.execute(
             text(
-                "SELECT material_library_item_id "
+                "SELECT material_library_item_id, consumption_per_piece, consumption_unit "
                 "FROM portfolio_technology_template_materials "
                 "WHERE template_id = :tid AND input_type = 'material' "
                 "ORDER BY id ASC LIMIT 1"
@@ -279,17 +314,144 @@ def _load_material_traceability(db, po: ProductionOrder, portfolio: PortfolioIte
         ).fetchone()
         if mat_rows and mat_rows[0] is not None:
             mat_lib_id = int(mat_rows[0])
+            cons_per_piece = float(mat_rows[1] or 0) if len(mat_rows) > 1 and mat_rows[1] is not None else None
+            cons_unit = str(mat_rows[2] or "").strip().lower() if len(mat_rows) > 2 and mat_rows[2] is not None else ""
+            if cons_per_piece is not None and cons_per_piece > 0:
+                if "mm" in cons_unit:
+                    out["length_per_piece_mm"] = f"{cons_per_piece:g}"
+                elif "kg" in cons_unit:
+                    out["weight_per_piece_kg"] = f"{cons_per_piece:g}"
             if _table_columns(db, "material_library_items"):
+                ml_cols = _table_columns(db, "material_library_items")
+                kg_col_expr = (
+                    "kg_per_mm AS kg_per_mm_val"
+                    if "kg_per_mm" in ml_cols
+                    else ("kg_mm AS kg_per_mm_val" if "kg_mm" in ml_cols else "NULL AS kg_per_mm_val")
+                )
                 ml = db.execute(
-                    text("SELECT code, name, dimension FROM material_library_items WHERE id = :id"),
+                    text(
+                        "SELECT code, name, dimension, density, "
+                        + kg_col_expr
+                        + " FROM material_library_items WHERE id = :id"
+                    ),
                     {"id": mat_lib_id},
                 ).fetchone()
                 if ml:
                     out["material_code"] = _first_non_empty(str(ml[0]) if ml[0] is not None else None, out["material_code"]) or "—"
                     out["material_name"] = _first_non_empty(str(ml[1]) if ml[1] is not None else None, out["material_name"]) or "—"
                     out["material_dimension"] = _first_non_empty(str(ml[2]) if ml[2] is not None else None, out["material_dimension"]) or "—"
+                    try:
+                        kg_per_mm_value = float(ml[4]) if ml[4] is not None else None
+                    except Exception:
+                        kg_per_mm_value = None
+                    if kg_per_mm_value is None:
+                        try:
+                            density_val = float(ml[3]) if ml[3] is not None else None
+                        except Exception:
+                            density_val = None
+                        kg_per_mm_value = _kg_per_mm_from_density(density_val, str(ml[2]) if ml[2] is not None else None)
 
             if _table_columns(db, "material_stock_items"):
+                ms_cols = _table_columns(db, "material_stock_items")
+                mv_cols = _table_columns(db, "material_stock_movements")
+
+                def _movement_candidates_from_stock_item(stock_item_id: int) -> list[dict]:
+                    if stock_item_id <= 0 or not mv_cols:
+                        return []
+                    select_parts = [
+                        "m.id",
+                        "m.reference",
+                        "m.note",
+                        "m.movement_date",
+                    ]
+                    if "scan_code" in mv_cols:
+                        select_parts.append("m.scan_code")
+                    else:
+                        select_parts.append("NULL AS scan_code")
+                    if "heat_lot" in mv_cols:
+                        select_parts.append("m.heat_lot")
+                    elif "lot_code" in mv_cols:
+                        select_parts.append("m.lot_code AS heat_lot")
+                    else:
+                        select_parts.append("NULL AS heat_lot")
+                    if "length_per_piece_mm" in mv_cols:
+                        select_parts.append("m.length_per_piece_mm")
+                    else:
+                        select_parts.append("NULL AS length_per_piece_mm")
+                    if "weight_per_piece_kg" in mv_cols:
+                        select_parts.append("m.weight_per_piece_kg")
+                    else:
+                        select_parts.append("NULL AS weight_per_piece_kg")
+                    query = (
+                        "SELECT "
+                        + ", ".join(select_parts)
+                        + " FROM material_stock_movements m "
+                        + "WHERE m.stock_item_id = :sid "
+                    )
+                    params: dict[str, object] = {"sid": int(stock_item_id)}
+                    if "production_order_id" in mv_cols:
+                        query += "AND m.production_order_id = :poid "
+                        params["poid"] = int(po.id)
+                    elif "job_item_id" in mv_cols and po.job_item_id is not None:
+                        query += "AND m.job_item_id = :jiid "
+                        params["jiid"] = int(po.job_item_id)
+                    elif po.vp_code:
+                        query += "AND (COALESCE(m.reference,'') LIKE :vp OR COALESCE(m.note,'') LIKE :vp) "
+                        params["vp"] = f"%{str(po.vp_code)}%"
+                    query += "ORDER BY m.movement_date DESC, m.id DESC LIMIT 1"
+                    row = db.execute(text(query), params).fetchone()
+                    if not row:
+                        return []
+                    return [
+                        {
+                            "reference": row[1],
+                            "note": row[2],
+                            "scan_code": row[4],
+                            "heat_lot": row[5],
+                            "length_per_piece_mm": row[6],
+                            "weight_per_piece_kg": row[7],
+                        }
+                    ]
+
+                def _apply_movement_to_out(mv: dict) -> None:
+                    out["heat_lot"] = _first_non_empty(
+                        str(mv.get("heat_lot")) if mv.get("heat_lot") is not None else None,
+                        str(mv.get("reference")) if mv.get("reference") is not None else None,
+                        str(mv.get("note")) if mv.get("note") is not None else None,
+                        out["heat_lot"],
+                    ) or "—"
+                    out["material_move_scan_code"] = _first_non_empty(
+                        str(mv.get("scan_code")) if mv.get("scan_code") is not None else None,
+                        out["material_move_scan_code"],
+                    ) or "—"
+                    if mv.get("length_per_piece_mm") is not None:
+                        try:
+                            out["length_per_piece_mm"] = f"{float(mv['length_per_piece_mm']):g}"
+                        except Exception:
+                            pass
+                    if mv.get("weight_per_piece_kg") is not None:
+                        try:
+                            out["weight_per_piece_kg"] = f"{float(mv['weight_per_piece_kg']):g}"
+                        except Exception:
+                            pass
+
+                movement_applied = False
+
+                # Prefer movement tied to VP (via reservation stock_item when available).
+                if _table_columns(db, "material_stock_reservations") and po.job_item_id is not None:
+                    res = db.execute(
+                        text(
+                            "SELECT stock_item_id FROM material_stock_reservations "
+                            "WHERE job_item_id = :jiid ORDER BY created_at DESC, id DESC LIMIT 1"
+                        ),
+                        {"jiid": int(po.job_item_id)},
+                    ).fetchone()
+                    if res and res[0] is not None:
+                        mv_list = _movement_candidates_from_stock_item(int(res[0]))
+                        if mv_list:
+                            _apply_movement_to_out(mv_list[0])
+                            movement_applied = True
+
                 ms = db.execute(
                     text(
                         "SELECT id, location FROM material_stock_items "
@@ -300,20 +462,39 @@ def _load_material_traceability(db, po: ProductionOrder, portfolio: PortfolioIte
                 if ms:
                     if out["material_dimension"] == "—" and ms[1] is not None:
                         out["material_dimension"] = str(ms[1]).strip() or "—"
-                    if _table_columns(db, "material_stock_movements"):
-                        mv = db.execute(
+                    # If no exact VP-linked movement found, fallback to best available movement on latest stock item.
+                    if not movement_applied and mv_cols:
+                        fallback_mv = db.execute(
                             text(
-                                "SELECT reference, note FROM material_stock_movements "
-                                "WHERE stock_item_id = :sid ORDER BY movement_date DESC, id DESC LIMIT 1"
+                                "SELECT m.reference, m.note, "
+                                + ("m.scan_code" if "scan_code" in mv_cols else "NULL")
+                                + ", "
+                                + (
+                                    "m.heat_lot"
+                                    if "heat_lot" in mv_cols
+                                    else ("m.lot_code" if "lot_code" in mv_cols else "NULL")
+                                )
+                                + ", "
+                                + ("m.length_per_piece_mm" if "length_per_piece_mm" in mv_cols else "NULL")
+                                + ", "
+                                + ("m.weight_per_piece_kg" if "weight_per_piece_kg" in mv_cols else "NULL")
+                                + " FROM material_stock_movements m "
+                                + "WHERE m.stock_item_id = :sid "
+                                + "ORDER BY m.movement_date DESC, m.id DESC LIMIT 1"
                             ),
                             {"sid": int(ms[0])},
                         ).fetchone()
-                        if mv:
-                            out["heat_lot"] = _first_non_empty(
-                                str(mv[0]) if mv[0] is not None else None,
-                                str(mv[1]) if mv[1] is not None else None,
-                                out["heat_lot"],
-                            ) or "—"
+                        if fallback_mv:
+                            _apply_movement_to_out(
+                                {
+                                    "reference": fallback_mv[0],
+                                    "note": fallback_mv[1],
+                                    "scan_code": fallback_mv[2],
+                                    "heat_lot": fallback_mv[3],
+                                    "length_per_piece_mm": fallback_mv[4],
+                                    "weight_per_piece_kg": fallback_mv[5],
+                                }
+                            )
 
     if out["heat_lot"] == "—":
         out["heat_lot"] = _first_non_empty(
@@ -323,11 +504,24 @@ def _load_material_traceability(db, po: ProductionOrder, portfolio: PortfolioIte
             out["heat_lot"],
         ) or "—"
 
+    # Prefer deterministic calculation from material-library kg/mm and known length per piece.
+    if kg_per_mm_value is not None:
+        try:
+            length_mm = float(str(out.get("length_per_piece_mm", "—")).replace(",", "."))
+        except Exception:
+            length_mm = None
+        if length_mm is not None:
+            computed = round(length_mm * float(kg_per_mm_value), 3)
+            out["weight_per_piece_kg"] = f"{computed:.3f}"
+
     return {"rows": [
         ("Kód materiálu", out["material_code"]),
         ("Materiál", out["material_name"]),
         ("Rozměr", out["material_dimension"]),
         ("Tavba / šarže", out["heat_lot"]),
+        ("Délka na kus (mm)", out["length_per_piece_mm"]),
+        ("Váha na kus (kg)", out["weight_per_piece_kg"]),
+        ("Scan kód pohybu materiálu", out["material_move_scan_code"]),
     ], "source_vp_scan": None}
 
 
@@ -479,8 +673,14 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         right_x = margin_x + 92 * mm
         row_y = header_top - 6 * mm
 
+        order_no = None
+        if co is not None:
+            order_no = getattr(co, "customer_po_no", None)
+        if not order_no and job is not None:
+            order_no = getattr(job, "zak_code", None)
+
         left_rows = [
-            ("Objednávka", po.vp_code or "—"),
+            ("Objednávka", order_no or "—"),
             (order_label, job.zak_code if job is not None else "—"),
             ("Zákazník", customer_name),
         ]
@@ -564,12 +764,6 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         for k, v in right_rows:
             c.drawString(right_block_x, yy, f"{k}: {v or '—'}")
             yy -= row_step
-        mat_code_value = "—"
-        for k, v in trace_rows:
-            if str(k).strip().lower() == "kód materiálu":
-                mat_code_value = v or "—"
-                break
-        c.drawString(right_block_x, yy, f"Materiálový kód: {mat_code_value}")
         if source_vp_scan:
             c.setFont(font_regular, 7.8)
             c.drawString(right_block_x, y - trace_h + 11.8 * mm, f"Zdroj VP scan: {source_vp_scan}")
