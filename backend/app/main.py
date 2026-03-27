@@ -41,7 +41,7 @@ from app.api.portfolio import (
 from app.api.customers import ensure_customers_sqlite_schema, router as customers_router
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
-from app.models.kiosk import Employee, Kiosk, KioskSession, OperationEvent
+from app.models.kiosk import Employee, Kiosk, KioskActivityLog, KioskSession, OperationEvent
 from app.models.orders import (
     CustomerOrder,
     Job,

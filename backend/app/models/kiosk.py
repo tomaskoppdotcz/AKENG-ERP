@@ -47,7 +47,7 @@ class OperationEvent(Base):
     __tablename__ = "operation_events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    planning_operation_id: Mapped[int] = mapped_column(ForeignKey("planning_operations.id"))
+    planning_operation_id: Mapped[int] = mapped_column(ForeignKey("planning_operations.id"), nullable=False)
     machine_id: Mapped[int] = mapped_column(ForeignKey("machines.id"))
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
     event_type: Mapped[str] = mapped_column(String(30))
@@ -56,4 +56,18 @@ class OperationEvent(Base):
     qty_nok: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     reason: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class KioskActivityLog(Base):
+    """Overhead / attendance on kiosk (no planning operation). MVP."""
+
+    __tablename__ = "kiosk_activity_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    machine_id: Mapped[int] = mapped_column(ForeignKey("machines.id"), index=True)
+    employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    kiosk_session_id: Mapped[int | None] = mapped_column(ForeignKey("kiosk_sessions.id"), nullable=True)
+    activity_type: Mapped[str] = mapped_column(String(50))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

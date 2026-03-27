@@ -1,3 +1,4 @@
+/** Dual-screen kiosk (obrazovky bez ERP loginu): `/kiosk/admin?machine=…` a `/kiosk/production?machine=…` — vstup v `main.tsx`. */
 import React, { useState } from "react";
 import LoginPage from "./pages/LoginPage.tsx";
 import DashboardPage from "./pages/DashboardPage.tsx";
