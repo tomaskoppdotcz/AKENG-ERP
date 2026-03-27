@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplateMaterial,
     PortfolioTechnologyTemplateOperation,
 )
+from app.services.pdf_generator import generate_production_order_pdf
 
 router = APIRouter()
 
@@ -436,3 +438,20 @@ def report_production_order_operation(
     new_status = _recompute_and_set_po_status(db, po, operation_nos)
     db.commit()
     return {"status": "ok", "po_status": new_status}
+
+
+@router.get("/{production_order_id}/print")
+def print_production_order_pdf(production_order_id: int, db: Session = Depends(get_db)):
+    po = db.get(ProductionOrder, production_order_id)
+    if po is None:
+        raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    pdf_bytes = generate_production_order_pdf(int(production_order_id))
+    safe_name = (po.vp_code or f"{production_order_id}").replace("/", "-")
+    filename = f"VP-{safe_name}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+

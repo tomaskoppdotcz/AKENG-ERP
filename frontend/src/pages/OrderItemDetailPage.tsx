@@ -8,6 +8,7 @@ import {
 } from "../services/ordersApi";
 import {
   findPortfolioItemByGpn,
+  getPortfolioItems,
   getPortfolioItemTechnology,
   getPortfolioTechnologyMaterials,
   type PortfolioItem,
@@ -51,7 +52,27 @@ const SUBTABS: ItemSubtab[] = [
 
 function formatCenaZaKs(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
-  return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 2 })} Kč/ks`;
+  return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 2 })} Kč`;
+}
+
+function formatLogisticModeCz(mode: string | null | undefined): string {
+  if (mode == null || mode === "") return "—";
+  const map: Record<string, string> = {
+    sklad_zakaznik: "Sklad → zákazník",
+    vyroba_zakaznik: "Výroba → zákazník",
+    sklad: "Sklad",
+  };
+  return map[mode] ?? mode;
+}
+
+function formatCoverageTypeCz(value: string | null | undefined): string {
+  if (value == null || value === "") return "—";
+  const map: Record<string, string> = {
+    stock: "Sklad",
+    wip: "Rozpracovaná výroba",
+    new_production: "Nová výroba",
+  };
+  return map[value] ?? value;
 }
 
 function formatMaterialNumber(value: number | null | undefined, empty = "—"): string {
@@ -153,7 +174,16 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
     setMatchedPortfolioItem(null);
     setPortfolioTechnology(null);
     setPortfolioTechnologyMaterials(null);
-    findPortfolioItemByGpn(gpn)
+    const effectivePortfolioId = detail?.item.effective_portfolio_item_id ?? null;
+    const loadMatchedItem = async (): Promise<PortfolioItem | null> => {
+      if (effectivePortfolioId != null && Number.isFinite(effectivePortfolioId)) {
+        const items = await getPortfolioItems();
+        const byId = items.find((x) => x.id === effectivePortfolioId);
+        if (byId) return byId;
+      }
+      return findPortfolioItemByGpn(gpn);
+    };
+    loadMatchedItem()
       .then(async (item) => {
         if (cancelled) return;
         setMatchedPortfolioItem(item);
@@ -196,7 +226,7 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
     return () => {
       cancelled = true;
     };
-  }, [gpnForPortfolio]);
+  }, [gpnForPortfolio, detail?.item.effective_portfolio_item_id]);
 
   const itemOrderQuantity = useMemo(() => {
     const q = detail?.item.qty;
@@ -294,7 +324,13 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
   }
 
   const { order, item } = detail;
-  const linkedProductionOrders = item.production_orders ?? [];
+  const orderKind = order.customer_order?.order_type ?? "customer";
+  const linkedProductionOrders =
+    orderKind === "internal"
+      ? (item.production_orders ?? [])
+      : (item.production_orders ?? []).filter(
+          (po) => po.source_type === "stock_allocation" || po.source_type === "order_allocation"
+        );
   const vpLabel =
     linkedProductionOrders.length > 0
       ? linkedProductionOrders.map((po) => po.vp_code).filter(Boolean).join(", ")
@@ -388,12 +424,12 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
         <div style={UI.summaryTilesGrid}>
           {(
             [
-              ["Zakázka", order.zakazka ?? "—"],
+              ["Zakázka", order.job?.zakazka ?? "—"],
               ["Řádek", String(item.line_no)],
               ["Množství", `${item.qty} ks`],
               ["Termín", item.due_date ?? "—"],
-              ["Materiál", "—"],
-              ["Cena / ks", formatCenaZaKs(item.sales_price_per_unit ?? undefined)],
+              ["Materiál", item.material_default ?? "—"],
+              ["Cena / ks", formatCenaZaKs(item.sale_price_per_piece ?? undefined)],
             ] as const
           ).map(([label, value]) => (
             <div key={label} style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
@@ -402,6 +438,53 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
             </div>
           ))}
         </div>
+
+        {orderKind === "customer" ? (
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+            <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Pokrytí položky</div>
+            {!(item.coverage_rows && item.coverage_rows.length > 0) ? (
+              <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600 }}>
+                Zatím nejsou evidované žádné řádky pokrytí položky.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={UI.table}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      {["Zdroj", "Množství", "Původní VP", "Dokončovací VP", "Logistický režim", "Poznámka"].map((h) => (
+                        <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(item.coverage_rows ?? []).map((row) => (
+                      <tr key={`cov-${row.id}`}>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 700 }}>
+                          {formatCoverageTypeCz(row.coverage_type)}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.qty} ks</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                          {row.source_production_order_code ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                          {row.consuming_production_order_code ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {formatLogisticModeCz(row.consuming_logistic_mode)}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.note ?? "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : null}
 
         <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
           <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>

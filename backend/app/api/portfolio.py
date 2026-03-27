@@ -172,6 +172,8 @@ def ensure_portfolio_items_sqlite_schema(engine: Engine) -> None:
         stmts.append("ALTER TABLE portfolio_items ADD COLUMN sale_price_per_piece FLOAT")
     if "scan_code" not in cols:
         stmts.append("ALTER TABLE portfolio_items ADD COLUMN scan_code VARCHAR(32)")
+    if "active_template_id" not in cols:
+        stmts.append("ALTER TABLE portfolio_items ADD COLUMN active_template_id INTEGER")
     if stmts:
         with engine.begin() as conn:
             for stmt in stmts:
@@ -180,6 +182,11 @@ def ensure_portfolio_items_sqlite_schema(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
             text("CREATE UNIQUE INDEX IF NOT EXISTS uq_portfolio_items_scan_code ON portfolio_items (scan_code)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_portfolio_items_active_template_id ON portfolio_items (active_template_id)"
+            )
         )
 
 

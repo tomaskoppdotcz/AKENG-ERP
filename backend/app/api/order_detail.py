@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
+from app.models.orders import CustomerOrder, Job, JobItem, JobItemCoverage, ProductionOrder
 from app.models.portfolio import PortfolioItem
 from app.models.product_stock import ProductStockItem
 
@@ -12,6 +12,9 @@ router = APIRouter()
 
 def _customer_order_detail_dict(co: CustomerOrder) -> dict:
   rs = getattr(co, "requested_ship_date", None)
+  ot = getattr(co, "order_type", None)
+  if ot is None or str(ot).strip() == "":
+    ot = "customer"
   return {
     "id": co.id,
     "zakaznik": co.customer_name,
@@ -20,6 +23,7 @@ def _customer_order_detail_dict(co: CustomerOrder) -> dict:
     "customer_id": getattr(co, "customer_id", None),
     "requested_ship_date": rs.isoformat() if rs else None,
     "note": getattr(co, "note", None),
+    "order_type": str(ot).strip().lower(),
   }
 
 
@@ -29,11 +33,60 @@ def _job_items_have_optional_columns(db: Session) -> tuple[bool, bool, bool]:
   return ("description" in cols, "sales_price_per_unit" in cols, "portfolio_item_id" in cols)
 
 
+def _customer_coverage_rows(vp_list: list[dict]) -> list[dict]:
+  """Řádky pokrytí zakázky: jen stock_allocation a order_allocation (ne restock / interní doplnění)."""
+  rows: list[dict] = []
+  for po in vp_list:
+    st = po.get("source_type")
+    if st == "stock_allocation":
+      label = "Ze skladu"
+    elif st == "order_allocation":
+      label = "Výroba pro zakázku"
+    else:
+      continue
+    rows.append(
+      {
+        "source_type": st,
+        "source_label": label,
+        "quantity": int(po.get("quantity") or 0),
+        "vp_code": po.get("vp_code"),
+        "logistic_mode": po.get("logistic_mode"),
+      }
+    )
+  return rows
+
+
+def _pick_effective_logistic_mode(coverage_rows: list[dict], vp_rows: list[dict]) -> str | None:
+  """Priorita pro TP variantu: sklad_zakaznik, jinak vyroba_zakaznik."""
+  has_stock = any(
+    str(r.get("coverage_type") or "").strip().lower() == "stock"
+    for r in coverage_rows
+  ) or any(
+    str(v.get("source_type") or "").strip().lower() == "stock_allocation"
+    for v in vp_rows
+  )
+  if has_stock:
+    return "sklad_zakaznik"
+  has_order = any(
+    str(r.get("coverage_type") or "").strip().lower() == "new_production"
+    for r in coverage_rows
+  ) or any(
+    str(v.get("source_type") or "").strip().lower() == "order_allocation"
+    for v in vp_rows
+  )
+  if has_order:
+    return "vyroba_zakaznik"
+  return None
+
+
 @router.get("/order-detail/{customer_order_id}")
 def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
   co = db.get(CustomerOrder, customer_order_id)
   if not co:
     raise HTTPException(status_code=404, detail="Customer order not found")
+
+  co_detail = _customer_order_detail_dict(co)
+  co_type = str(co_detail.get("order_type") or "customer").strip().lower()
 
   job = db.scalars(
     select(Job)
@@ -44,7 +97,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
   if not job:
     return {
       "job": None,
-      "customer_order": _customer_order_detail_dict(co),
+      "customer_order": co_detail,
       "summary": {
         "termin": None,
         "vykresy": 0,
@@ -96,6 +149,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
 
   portfolio_name_by_id: dict[int, str | None] = {}
   portfolio_sale_price_by_id: dict[int, float | None] = {}
+  portfolio_material_default_by_id: dict[int, str | None] = {}
   if portfolio_item_id_by_item:
     pids = sorted({int(pid) for pid in portfolio_item_id_by_item.values() if pid is not None})
     if pids:
@@ -105,6 +159,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         int(p.id): (float(p.sale_price_per_piece) if p.sale_price_per_piece is not None else None)
         for p in p_rows
       }
+      portfolio_material_default_by_id = {int(p.id): p.material_default for p in p_rows}
 
   stock_qty_by_portfolio_id: dict[int, float] = {}
   min_qty_by_portfolio_id: dict[int, float] = {}
@@ -138,6 +193,69 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "status": vp.status,
       }
     )
+
+  coverage_rows = db.scalars(
+    select(JobItemCoverage)
+    .where(JobItemCoverage.job_item_id.in_([it.id for it in items]))
+    .order_by(JobItemCoverage.id.asc())
+  ).all()
+  source_po_ids = sorted(
+    {
+      int(c.source_production_order_id)
+      for c in coverage_rows
+      if c.source_production_order_id is not None
+    }
+  )
+  consuming_po_ids = sorted(
+    {
+      int(c.consuming_production_order_id)
+      for c in coverage_rows
+      if c.consuming_production_order_id is not None
+    }
+  )
+  po_ids = sorted(set(source_po_ids + consuming_po_ids))
+  po_by_id: dict[int, ProductionOrder] = {}
+  if po_ids:
+    for row in db.scalars(select(ProductionOrder).where(ProductionOrder.id.in_(po_ids))).all():
+      po_by_id[int(row.id)] = row
+  coverage_by_item: dict[int, list[dict]] = {}
+  for c in coverage_rows:
+    source_po = po_by_id.get(int(c.source_production_order_id)) if c.source_production_order_id is not None else None
+    consuming_po = po_by_id.get(int(c.consuming_production_order_id)) if c.consuming_production_order_id is not None else None
+    coverage_by_item.setdefault(int(c.job_item_id), []).append(
+      {
+        "id": int(c.id),
+        "coverage_type": c.coverage_type,
+        "qty": int(c.qty or 0),
+        "source_production_order_code": source_po.vp_code if source_po is not None else None,
+        "source_stock_receipt_id": int(c.source_stock_receipt_id) if c.source_stock_receipt_id is not None else None,
+        "consuming_production_order_code": consuming_po.vp_code if consuming_po is not None else None,
+        "consuming_logistic_mode": consuming_po.logistic_mode if consuming_po is not None else None,
+        "note": c.note,
+      }
+    )
+
+  def _coverage_rows_fallback_from_vp(job_item_id: int) -> list[dict]:
+    rows: list[dict] = []
+    for po in vp_list_by_item.get(job_item_id, []):
+      st = po.get("source_type")
+      if st not in {"stock_allocation", "order_allocation"}:
+        continue
+      coverage_type = "stock" if st == "stock_allocation" else "new_production"
+      po_id = int(po.get("id") or 0)
+      rows.append(
+        {
+          "id": -po_id if po_id > 0 else 0,
+          "coverage_type": coverage_type,
+          "qty": int(po.get("quantity") or 0),
+          "source_production_order_code": None,
+          "source_stock_receipt_id": None,
+          "consuming_production_order_code": po.get("vp_code"),
+          "consuming_logistic_mode": po.get("logistic_mode"),
+          "note": "Odvozeno z navázaného VP (chybí samostatný záznam pokrytí).",
+        }
+      )
+    return rows
 
   termin = None
   if items:
@@ -189,13 +307,72 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
       "restock_qty": restock_qty,
     }
 
+  def _item_allocation_and_coverage(it: JobItem) -> dict:
+    vp_list = vp_list_by_item.get(it.id, [])
+    if co_type == "internal":
+      # Interní řádek = jen poptávka doplnění skladu; žádný návrh alokace zakázníka.
+      return {
+        "required_qty": None,
+        "stock_qty": None,
+        "from_stock_qty": None,
+        "to_production_qty": None,
+        "restock_qty": None,
+        "customer_coverage": [],
+        "coverage_rows": [],
+      }
+    return {
+      **_allocation_payload(it),
+      "customer_coverage": _customer_coverage_rows(vp_list),
+      "coverage_rows": (
+        coverage_by_item.get(int(it.id), [])
+        if coverage_by_item.get(int(it.id), [])
+        else _coverage_rows_fallback_from_vp(int(it.id))
+      ),
+    }
+
+  def _effective_portfolio_variant_id(it: JobItem) -> int | None:
+    base_pid = portfolio_item_id_by_item.get(it.id)
+    if base_pid is None:
+      return None
+    cov_rows = coverage_by_item.get(int(it.id), [])
+    if not cov_rows:
+      cov_rows = _coverage_rows_fallback_from_vp(int(it.id))
+    vp_rows_for_item = vp_list_by_item.get(int(it.id), [])
+    mode = _pick_effective_logistic_mode(cov_rows, vp_rows_for_item)
+    if mode is None:
+      return int(base_pid)
+    base_portfolio = next(
+      (p for p in db.scalars(select(PortfolioItem).where(PortfolioItem.id == int(base_pid))).all()),
+      None,
+    )
+    gpn = (base_portfolio.gpn if base_portfolio is not None else it.gpn) or ""
+    if not gpn.strip():
+      return int(base_pid)
+    variants = db.scalars(
+      select(PortfolioItem).where(
+        func.lower(func.trim(PortfolioItem.gpn)) == gpn.strip().lower(),
+        PortfolioItem.logistic_mode == mode,
+      )
+    ).all()
+    if not variants:
+      return int(base_pid)
+    ranked = sorted(
+      variants,
+      key=lambda p: (
+        0 if bool(getattr(p, "is_active", False)) else 1,
+        0 if getattr(p, "active_template_id", None) is not None else 1,
+        int(p.id),
+      ),
+    )
+    return int(ranked[0].id)
+
   return {
     "job": {
       "id": job.id,
       "zakazka": job.zak_code,
       "customer_order_id": job.customer_order_id,
     },
-    "customer_order": _customer_order_detail_dict(co),
+    "customer_order": co_detail,
     "summary": {
       "termin": termin,
       "vykresy": vykresy,
@@ -222,7 +399,13 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
           if portfolio_item_id_by_item.get(it.id) is not None
           else None
         ),
-        **_allocation_payload(it),
+        "material_default": (
+          portfolio_material_default_by_id.get(int(portfolio_item_id_by_item.get(it.id)))
+          if portfolio_item_id_by_item.get(it.id) is not None
+          else None
+        ),
+        "effective_portfolio_item_id": _effective_portfolio_variant_id(it),
+        **_item_allocation_and_coverage(it),
       }
       for it in items
     ],

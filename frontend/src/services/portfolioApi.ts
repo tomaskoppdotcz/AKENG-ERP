@@ -51,6 +51,24 @@ export type PortfolioItem = {
   active_template_id: number | null;
 };
 
+/** Český popisek logistického režimu (shodně s přehledem portfolia). */
+export function logisticModeLabelCs(mode: string | null | undefined): string {
+  const m = (mode ?? "").trim();
+  if (!m) return "—";
+  if (m === "sklad") return "Sklad";
+  if (m === "sklad_zakaznik") return "Sklad zákazník";
+  return "Výroba zákazník";
+}
+
+/** Text pro rozlišení variant portfolia se stejným GPN (např. výběr v zakázce). */
+export function portfolioVariantOptionText(item: PortfolioItem): string {
+  const rev = (item.revision ?? "").trim() || "—";
+  const drw = (item.drawing_no ?? "").trim() || "—";
+  const nm = (item.name ?? "").trim() || "—";
+  const log = logisticModeLabelCs(item.logistic_mode);
+  return `ID ${item.id} · GPN ${item.gpn} · ${nm} · výkres ${drw} · rev. ${rev} · ${log}`;
+}
+
 export type PortfolioItemCreatePayload = {
   gpn: string;
   name: string;

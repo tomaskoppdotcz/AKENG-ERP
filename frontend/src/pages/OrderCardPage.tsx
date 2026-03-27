@@ -71,8 +71,16 @@ function formatCzk(value: number | null | undefined): string {
   return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
 }
 
-function formatVpCodes(item: OrderDetailItem): string {
-  const codes = (item.production_orders ?? [])
+function relevantProductionOrders(item: OrderDetailItem, orderKind: string) {
+  const rows = item.production_orders ?? [];
+  if (orderKind === "internal") return rows;
+  return rows.filter(
+    (po) => po.source_type === "stock_allocation" || po.source_type === "order_allocation"
+  );
+}
+
+function formatVpCodes(item: OrderDetailItem, orderKind: string): string {
+  const codes = relevantProductionOrders(item, orderKind)
     .map((po) => po.vp_code?.trim())
     .filter((v): v is string => !!v);
   if (codes.length === 0) return "—";
@@ -420,11 +428,12 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
   }
 
   const items = data?.items ?? [];
+  const orderKind = data?.customer_order?.order_type ?? "customer";
 
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
     return items.filter((item) => {
-      const vpCodes = (item.production_orders ?? []).map((po) => po.vp_code).filter(Boolean).join(" ");
+      const vpCodes = relevantProductionOrders(item, orderKind).map((po) => po.vp_code).filter(Boolean).join(" ");
       const haystack = [item.gpn, item.description ?? "", item.vp_code ?? "", vpCodes].join(" ").toLowerCase();
       const matchesQuery = !q || haystack.includes(q);
 
@@ -441,7 +450,7 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
 
       return matchesQuery && matchesFilters;
     });
-  }, [items, query, activeFilters]);
+  }, [items, query, activeFilters, orderKind]);
 
   const polozekCelkem = items.length;
 
@@ -507,9 +516,11 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
             <button type="button" style={UI.buttons.secondary} onClick={handleDeleteOrder}>
               Smazat zakázku
             </button>
-            <button type="button" style={UI.buttons.secondary} onClick={handleCreateVp} disabled={creatingVp}>
-              {creatingVp ? "Vytvářím VP..." : "Vytvořit VP"}
-            </button>
+            {orderKind !== "internal" ? (
+              <button type="button" style={UI.buttons.secondary} onClick={handleCreateVp} disabled={creatingVp}>
+                {creatingVp ? "Vytvářím VP..." : "Vytvořit VP"}
+              </button>
+            ) : null}
             <button
               type="button"
               style={UI.buttons.primary}
@@ -940,10 +951,10 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                               padding: "10px 10px",
                               borderBottom: "1px solid #f1f5f9",
                               fontWeight: 700,
-                              color: (item.production_orders?.length ?? 0) > 0 ? "#15803d" : "#64748b",
+                              color: relevantProductionOrders(item, orderKind).length > 0 ? "#15803d" : "#64748b",
                             }}
                           >
-                            {formatVpCodes(item)}
+                            {formatVpCodes(item, orderKind)}
                           </td>
                           <td
                             style={{
@@ -983,61 +994,63 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
                   </table>
                 </div>
 
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Návrh alokace</div>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ background: "#f8fafc" }}>
-                          {["GPN", "Požadavek", "Skladem", "Ze skladu", "Do výroby", "Doplnění skladu"].map((h) => (
-                            <th
-                              key={h}
-                              style={{
-                                ...UI.th,
-                                fontSize: 13,
-                                padding: "10px 10px",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {h}
-                            </th>
+                {orderKind !== "internal" ? (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Návrh alokace</div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ background: "#f8fafc" }}>
+                            {["GPN", "Požadavek", "Skladem", "Ze skladu", "Do výroby", "Doplnění skladu"].map((h) => (
+                              <th
+                                key={h}
+                                style={{
+                                  ...UI.th,
+                                  fontSize: 13,
+                                  padding: "10px 10px",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {h}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {items.map((item) => (
+                            <tr key={`alloc-${item.job_item_id}`}>
+                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>
+                                {item.gpn}
+                              </td>
+                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                                {formatQty(item.required_qty ?? item.qty)} ks
+                              </td>
+                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                                {formatQty(item.stock_qty)} ks
+                              </td>
+                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#166534", fontWeight: 700 }}>
+                                {formatQty(item.from_stock_qty)} ks
+                              </td>
+                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#1d4ed8", fontWeight: 700 }}>
+                                {formatQty(item.to_production_qty)} ks
+                              </td>
+                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#b45309", fontWeight: 700 }}>
+                                {formatQty(item.restock_qty)} ks
+                              </td>
+                            </tr>
                           ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {items.map((item) => (
-                          <tr key={`alloc-${item.job_item_id}`}>
-                            <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>
-                              {item.gpn}
-                            </td>
-                            <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
-                              {formatQty(item.required_qty ?? item.qty)} ks
-                            </td>
-                            <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
-                              {formatQty(item.stock_qty)} ks
-                            </td>
-                            <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#166534", fontWeight: 700 }}>
-                              {formatQty(item.from_stock_qty)} ks
-                            </td>
-                            <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#1d4ed8", fontWeight: 700 }}>
-                              {formatQty(item.to_production_qty)} ks
-                            </td>
-                            <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#b45309", fontWeight: 700 }}>
-                              {formatQty(item.restock_qty)} ks
-                            </td>
-                          </tr>
-                        ))}
-                        {items.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
-                              Pro alokaci zatím nejsou žádné položky.
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
+                          {items.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                                Pro alokaci zatím nejsou žádné položky.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                </div>
+                ) : null}
               </>
             )}
           </div>

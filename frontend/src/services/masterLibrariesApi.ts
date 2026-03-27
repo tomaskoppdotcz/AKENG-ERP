@@ -138,3 +138,73 @@ export async function deleteWorkplaceLibraryItem(id: number): Promise<{ status: 
   }
   return res.json();
 }
+
+export type CustomerListItem = {
+  id: number;
+  name: string;
+  code: string;
+  is_active: boolean;
+  ico: string | null;
+  dic: string | null;
+  billing_address: string | null;
+  delivery_address: string | null;
+  contact_person: string | null;
+  email: string | null;
+  phone: string | null;
+  note: string | null;
+};
+
+export type CustomerCreatePayload = {
+  name: string;
+  is_active: boolean;
+  ico: string | null;
+  dic: string | null;
+  billing_address: string | null;
+  delivery_address: string | null;
+  contact_person: string | null;
+  email: string | null;
+  phone: string | null;
+  note: string | null;
+};
+
+export type CustomerUpdatePayload = Partial<CustomerCreatePayload>;
+
+export async function getCustomers(): Promise<CustomerListItem[]> {
+  const res = await fetch(`${API_BASE}/customers`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se načíst zákazníky."));
+  }
+  return res.json();
+}
+
+export async function createCustomer(payload: CustomerCreatePayload): Promise<CustomerListItem> {
+  const res = await fetch(`${API_BASE}/customers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se vytvořit zákazníka."));
+  }
+  return res.json();
+}
+
+export async function updateCustomer(id: number, payload: CustomerUpdatePayload): Promise<CustomerListItem> {
+  const res = await fetch(`${API_BASE}/customers/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se upravit zákazníka."));
+  }
+  return res.json();
+}
+
+export async function deleteCustomer(id: number): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/customers/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se smazat zákazníka."));
+  }
+  return res.json();
+}

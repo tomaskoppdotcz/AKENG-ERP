@@ -5,7 +5,7 @@ import { getJobItems, getJobs, getProductionOrders } from "../services/ordersApi
 type DrawingItem = {
   zakazka: string;
   job_item_id: number;
-  line_no: number;
+  line_no: number | null;
   gpn: string;
   popis: string;
   material: string;
@@ -68,16 +68,22 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
         const jobById = new Map(jobs.map((j) => [j.id, j]));
         const vpByItemId = new Map<number, string[]>();
         for (const vp of productionOrders) {
+          if (!(vp.source_type === "stock_allocation" || vp.source_type === "order_allocation")) {
+            continue;
+          }
           const arr = vpByItemId.get(vp.job_item_id) ?? [];
           arr.push(vp.vp_code);
           vpByItemId.set(vp.job_item_id, arr);
         }
         const mapped: DrawingItem[] = jobItems.map((row) => {
           const job = jobById.get(row.job_id);
+          const rawLineNo = row.line_no;
+          const normalizedLineNo =
+            typeof rawLineNo === "number" && Number.isFinite(rawLineNo) ? rawLineNo : null;
           return {
             zakazka: job?.zak_code ?? "—",
             job_item_id: row.id,
-            line_no: row.line_no,
+            line_no: normalizedLineNo,
             gpn: row.gpn,
             popis: "—",
             material: "—",
@@ -109,7 +115,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
       const matchesQuery = !normalized || haystack.includes(normalized);
       const done = row.stav === "Hotovo";
       const late = row.termin !== "—" && row.termin < new Date().toISOString().slice(0, 10);
-      const hasDelivery = row.line_no % 2 === 0;
+      const hasDelivery = row.line_no != null && row.line_no % 2 === 0;
       const invoiced = done && row.vp !== "—";
 
       const matchesFilters = activeFilters.every((f) => {
@@ -298,7 +304,9 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
                       }}
                     >
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900 }}>{row.zakazka}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.line_no}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                        {row.line_no ?? "—"}
+                      </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{row.gpn}</td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.popis}</td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.material}</td>

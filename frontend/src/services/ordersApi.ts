@@ -62,11 +62,31 @@ export type OrderDetailItem = {
   }>;
   portfolio_item_id?: number | null;
   portfolio_item_name?: string | null;
-  required_qty?: number;
-  stock_qty?: number;
-  from_stock_qty?: number;
-  to_production_qty?: number;
-  restock_qty?: number;
+  material_default?: string | null;
+  effective_portfolio_item_id?: number | null;
+  required_qty?: number | null;
+  stock_qty?: number | null;
+  from_stock_qty?: number | null;
+  to_production_qty?: number | null;
+  restock_qty?: number | null;
+  /** Pokrytí zákaznické položky (jen stock / order alokace, bez restock VP). */
+  customer_coverage?: Array<{
+    source_type: string;
+    source_label: string;
+    quantity: number;
+    vp_code: string | null;
+    logistic_mode: string | null;
+  }>;
+  coverage_rows?: Array<{
+    id: number;
+    coverage_type: string;
+    qty: number;
+    source_production_order_code: string | null;
+    source_stock_receipt_id: number | null;
+    consuming_production_order_code: string | null;
+    consuming_logistic_mode: string | null;
+    note: string | null;
+  }>;
 };
 
 export type OrderDetailResponse = {
@@ -83,6 +103,7 @@ export type OrderDetailResponse = {
     customer_id?: number | null;
     requested_ship_date?: string | null;
     note?: string | null;
+    order_type?: string | null;
   } | null;
   summary: {
     termin: string | null;
@@ -190,6 +211,7 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
               customer_id: co.customer_id ?? null,
               requested_ship_date: co.requested_ship_date ?? null,
               note: co.note ?? null,
+              order_type: co.order_type ?? "customer",
             }
           : null,
       summary: (() => {
@@ -228,6 +250,7 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
       customer_id: raw?.customer_id ?? null,
       requested_ship_date: raw?.requested_ship_date ?? null,
       note: raw?.note ?? null,
+      order_type: raw?.order_type ?? "customer",
     },
     summary: {
       termin: raw?.termin ?? null,

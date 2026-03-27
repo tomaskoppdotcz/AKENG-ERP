@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Výrobní příkaz {{ header.vp_code or '-' }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm 12mm 14mm 12mm;
+    }
+
+    :root {
+      --text: #0f2a30;
+      --border: #a8c7cc;
+      --header-fill: #e8f5f6;
+      --trace-fill: #f8fcfc;
+      --op-fill: #e1f2f4;
+      --muted: #56737a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding-top: 6mm;
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .top-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      height: 30mm;
+      margin-bottom: 6px;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    .logo-area {
+      min-height: 24mm;
+      display: flex;
+      align-items: flex-start;
+      flex: 1;
+    }
+
+    .logo-area img {
+      max-height: 24mm;
+      max-width: 320px;
+      object-fit: contain;
+      display: block;
+    }
+
+    .vp-title {
+      text-align: right;
+      font-size: 19px;
+      font-weight: 700;
+      white-space: nowrap;
+      line-height: 1.1;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+      margin-bottom: 8px;
+    }
+
+    .main-header-panel {
+      background: var(--header-fill);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      align-items: start;
+      position: relative;
+      min-height: 62mm;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    .kv-grid {
+      display: grid;
+      grid-template-columns: 31mm 1fr;
+      row-gap: 4.2px;
+      column-gap: 6px;
+    }
+
+    .k-label {
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .v-value {
+      color: var(--text);
+      word-break: break-word;
+    }
+
+    .header-right {
+      min-height: 56mm;
+      position: relative;
+      padding-right: 0;
+    }
+
+    .vp-scan-box {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 46mm;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 6px 5px;
+      background: #fff;
+    }
+
+    .scan-box-label {
+      font-size: 10px;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+
+    .scan-box-value {
+      font-family: "Courier New", monospace;
+      font-size: 10px;
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+
+    .scan-box-barcode {
+      width: 100%;
+      height: 8mm;
+      object-fit: contain;
+      display: block;
+    }
+
+    .traceability-panel {
+      background: var(--trace-fill);
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .trace-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px 20px;
+      margin-top: 4px;
+    }
+
+    .trace-item {
+      display: grid;
+      grid-template-columns: 40mm 1fr;
+      gap: 6px;
+      align-items: start;
+    }
+
+    .operations-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .op-block {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      break-inside: avoid;
+      page-break-inside: avoid;
+      margin-bottom: 5px;
+    }
+
+    .op-header {
+      background: var(--op-fill);
+      padding: 4px 8px 3px;
+      display: grid;
+      grid-template-columns: 1fr 86mm;
+      gap: 8px;
+      align-items: start;
+      border-bottom: 1px solid var(--border);
+      min-height: 18mm;
+    }
+
+    .op-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 2px;
+      line-height: 1.15;
+    }
+
+    .op-meta {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    .op-scan-wrap {
+      text-align: right;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .op-scan-code {
+      width: 80mm;
+      text-align: center;
+      font-family: "Courier New", monospace;
+      font-size: 10px;
+      margin-bottom: 1.8mm;
+      white-space: nowrap;
+    }
+
+    .op-scan-barcode {
+      width: 80mm;
+      height: 7mm;
+      object-fit: contain;
+      display: block;
+    }
+
+    .op-body {
+      padding: 7px 8px 7px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .body-label {
+      font-weight: 700;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .op-note-text {
+      white-space: pre-wrap;
+      min-height: 16px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .operator-section {
+      min-height: 17mm;
+      border-top: 1px solid var(--border);
+      padding-top: 4px;
+      position: relative;
+    }
+
+    .operator-label {
+      font-weight: 700;
+      font-size: 10px;
+      letter-spacing: 0.2px;
+    }
+
+    .operator-sign {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      color: var(--text);
+      font-weight: 700;
+      font-size: 10.5px;
+    }
+
+    .footer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: -10mm;
+      border-top: 1px solid var(--border);
+      padding-top: 2mm;
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--text);
+      background: #fff;
+    }
+
+    .footer-right::after {
+      content: "Strana " counter(page) " / " counter(pages);
+    }
+  </style>
+</head>
+<body>
+  <div class="top-row">
+    <div class="logo-area">
+      {% if logo_src %}
+      <img src="{{ logo_src }}" alt="AKENG logo" />
+      {% endif %}
+    </div>
+    <div class="vp-title">Výrobní příkaz: {{ header.vp_code or "-" }}</div>
+  </div>
+
+  <div class="panel main-header-panel">
+    <div>
+      <div class="kv-grid">
+        <div class="k-label">Objednávka:</div><div class="v-value">{{ header.vp_code or "-" }}</div>
+        <div class="k-label">{{ header.order_label }}:</div><div class="v-value">{{ header.zakazka or "-" }}</div>
+        <div class="k-label">Zákazník:</div><div class="v-value">{{ header.customer_name or "-" }}</div>
+        <div class="k-label">Množství:</div><div class="v-value">{{ header.quantity }} ks</div>
+        <div class="k-label">Termín:</div><div class="v-value">{{ header.due_date or "-" }}</div>
+        <div class="k-label">Materiál:</div><div class="v-value">{{ header.material_default or "-" }}</div>
+        <div class="k-label">Logistický režim:</div><div class="v-value">{{ header.logistic_mode or "-" }}</div>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="kv-grid">
+        <div class="k-label">Řádek:</div><div class="v-value">{{ header.line_no or "-" }}</div>
+        <div class="k-label">GPN:</div><div class="v-value">{{ header.gpn or "-" }}</div>
+        <div class="k-label">Výkres:</div><div class="v-value">{{ header.drawing_no or "-" }}</div>
+        <div class="k-label">Název:</div><div class="v-value">{{ header.description or "-" }}</div>
+        <div class="k-label">Revize:</div><div class="v-value">{{ header.revision or "-" }}</div>
+      </div>
+
+      <div class="vp-scan-box">
+        <div class="scan-box-label">Scan kód VP</div>
+        <div class="scan-box-value">{{ header.scan_code or "-" }}</div>
+        {% if header.scan_barcode_svg %}
+        <img class="scan-box-barcode" src="{{ header.scan_barcode_svg }}" alt="VP barcode" />
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel traceability-panel">
+    <div class="section-title">Materiál / dohledatelnost</div>
+
+    <div class="trace-grid">
+      {% for row in traceability_rows %}
+      <div class="trace-item">
+        <div class="k-label">{{ row.label }}:</div>
+        <div class="v-value">{{ row.value or "-" }}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if source_vp_scan %}
+    <div class="trace-grid" style="margin-top:8px;">
+      <div class="trace-item">
+        <div class="k-label">Zdrojový VP scan:</div>
+        <div class="v-value">{{ source_vp_scan }}</div>
+      </div>
+      <div></div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="operations-stack">
+    {% if operations %}
+    {% for op in operations %}
+    <section class="op-block">
+      <header class="op-header">
+        <div>
+          <div class="op-title">[{{ op.operation_no }}] {{ op.operation_name }}</div>
+          <div class="op-meta">
+            Norma: setup {{ op.setup_min }} min, čas / ks {{ op.run_min_per_piece }} min
+            {% if op.workplace_name %} | Pracoviště: {{ op.workplace_name }}{% endif %}
+          </div>
+        </div>
+
+        <div class="op-scan-wrap">
+          <div class="op-scan-code">{{ op.scan_code or "-" }}</div>
+          {% if op.scan_barcode_svg %}
+          <img class="op-scan-barcode" src="{{ op.scan_barcode_svg }}" alt="Operation barcode" />
+          {% endif %}
+        </div>
+      </header>
+
+      <div class="op-body">
+        <div class="body-label">POSTUP OPERACE</div>
+        <div class="op-note-text">{{ op.note or "-" }}</div>
+
+        <div class="operator-section">
+          <div class="operator-label">POZNÁMKA OBSLUHY</div>
+          <div class="operator-sign">Operátor: ____________</div>
+        </div>
+      </div>
+    </section>
+    {% endfor %}
+    {% else %}
+    <div class="panel">Pro tento VP nejsou dostupné operace.</div>
+    {% endif %}
+  </div>
+
+  <div class="footer">
+    <div>Datum vytvoření: {{ created_at }}</div>
+    <div class="footer-right"></div>
+  </div>
+</body>
+</html>

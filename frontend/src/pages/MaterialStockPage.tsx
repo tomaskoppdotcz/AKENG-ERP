@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
 import { getMaterialGroups, getMaterialLibraryItems, type MaterialGroup, type MaterialLibraryItem } from "../services/materialLibraryApi";
+import { getStorageLocations, type StorageLocation } from "../services/storageLocationApi";
 import {
   createMaterialStockItem,
   deleteMaterialStockItem,
@@ -25,6 +26,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
   const [rows, setRows] = useState<MaterialStockRow[]>([]);
   const [libraryItems, setLibraryItems] = useState<MaterialLibraryItem[]>([]);
   const [groups, setGroups] = useState<MaterialGroup[]>([]);
+  const [locations, setLocations] = useState<StorageLocation[]>([]);
   const [query, setQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState<number | "">("");
   const [formFilter, setFormFilter] = useState<string>("");
@@ -52,6 +54,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
         getMaterialLibraryItems(),
         getMaterialGroups(),
       ]);
+      const allLocations = await getStorageLocations();
       const byMaterialId = new Map<number, MaterialLibraryItem>();
       for (const item of libItems) byMaterialId.set(item.id, item);
       const mapped = stockItems.map((s) => ({
@@ -61,11 +64,13 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
       setRows(mapped);
       setLibraryItems(libItems);
       setGroups(groupItems);
+      setLocations(allLocations.filter((x) => x.location_type === "material" || x.location_type === "both"));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Nepodařilo se načíst sklad materiálu.");
       setRows([]);
       setLibraryItems([]);
       setGroups([]);
+      setLocations([]);
     } finally {
       setLoading(false);
     }
@@ -173,15 +178,17 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
 
   const filtered = useMemo(() => {
     const q = norm(query);
+    const locationByCode = new Map(locations.map((l) => [l.code, l.name]));
     return rows.filter((r) => {
+      const locationName = r.location ? locationByCode.get(r.location) ?? "" : "";
       const matchesText = !q || norm(
-        `${r.material_name} ${r.material_code} ${r.material_form ?? ""} ${r.material_dimension ?? ""} ${r.location ?? ""} ${r.unit ?? ""}`
+        `${r.material_name} ${r.material_code} ${r.material_form ?? ""} ${r.material_dimension ?? ""} ${r.location ?? ""} ${locationName} ${r.unit ?? ""}`
       ).includes(q);
       const matchesGroup = groupFilter === "" || r.material_group_id === groupFilter;
       const matchesForm = !formFilter || r.material_form === formFilter;
       return matchesText && matchesGroup && matchesForm;
     });
-  }, [rows, query, groupFilter, formFilter]);
+  }, [rows, query, groupFilter, formFilter, locations]);
 
   const formFilterOptions = useMemo(() => {
     const forms = new Set(rows.map((r) => r.material_form?.trim()).filter((v): v is string => Boolean(v)));
@@ -273,7 +280,14 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                 </div>
                 <div>
                   <div style={UI.inputs.label}>Lokace</div>
-                  <input value={location} onChange={(e) => setLocation(e.target.value)} style={UI.inputs.base} />
+                  <select value={location} onChange={(e) => setLocation(e.target.value)} style={UI.inputs.base}>
+                    <option value="">Bez umístění</option>
+                    {locations.map((loc) => (
+                      <option key={loc.id} value={loc.code}>
+                        {loc.code} — {loc.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <div style={UI.inputs.label}>Aktuální stav (mm)</div>
@@ -354,7 +368,14 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                         {row.scan_code?.trim() ? row.scan_code : "—"}
                       </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.material_dimension || "—"}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.location || "—"}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                        {row.location
+                          ? (() => {
+                              const loc = locations.find((x) => x.code === row.location);
+                              return loc ? `${loc.code} — ${loc.name}` : row.location;
+                            })()
+                          : "—"}
+                      </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
                         {row.current_qty} mm
                       </td>
