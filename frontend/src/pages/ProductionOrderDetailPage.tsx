@@ -6,10 +6,32 @@ import {
   startProductionOrderOperation,
   type ProductionOrderDetail,
 } from "../services/productionOrdersApi";
+import { buildErpUrl } from "../utils/erpDeepLink";
+
+const API_URL =
+  (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+const linkButtonReset: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  cursor: "pointer",
+  font: "inherit",
+  color: "#2563eb",
+  textDecoration: "underline",
+  textUnderlineOffset: "3px",
+  fontSize: "inherit",
+  fontWeight: 800,
+};
 
 type Props = {
   productionOrderId: number;
   onBack: () => void;
+  onWorkspaceTabTitle?: (title: string) => void;
+  onOpenPortfolioItemId?: (portfolioItemId: number) => void;
+  onOpenCustomerOrderCard?: (customerOrderId: number) => void;
+  onPreviewPortfolioById?: (portfolioItemId: number) => void;
 };
 
 function labelLogisticMode(v: string | null | undefined): string {
@@ -32,7 +54,14 @@ function labelOrderType(v: string | null | undefined): string {
   return v === "internal" ? "Interní zakázka" : "Zakázka";
 }
 
-export default function ProductionOrderDetailPage({ productionOrderId, onBack }: Props) {
+export default function ProductionOrderDetailPage({
+  productionOrderId,
+  onBack,
+  onWorkspaceTabTitle,
+  onOpenPortfolioItemId,
+  onOpenCustomerOrderCard,
+  onPreviewPortfolioById,
+}: Props) {
   const [data, setData] = useState<ProductionOrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +95,12 @@ export default function ProductionOrderDetailPage({ productionOrderId, onBack }:
       cancelled = true;
     };
   }, [productionOrderId]);
+
+  useEffect(() => {
+    if (!onWorkspaceTabTitle || !data) return;
+    const code = data.vp_code?.trim();
+    onWorkspaceTabTitle(code || `VP · #${productionOrderId}`);
+  }, [data, productionOrderId, onWorkspaceTabTitle]);
 
   async function handleStartOperation(operationNo: number) {
     setOpActionError(null);
@@ -137,6 +172,7 @@ export default function ProductionOrderDetailPage({ productionOrderId, onBack }:
     ["Stav", data.status ?? "—"],
     ["Množství", `${data.quantity} ks`],
   ];
+  const zakazkaTileLabel = labelOrderType(data.order_type);
 
   return (
     <div style={UI.container}>
@@ -146,16 +182,61 @@ export default function ProductionOrderDetailPage({ productionOrderId, onBack }:
             <div style={UI.pageTitle}>Detail výrobního příkazu</div>
             <div style={UI.sectionSubtitle}>Karta VP a navázaný technologický postup</div>
           </div>
-          <button onClick={onBack} style={UI.buttonSecondary}>
-            Zpět na výrobní příkazy
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => window.open(`${API_URL}/production-orders/${productionOrderId}/print`, "_blank")}
+              style={UI.buttonPrimary}
+            >
+              Tisk VP
+            </button>
+            <button
+              type="button"
+              style={UI.buttons.secondary}
+              onClick={() =>
+                window.open(buildErpUrl({ view: "productionOrder", productionOrderId }), "_blank")
+              }
+            >
+              Otevřít v novém okně
+            </button>
+            {data.portfolio_item_id != null && onPreviewPortfolioById ? (
+              <button type="button" style={UI.buttons.secondary} onClick={() => onPreviewPortfolioById(data.portfolio_item_id!)}>
+                Náhled portfolia
+              </button>
+            ) : null}
+            <button onClick={onBack} style={UI.buttonSecondary}>
+              Zpět na výrobní příkazy
+            </button>
+          </div>
         </div>
 
         <div style={UI.summaryTilesGrid}>
           {summary.map(([k, v]) => (
             <div key={k} style={{ ...UI.summaryTile, flex: "1 1 220px" }}>
               <div style={UI.summaryTileLabel}>{k}</div>
-              <div style={{ ...UI.summaryTileValue, fontSize: 18 }}>{v}</div>
+              <div style={{ ...UI.summaryTileValue, fontSize: 18 }}>
+                {k === "GPN" &&
+                data.portfolio_item_id != null &&
+                onOpenPortfolioItemId &&
+                v !== "—" ? (
+                  <button type="button" style={linkButtonReset} onClick={() => onOpenPortfolioItemId(data.portfolio_item_id!)}>
+                    {v}
+                  </button>
+                ) : k === zakazkaTileLabel &&
+                  data.customer_order_id != null &&
+                  onOpenCustomerOrderCard &&
+                  v !== "—" ? (
+                  <button
+                    type="button"
+                    style={linkButtonReset}
+                    onClick={() => onOpenCustomerOrderCard(data.customer_order_id!)}
+                  >
+                    {v}
+                  </button>
+                ) : (
+                  v
+                )}
+              </div>
             </div>
           ))}
         </div>

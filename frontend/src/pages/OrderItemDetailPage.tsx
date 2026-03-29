@@ -8,6 +8,7 @@ import {
 } from "../services/ordersApi";
 import {
   findPortfolioItemByGpn,
+  getPortfolioItem,
   getPortfolioItems,
   getPortfolioItemTechnology,
   getPortfolioTechnologyMaterials,
@@ -16,13 +17,19 @@ import {
   type PortfolioItemTechnologyResponse,
   type PortfolioTechnologyMaterial,
 } from "../services/portfolioApi";
+import { buildErpUrl } from "../utils/erpDeepLink";
 
 type Props = {
   jobItemId: number;
   source: "orders" | "drawings";
   onBack: () => void;
+  onWorkspaceTabTitle?: (title: string) => void;
   /** Otevře detail portfolio položky (např. z GPN shody). */
   onOpenPortfolioItem?: (item: PortfolioItem) => void;
+  onOpenProductionOrderDetail?: (productionOrderId: number) => void;
+  onOpenCustomerOrderCard?: (customerOrderId: number) => void;
+  onPreviewPortfolioById?: (portfolioItemId: number) => void;
+  onPreviewProductionOrderById?: (productionOrderId: number) => void;
 };
 
 type ItemSubtab =
@@ -109,7 +116,29 @@ function PlaceholderCard({ text }: { text: string }) {
   );
 }
 
-export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenPortfolioItem }: Props) {
+const linkButtonReset: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  cursor: "pointer",
+  font: "inherit",
+  color: "#2563eb",
+  textDecoration: "underline",
+  textUnderlineOffset: "3px",
+};
+
+export default function OrderItemDetailPage({
+  jobItemId,
+  source,
+  onBack,
+  onWorkspaceTabTitle,
+  onOpenPortfolioItem,
+  onOpenProductionOrderDetail,
+  onOpenCustomerOrderCard,
+  onPreviewPortfolioById,
+  onPreviewProductionOrderById,
+}: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
   const [hoverTab, setHoverTab] = useState<ItemSubtab | null>(null);
   const [detail, setDetail] = useState<LoadedJobItemDetail | null>(null);
@@ -155,6 +184,14 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
       cancelled = true;
     };
   }, [jobItemId]);
+
+  useEffect(() => {
+    if (!onWorkspaceTabTitle || !detail) return;
+    const line = detail.item.line_no;
+    const gpn = (detail.item.gpn ?? "").trim();
+    const second = gpn || String(detail.item.job_item_id);
+    onWorkspaceTabTitle(`Položka ${line} / ${second}`);
+  }, [detail, onWorkspaceTabTitle]);
 
   const gpnForPortfolio = (detail?.item.gpn ?? "").trim();
 
@@ -336,12 +373,44 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
       ? linkedProductionOrders.map((po) => po.vp_code).filter(Boolean).join(", ")
       : (item.vp_code ?? "—");
 
+  async function openPortfolioFromGpn() {
+    if (!onOpenPortfolioItem) return;
+    if (matchedPortfolioItem) {
+      onOpenPortfolioItem(matchedPortfolioItem);
+      return;
+    }
+    const pid = item.effective_portfolio_item_id ?? item.portfolio_item_id ?? null;
+    if (pid != null) {
+      try {
+        const pi = await getPortfolioItem(pid);
+        onOpenPortfolioItem(pi);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const found = await findPortfolioItemByGpn(item.gpn);
+    if (found) onOpenPortfolioItem(found);
+  }
+
+  const portfolioPreviewId =
+    matchedPortfolioItem?.id ?? item.effective_portfolio_item_id ?? item.portfolio_item_id ?? null;
+
   return (
     <div style={UI.container}>
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        <div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
           <button onClick={onBack} style={UI.buttonSecondary}>
             {source === "orders" ? "Zpět na zakázku" : "Zpět na výkresy"}
+          </button>
+          <button
+            type="button"
+            style={UI.buttons.secondary}
+            onClick={() =>
+              window.open(buildErpUrl({ view: "orderItem", jobItemId, source }), "_blank")
+            }
+          >
+            Otevřít v novém okně
           </button>
         </div>
 
@@ -356,7 +425,11 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
           }}
         >
           <div style={{ minWidth: 0, flex: "1 1 280px" }}>
-            <h1
+            <button
+              type="button"
+              disabled={!onOpenPortfolioItem}
+              onClick={() => void openPortfolioFromGpn()}
+              title={onOpenPortfolioItem ? "Otevřít portfolio položku" : undefined}
               style={{
                 margin: 0,
                 fontSize: 30,
@@ -364,10 +437,18 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
                 color: "#0f172a",
                 lineHeight: 1.2,
                 letterSpacing: "-0.02em",
+                display: "block",
+                background: "none",
+                border: "none",
+                padding: 0,
+                textAlign: "left",
+                cursor: onOpenPortfolioItem ? "pointer" : "default",
+                textDecoration: onOpenPortfolioItem ? "underline" : "none",
+                textUnderlineOffset: 4,
               }}
             >
               {item.gpn}
-            </h1>
+            </button>
             <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0, maxWidth: 720 }}>
               {source === "drawings" ? "Detail položky napříč zakázkami" : item.description ?? "—"}
             </p>
@@ -385,11 +466,13 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
               style={{
                 display: "inline-flex",
                 alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
                 padding: "6px 12px",
                 borderRadius: 999,
                 fontSize: 12,
                 fontWeight: 800,
-                ...(vpLabel && vpLabel !== "—"
+                ...(linkedProductionOrders.length > 0 || (item.vp_code && vpLabel !== "—")
                   ? {
                       background: "#dcfce7",
                       color: "#15803d",
@@ -402,7 +485,48 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
                     }),
               }}
             >
-              VP: {vpLabel}
+              <span style={{ whiteSpace: "nowrap" }}>VP:</span>
+              {linkedProductionOrders.length > 0 ? (
+                linkedProductionOrders.map((po, idx) => (
+                  <span key={po.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {idx > 0 ? <span style={{ color: "#64748b" }}>·</span> : null}
+                    <button
+                      type="button"
+                      disabled={!onOpenProductionOrderDetail}
+                      onClick={() => onOpenProductionOrderDetail?.(po.id)}
+                      style={{
+                        ...linkButtonReset,
+                        color: "#15803d",
+                        fontWeight: 900,
+                        fontSize: 12,
+                      }}
+                    >
+                      {po.vp_code}
+                    </button>
+                  </span>
+                ))
+              ) : item.vp_code && onOpenProductionOrderDetail ? (
+                (() => {
+                  const po = (item.production_orders ?? []).find((p) => p.vp_code === item.vp_code);
+                  if (!po) return <span style={{ color: "#15803d" }}>{item.vp_code}</span>;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => onOpenProductionOrderDetail(po.id)}
+                      style={{
+                        ...linkButtonReset,
+                        color: "#15803d",
+                        fontWeight: 900,
+                        fontSize: 12,
+                      }}
+                    >
+                      {item.vp_code}
+                    </button>
+                  );
+                })()
+              ) : (
+                <span>{vpLabel}</span>
+              )}
             </span>
             <span
               style={{
@@ -422,9 +546,20 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
 
         {/* Sekce 2 — údaje jako executive dlaždice (stejný systém jako Zakázky / karta) */}
         <div style={UI.summaryTilesGrid}>
+          <div style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
+            <div style={UI.summaryTileLabel}>Zakázka</div>
+            <div style={UI.summaryTileValue}>
+              {onOpenCustomerOrderCard ? (
+                <button type="button" style={linkButtonReset} onClick={() => onOpenCustomerOrderCard(detail.customerOrderId)}>
+                  {order.job?.zakazka ?? "—"}
+                </button>
+              ) : (
+                order.job?.zakazka ?? "—"
+              )}
+            </div>
+          </div>
           {(
             [
-              ["Zakázka", order.job?.zakazka ?? "—"],
               ["Řádek", String(item.line_no)],
               ["Množství", `${item.qty} ks`],
               ["Termín", item.due_date ?? "—"],
@@ -509,7 +644,25 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
                 <tbody>
                   {linkedProductionOrders.map((po) => (
                     <tr key={po.id}>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{po.vp_code}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                        <button
+                          type="button"
+                          disabled={!onOpenProductionOrderDetail}
+                          onClick={() => onOpenProductionOrderDetail?.(po.id)}
+                          style={{ ...linkButtonReset, fontWeight: 800 }}
+                        >
+                          {po.vp_code}
+                        </button>
+                        {onPreviewProductionOrderById ? (
+                          <button
+                            type="button"
+                            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+                            onClick={() => onPreviewProductionOrderById(po.id)}
+                          >
+                            Náhled
+                          </button>
+                        ) : null}
+                      </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.source_type ?? "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.logistic_mode ?? "—"}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.quantity} ks</td>
@@ -550,16 +703,35 @@ export default function OrderItemDetailPage({ jobItemId, source, onBack, onOpenP
             {portfolioTechLoading ? (
               <span style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>Ověřuji portfolio…</span>
             ) : matchedPortfolioItem ? (
+              <>
+                <button
+                  type="button"
+                  style={{
+                    ...UI.buttons.primary,
+                    ...(!onOpenPortfolioItem ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+                  }}
+                  disabled={!onOpenPortfolioItem}
+                  onClick={() => onOpenPortfolioItem?.(matchedPortfolioItem)}
+                >
+                  Otevřít portfolio
+                </button>
+                {onPreviewPortfolioById && portfolioPreviewId != null ? (
+                  <button
+                    type="button"
+                    style={UI.buttons.secondary}
+                    onClick={() => onPreviewPortfolioById(portfolioPreviewId)}
+                  >
+                    Náhled v panelu
+                  </button>
+                ) : null}
+              </>
+            ) : onPreviewPortfolioById && portfolioPreviewId != null ? (
               <button
                 type="button"
-                style={{
-                  ...UI.buttons.primary,
-                  ...(!onOpenPortfolioItem ? { opacity: 0.5, cursor: "not-allowed" } : {}),
-                }}
-                disabled={!onOpenPortfolioItem}
-                onClick={() => onOpenPortfolioItem?.(matchedPortfolioItem)}
+                style={UI.buttons.secondary}
+                onClick={() => onPreviewPortfolioById(portfolioPreviewId)}
               >
-                Otevřít portfolio
+                Náhled portfolia v panelu
               </button>
             ) : (
               <span style={{ fontSize: 13, color: "#94a3b8", fontWeight: 700 }}>Portfolio nenalezeno</span>

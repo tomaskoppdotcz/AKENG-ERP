@@ -14,6 +14,7 @@ import {
   type OrderDetailItem,
   type OrderDetailResponse,
 } from "../services/ordersApi";
+import { buildErpUrl } from "../utils/erpDeepLink";
 
 type Props = {
   customerOrderId: number;
@@ -21,6 +22,8 @@ type Props = {
   onOpenItemDetail: (jobItemId: number, source: "orders") => void;
   /** Po smazání celé zakázky — např. zavřít kartu a obnovit přehled. */
   onOrderDeleted?: () => void;
+  /** Titulek záložky po načtení detailu (číslo zakázky z API). */
+  onWorkspaceTabTitle?: (title: string) => void;
 };
 
 type OrderSubtab =
@@ -88,7 +91,13 @@ function formatVpCodes(item: OrderDetailItem, orderKind: string): string {
   return `${codes[0]}, ${codes[1]} +${codes.length - 2}`;
 }
 
-export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetail, onOrderDeleted }: Props) {
+export default function OrderCardPage({
+  customerOrderId,
+  onBack,
+  onOpenItemDetail,
+  onOrderDeleted,
+  onWorkspaceTabTitle,
+}: Props) {
   const [data, setData] = useState<OrderDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -151,6 +160,13 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!onWorkspaceTabTitle || !data?.job) return;
+    const z = data.job.zakazka?.trim();
+    const co = data.customer_order?.id ?? data.job.customer_order_id ?? customerOrderId;
+    onWorkspaceTabTitle(z ? `Zakázka ${z}` : `Zakázka ${co}`);
+  }, [data, customerOrderId, onWorkspaceTabTitle]);
 
   useEffect(() => {
     let cancelled = false;
@@ -509,6 +525,13 @@ export default function OrderCardPage({ customerOrderId, onBack, onOpenItemDetai
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "flex-end" }}>
             <button type="button" onClick={onBack} style={UI.buttons.secondary}>
               Zpět na přehled
+            </button>
+            <button
+              type="button"
+              style={UI.buttons.secondary}
+              onClick={() => window.open(buildErpUrl({ view: "orderCard", customerOrderId }), "_blank")}
+            >
+              Otevřít v novém okně
             </button>
             <button type="button" style={UI.buttons.secondary} onClick={() => openHeaderEdit(data)}>
               Upravit zakázku
