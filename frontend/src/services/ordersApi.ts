@@ -1,6 +1,8 @@
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
+export type ErpWorkflowListFilter = "active" | "cancelled" | "all";
+
 export type OrdersOverviewRow = {
   zakazka: string;
   zakaznik: string | null;
@@ -18,6 +20,7 @@ export type OrdersOverviewRow = {
   hotovo: number;
   customer_order_id: number | null;
   job_id: number;
+  workflow_status?: string | null;
 };
 
 export type OrdersOverviewResponse = {
@@ -59,7 +62,10 @@ export type OrderDetailItem = {
     logistic_mode: string | null;
     source_type: string | null;
     status: string | null;
+    workflow_status?: string | null;
   }>;
+  /** active | cancelled | …; null/empty = active (legacy) */
+  workflow_status?: string | null;
   portfolio_item_id?: number | null;
   portfolio_item_name?: string | null;
   material_default?: string | null;
@@ -104,6 +110,7 @@ export type OrderDetailResponse = {
     requested_ship_date?: string | null;
     note?: string | null;
     order_type?: string | null;
+    workflow_status?: string | null;
   } | null;
   summary: {
     termin: string | null;
@@ -123,6 +130,8 @@ export type JobItemRow = {
   gpn: string;
   qty: number;
   due_date: string | null;
+  workflow_status?: string | null;
+  order_workflow_status?: string | null;
   description?: string | null;
   portfolio_item_id?: number | null;
 };
@@ -150,6 +159,16 @@ export type ProductionOrderRow = {
   logistic_mode?: string | null;
   quantity?: number | null;
   status?: string | null;
+  /** null/empty/active = aktivní VP */
+  workflow_status?: string | null;
+};
+
+export type DuplicateFlowWarning = {
+  job_item_id: number;
+  source_type: string;
+  production_order_count: number;
+  production_order_ids: number[];
+  flag: string;
 };
 
 export type CreateProductionOrdersResponse = {
@@ -162,7 +181,9 @@ export type CreateProductionOrdersResponse = {
     quantity: number;
     status: string;
     state: "created" | "existing";
+    duplicate_flow?: boolean;
   }>;
+  duplicate_flow_warnings?: DuplicateFlowWarning[];
 };
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
@@ -176,9 +197,10 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
 }
 
 export async function getOrdersOverview(
-  orderType: OrdersOverviewOrderTypeFilter = "customer"
+  orderType: OrdersOverviewOrderTypeFilter = "customer",
+  workflowFilter: ErpWorkflowListFilter = "active"
 ): Promise<OrdersOverviewRow[]> {
-  const q = new URLSearchParams({ order_type: orderType });
+  const q = new URLSearchParams({ order_type: orderType, workflow_filter: workflowFilter });
   const res = await fetch(`${API_BASE}/orders-overview/list?${q.toString()}`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst přehled zakázek."));
@@ -212,6 +234,7 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
               requested_ship_date: co.requested_ship_date ?? null,
               note: co.note ?? null,
               order_type: co.order_type ?? "customer",
+              workflow_status: co.workflow_status ?? null,
             }
           : null,
       summary: (() => {
@@ -251,6 +274,7 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
       requested_ship_date: raw?.requested_ship_date ?? null,
       note: raw?.note ?? null,
       order_type: raw?.order_type ?? "customer",
+      workflow_status: raw?.workflow_status ?? null,
     },
     summary: {
       termin: raw?.termin ?? null,
@@ -277,8 +301,9 @@ export async function createCustomerOrder(
   return res.json();
 }
 
-export async function getJobItems(): Promise<JobItemRow[]> {
-  const res = await fetch(`${API_BASE}/orders/job-items`);
+export async function getJobItems(workflowFilter: ErpWorkflowListFilter = "active"): Promise<JobItemRow[]> {
+  const q = new URLSearchParams({ workflow_filter: workflowFilter });
+  const res = await fetch(`${API_BASE}/orders/job-items?${q.toString()}`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst položky zakázek.");
   }
@@ -309,10 +334,10 @@ export async function updateJobItem(itemId: number, payload: JobItemUpdatePayloa
   return res.json();
 }
 
-export async function deleteJobItem(itemId: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/orders/job-items/${itemId}`, { method: "DELETE" });
+export async function stornoJobItem(itemId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/orders/job-items/${itemId}/storno`, { method: "POST" });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Nepodařilo se smazat položku zakázky."));
+    throw new Error(await readErrorMessage(res, "Nepodařilo se stornovat položku zakázky."));
   }
 }
 
@@ -330,10 +355,10 @@ export async function updateCustomerOrder(
   }
 }
 
-export async function deleteCustomerOrder(customerOrderId: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/orders/customer-orders/${customerOrderId}`, { method: "DELETE" });
+export async function stornoCustomerOrder(customerOrderId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/orders/customer-orders/${customerOrderId}/storno`, { method: "POST" });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Nepodařilo se smazat zakázku."));
+    throw new Error(await readErrorMessage(res, "Nepodařilo se stornovat zakázku."));
   }
 }
 
@@ -345,8 +370,9 @@ export async function getJobs(): Promise<JobRow[]> {
   return res.json();
 }
 
-export async function getProductionOrders(): Promise<ProductionOrderRow[]> {
-  const res = await fetch(`${API_BASE}/orders/production-orders`);
+export async function getProductionOrders(workflowFilter: ErpWorkflowListFilter = "active"): Promise<ProductionOrderRow[]> {
+  const q = new URLSearchParams({ workflow_filter: workflowFilter });
+  const res = await fetch(`${API_BASE}/orders/production-orders?${q.toString()}`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst výrobní příkazy.");
   }
@@ -369,7 +395,7 @@ export async function createProductionOrdersFromAllocation(
 export async function getJobItemDetailContext(
   jobItemId: number
 ): Promise<{ customerOrderId: number; order: OrderDetailResponse; item: OrderDetailItem } | null> {
-  const [items, jobs] = await Promise.all([getJobItems(), getJobs()]);
+  const [items, jobs] = await Promise.all([getJobItems("all"), getJobs()]);
   const ji = items.find((x) => x.id === jobItemId);
   if (!ji) return null;
   const job = jobs.find((j) => j.id === ji.job_id);

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.orders import CustomerOrder, Job, JobItem
+from app.services.business_workflow import workflow_record_active
 from app.models.planning import PlanningOperation
 from app.models.portfolio import PortfolioItem
 from app.models.production import OperationLog
@@ -29,11 +30,15 @@ def _order_type_value(co: CustomerOrder) -> str:
 @router.get("/orders-overview/list")
 def get_orders_overview(
   order_type: str = Query("customer", description="customer | internal | all"),
+  workflow_filter: str = Query("active", description="active | cancelled | all"),
   db: Session = Depends(get_db),
 ):
   ot = (order_type or "customer").strip().lower()
   if ot not in ("customer", "internal", "all"):
     ot = "customer"
+  wf = (workflow_filter or "active").strip().lower()
+  if wf not in ("active", "cancelled", "all"):
+    wf = "active"
 
   jobs = db.scalars(select(Job).order_by(Job.id.desc())).all()
 
@@ -182,6 +187,11 @@ def get_orders_overview(
     co = customer_map.get(job.customer_order_id)
     if co is None:
       continue
+    co_active = workflow_record_active(co)
+    if wf == "active" and not co_active:
+      continue
+    if wf == "cancelled" and co_active:
+      continue
     job_items = items_by_job.get(job.id, [])
 
     termin = None
@@ -220,6 +230,7 @@ def get_orders_overview(
         "hotovo": hotovo,
         "customer_order_id": co.id if co else None,
         "job_id": job.id,
+        "workflow_status": getattr(co, "workflow_status", None),
       }
     )
 

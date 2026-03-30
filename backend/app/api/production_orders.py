@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select, text
+from sqlalchemy import not_, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -281,12 +281,19 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
 
 
 @router.get("")
-def list_production_orders(db: Session = Depends(get_db)):
-    rows = db.scalars(
-        select(ProductionOrder)
-        .where(workflow_active_sql(ProductionOrder.workflow_status))
-        .order_by(ProductionOrder.id.desc())
-    ).all()
+def list_production_orders(
+    workflow_filter: str = Query("active", description="active | cancelled | all"),
+    db: Session = Depends(get_db),
+):
+    wf = (workflow_filter or "active").strip().lower()
+    if wf not in ("active", "cancelled", "all"):
+        wf = "active"
+    q = select(ProductionOrder)
+    if wf == "active":
+        q = q.where(workflow_active_sql(ProductionOrder.workflow_status))
+    elif wf == "cancelled":
+        q = q.where(not_(workflow_active_sql(ProductionOrder.workflow_status)))
+    rows = db.scalars(q.order_by(ProductionOrder.id.desc())).all()
     if not rows:
         return {"items": []}
 

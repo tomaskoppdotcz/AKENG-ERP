@@ -1,10 +1,20 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
-import { getJobItems, getJobs, getProductionOrders } from "../services/ordersApi";
+import {
+  getJobItems,
+  getJobs,
+  getProductionOrders,
+  type ErpWorkflowListFilter,
+  type ProductionOrderRow,
+} from "../services/ordersApi";
+import { buildErpUrl } from "../utils/erpDeepLink";
 
 type DrawingItem = {
   zakazka: string;
   job_item_id: number;
+  job_id: number;
+  customer_order_id: number | null;
+  portfolio_item_id: number | null;
   line_no: number | null;
   gpn: string;
   popis: string;
@@ -12,12 +22,49 @@ type DrawingItem = {
   mnozstvi: string;
   termin: string;
   vp: string;
+  vpLinks: Array<{ id: number; vp_code: string }>;
   stav: string;
 };
+
+function rowWorkflowActive(itemWf: string | null | undefined, orderWf: string | null | undefined): boolean {
+  const ok = (s: string | null | undefined) => {
+    const v = String(s ?? "").trim().toLowerCase();
+    return !v || v === "active";
+  };
+  return ok(itemWf) && ok(orderWf);
+}
+
+const WORKFLOW_LIST_OPTIONS: { id: ErpWorkflowListFilter; label: string }[] = [
+  { id: "active", label: "Aktivní" },
+  { id: "cancelled", label: "Stornované" },
+  { id: "all", label: "Vše" },
+];
 
 type Props = {
   onBackToDashboard?: () => void;
   onOpenItemDetail?: (jobItemId: number, source: "drawings") => void;
+  onOpenItemInWorkspaceTab?: (jobItemId: number, source: "drawings") => void;
+  onOpenPortfolioSearch?: (gpn: string) => void;
+  onOpenPortfolioItemId?: (portfolioItemId: number) => void;
+  onOpenPortfolioInWorkspaceTab?: (portfolioItemId: number) => void;
+  onOpenProductionOrderDetail?: (productionOrderId: number) => void;
+  onOpenProductionOrderInWorkspaceTab?: (productionOrderId: number, vpCode?: string) => void;
+  onOpenCustomerOrderCard?: (customerOrderId: number) => void;
+  onOpenCustomerOrderInWorkspaceTab?: (customerOrderId: number, zakazkaLabel?: string) => void;
+  onPreviewPortfolioById?: (portfolioItemId: number) => void;
+  onPreviewProductionOrderById?: (productionOrderId: number) => void;
+};
+
+const linkBtn: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  cursor: "pointer",
+  font: "inherit",
+  color: "#2563eb",
+  textDecoration: "underline",
+  textUnderlineOffset: "3px",
 };
 
 const SUBTABS = [
@@ -48,7 +95,20 @@ function formatVpCodes(codes: string[]): string {
   return `${cleaned[0]}, ${cleaned[1]} +${cleaned.length - 2}`;
 }
 
-export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Props) {
+export default function DrawingsPage({
+  onBackToDashboard,
+  onOpenItemDetail,
+  onOpenItemInWorkspaceTab,
+  onOpenPortfolioSearch,
+  onOpenPortfolioItemId,
+  onOpenPortfolioInWorkspaceTab,
+  onOpenProductionOrderDetail,
+  onOpenProductionOrderInWorkspaceTab,
+  onOpenCustomerOrderCard,
+  onOpenCustomerOrderInWorkspaceTab,
+  onPreviewPortfolioById,
+  onPreviewProductionOrderById,
+}: Props) {
   const [activeSubtab, setActiveSubtab] = useState<DrawingsSubtab>("Přehled");
   const [hoverSubtab, setHoverSubtab] = useState<DrawingsSubtab | null>(null);
   const [query, setQuery] = useState("");
@@ -57,22 +117,23 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
   const [rows, setRows] = useState<DrawingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [workflowListFilter, setWorkflowListFilter] = useState<ErpWorkflowListFilter>("active");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([getJobItems(), getJobs(), getProductionOrders()])
+    Promise.all([getJobItems(workflowListFilter), getJobs(), getProductionOrders(workflowListFilter)])
       .then(([jobItems, jobs, productionOrders]) => {
         if (cancelled) return;
         const jobById = new Map(jobs.map((j) => [j.id, j]));
-        const vpByItemId = new Map<number, string[]>();
+        const vpByItemId = new Map<number, ProductionOrderRow[]>();
         for (const vp of productionOrders) {
           if (!(vp.source_type === "stock_allocation" || vp.source_type === "order_allocation")) {
             continue;
           }
           const arr = vpByItemId.get(vp.job_item_id) ?? [];
-          arr.push(vp.vp_code);
+          arr.push(vp);
           vpByItemId.set(vp.job_item_id, arr);
         }
         const mapped: DrawingItem[] = jobItems.map((row) => {
@@ -80,17 +141,33 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
           const rawLineNo = row.line_no;
           const normalizedLineNo =
             typeof rawLineNo === "number" && Number.isFinite(rawLineNo) ? rawLineNo : null;
+          const vpRowsAll = vpByItemId.get(row.id) ?? [];
+          const poWfActive = (ws: string | null | undefined) => {
+            const t = String(ws ?? "").trim().toLowerCase();
+            return !t || t === "active";
+          };
+          const vpRows =
+            workflowListFilter === "all"
+              ? vpRowsAll
+              : vpRowsAll.filter((v) =>
+                  workflowListFilter === "active" ? poWfActive(v.workflow_status) : !poWfActive(v.workflow_status)
+                );
+          const cancelledRow = !rowWorkflowActive(row.workflow_status, row.order_workflow_status);
           return {
             zakazka: job?.zak_code ?? "—",
             job_item_id: row.id,
+            job_id: row.job_id,
+            customer_order_id: job?.customer_order_id ?? null,
+            portfolio_item_id: row.portfolio_item_id ?? null,
             line_no: normalizedLineNo,
             gpn: row.gpn,
-            popis: "—",
+            popis: row.description?.trim() ? row.description : "—",
             material: "—",
             mnozstvi: `${row.qty} ks`,
             termin: row.due_date ?? "—",
-            vp: formatVpCodes(vpByItemId.get(row.id) ?? []),
-            stav: "—",
+            vp: formatVpCodes(vpRows.map((v) => v.vp_code)),
+            vpLinks: vpRows.map((v) => ({ id: v.id, vp_code: v.vp_code })),
+            stav: cancelledRow ? "Storno" : "—",
           };
         });
         setRows(mapped);
@@ -106,7 +183,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workflowListFilter]);
 
   const filteredRows = useMemo(() => {
     const normalized = q(query);
@@ -136,7 +213,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
       const qty = Number.parseInt(row.mnozstvi.replace(" ks", "").trim(), 10) || 0;
       return sum + qty;
     }, 0);
-    const aktivniPolozky = rows.filter((row) => row.stav !== "Hotovo").length;
+    const aktivniPolozky = rows.filter((row) => row.stav !== "Hotovo" && row.stav !== "Storno").length;
     const poTerminu = rows.filter((row) => row.termin !== "—" && row.termin < new Date().toISOString().slice(0, 10)).length;
     const kExpedici = rows.filter((row) => row.stav === "Hotovo").length;
 
@@ -154,17 +231,20 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
       <div style={UI.pageHeaderRow}>
         <div>
           <div style={UI.sectionTitle}>Výkresy</div>
-          <div style={UI.sectionSubtitle}>Položky ze všech zakázek</div>
+          <div style={UI.sectionSubtitle}>Odvozený přehled položek zakázek (GPN / řádky z objednávek)</div>
         </div>
         <div style={UI.pageHeaderActions}>
+          {query.trim() ? (
+            <button
+              type="button"
+              style={UI.buttons.secondary}
+              onClick={() => window.open(buildErpUrl({ view: "portfolioSearch", gpn: query.trim() }), "_blank")}
+            >
+              Portfolio — nové okno ({query.trim()})
+            </button>
+          ) : null}
           <button type="button" style={UI.buttons.secondary} onClick={() => onBackToDashboard?.()}>
             Zpět na nástěnku
-          </button>
-          <button type="button" style={UI.buttons.primary} onClick={() => {}}>
-            Nový výkres
-          </button>
-          <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
-            Import výkresů
           </button>
         </div>
       </div>
@@ -238,9 +318,30 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
                   background: "#f8fafc",
                 }}
               >
-                Výkresy jsou zatím prázdné. Po načtení reálných položek z backendu se zde objeví seznam.
+                Žádné položky v tomto režimu. Zkuste „Vše“ nebo „Stornované“, případně vytvořte zakázku a řádky v modulu Zakázky.
               </div>
             ) : null}
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#475569" }}>Zobrazit:</span>
+              {WORKFLOW_LIST_OPTIONS.map(({ id, label }) => {
+                const active = workflowListFilter === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setWorkflowListFilter(id)}
+                    disabled={loading}
+                    style={{
+                      ...UI.ordersFilterChip,
+                      ...(active ? UI.ordersFilterChipActive : {}),
+                      ...(loading ? { opacity: 0.6, cursor: "wait" } : {}),
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
             <div style={UI.ordersFilterBar}>
               <div style={UI.ordersFilterSearchWrap}>
                 <input
@@ -276,7 +377,7 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["Zakázka", "Řádek", "GPN", "Popis", "Materiál", "Množství", "Termín", "VP", "Stav"].map((h) => (
+                    {["Zakázka", "Řádek", "GPN", "Popis", "Materiál", "Množství", "Termín", "VP", "Stav", "Nové okno"].map((h) => (
                       <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                         {h}
                       </th>
@@ -289,11 +390,15 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
                       key={`${row.zakazka}-${row.job_item_id}`}
                       role="button"
                       tabIndex={0}
-                      onClick={() => onOpenItemDetail?.(row.job_item_id, "drawings")}
+                      onClick={() => {
+                        if (onOpenItemInWorkspaceTab) onOpenItemInWorkspaceTab(row.job_item_id, "drawings");
+                        else onOpenItemDetail?.(row.job_item_id, "drawings");
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          onOpenItemDetail?.(row.job_item_id, "drawings");
+                          if (onOpenItemInWorkspaceTab) onOpenItemInWorkspaceTab(row.job_item_id, "drawings");
+                          else onOpenItemDetail?.(row.job_item_id, "drawings");
                         }
                       }}
                       onMouseEnter={() => setHoveredRow(row.job_item_id)}
@@ -303,24 +408,124 @@ export default function DrawingsPage({ onBackToDashboard, onOpenItemDetail }: Pr
                         background: hoveredRow === row.job_item_id ? "#eff6ff" : "#fff",
                       }}
                     >
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900 }}>{row.zakazka}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                        {row.customer_order_id != null && (onOpenCustomerOrderInWorkspaceTab || onOpenCustomerOrderCard) ? (
+                          <button
+                            type="button"
+                            style={{ ...linkBtn, fontWeight: 900, color: "#0f172a" }}
+                            onClick={() => {
+                              const id = row.customer_order_id!;
+                              if (onOpenCustomerOrderInWorkspaceTab) onOpenCustomerOrderInWorkspaceTab(id, row.zakazka);
+                              else onOpenCustomerOrderCard?.(id);
+                            }}
+                          >
+                            {row.zakazka}
+                          </button>
+                        ) : (
+                          <span style={{ fontWeight: 900 }}>{row.zakazka}</span>
+                        )}
+                      </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
                         {row.line_no ?? "—"}
                       </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{row.gpn}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          style={{ ...linkBtn, fontWeight: 800 }}
+                          onClick={() => {
+                            if (row.portfolio_item_id != null && onOpenPortfolioInWorkspaceTab) {
+                              onOpenPortfolioInWorkspaceTab(row.portfolio_item_id);
+                              return;
+                            }
+                            if (row.portfolio_item_id != null && onOpenPortfolioItemId) {
+                              onOpenPortfolioItemId(row.portfolio_item_id);
+                              return;
+                            }
+                            onOpenPortfolioSearch?.(row.gpn);
+                          }}
+                        >
+                          {row.gpn}
+                        </button>
+                        {row.portfolio_item_id != null && onPreviewPortfolioById ? (
+                          <button
+                            type="button"
+                            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+                            onClick={() => onPreviewPortfolioById(row.portfolio_item_id!)}
+                          >
+                            Náhled
+                          </button>
+                        ) : null}
+                      </td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.popis}</td>
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.material}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.mnozstvi}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.termin}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", color: row.vp !== "—" ? "#15803d" : "#64748b", fontWeight: 700 }}>
-                        {row.vp}
+                      <td
+                        style={{ ...UI.td, padding: "10px 10px", color: row.vp !== "—" ? "#15803d" : "#64748b", fontWeight: 700 }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {row.vpLinks.length > 0 ? (
+                          <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                            {row.vpLinks.map((vp, i) => (
+                              <span key={vp.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                {i > 0 ? <span style={{ color: "#94a3b8" }}>·</span> : null}
+                                <button
+                                  type="button"
+                                  style={{ ...linkBtn, color: "#15803d", fontWeight: 800 }}
+                                  disabled={!onOpenProductionOrderDetail && !onOpenProductionOrderInWorkspaceTab}
+                                  onClick={() => {
+                                    if (onOpenProductionOrderInWorkspaceTab) {
+                                      onOpenProductionOrderInWorkspaceTab(vp.id, vp.vp_code);
+                                    } else {
+                                      onOpenProductionOrderDetail?.(vp.id);
+                                    }
+                                  }}
+                                >
+                                  {vp.vp_code}
+                                </button>
+                                {onPreviewProductionOrderById ? (
+                                  <button
+                                    type="button"
+                                    style={{ ...UI.buttons.secondary, padding: "2px 6px", fontSize: 11 }}
+                                    onClick={() => onPreviewProductionOrderById(vp.id)}
+                                  >
+                                    Náhled
+                                  </button>
+                                ) : null}
+                              </span>
+                            ))}
+                          </span>
+                        ) : (
+                          row.vp
+                        )}
                       </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900 }}>{row.stav}</td>
+                      <td
+                        style={{
+                          ...UI.td,
+                          padding: "10px 10px",
+                          whiteSpace: "nowrap",
+                          fontWeight: 900,
+                          color: row.stav === "Storno" ? "#991b1b" : undefined,
+                        }}
+                      >
+                        {row.stav}
+                      </td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          style={{ ...UI.buttons.secondary, padding: "4px 8px", fontSize: 12 }}
+                          onClick={() =>
+                            window.open(buildErpUrl({ view: "orderItem", jobItemId: row.job_item_id, source: "drawings" }), "_blank")
+                          }
+                        >
+                          Nové okno
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={9} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={10} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Žádné výsledky.
                       </td>
                     </tr>

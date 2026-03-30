@@ -1,18 +1,30 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
-import OrderCardPage from "./OrderCardPage";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
 import {
   createCustomerOrder,
   getOrdersOverview,
+  type ErpWorkflowListFilter,
   type OrdersOverviewOrderTypeFilter,
   type OrdersOverviewRow,
 } from "../services/ordersApi";
 
+const orderCodeLink: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  cursor: "pointer",
+  font: "inherit",
+  fontWeight: 1000,
+  color: "#0f172a",
+  textDecoration: "underline",
+  textUnderlineOffset: "3px",
+};
+
 type Props = {
-  onOpenOrderCard?: (customerOrderId: number) => void;
-  onOpenItemDetail?: (jobItemId: number, source: "orders") => void;
-  initialCustomerOrderId?: number | null;
+  /** Klik na řádek / kód zakázky otevře kartu v pracovní záložce. */
+  onOpenOrderInWorkspaceTab: (customerOrderId: number, titleHint?: string) => void;
   onBackToDashboard?: () => void;
 };
 
@@ -35,6 +47,12 @@ type OrderFilter = (typeof ORDER_FILTERS)[number];
 const OVERVIEW_ORDER_TYPE_OPTIONS: { id: OrdersOverviewOrderTypeFilter; label: string }[] = [
   { id: "customer", label: "Zákaznické" },
   { id: "internal", label: "Interní" },
+  { id: "all", label: "Vše" },
+];
+
+const OVERVIEW_WORKFLOW_OPTIONS: { id: ErpWorkflowListFilter; label: string }[] = [
+  { id: "active", label: "Aktivní" },
+  { id: "cancelled", label: "Stornované" },
   { id: "all", label: "Vše" },
 ];
 
@@ -88,9 +106,6 @@ const ZAKAZKY_MODULE_SUBTABS = [
 
 export default function OrdersPage(_props: Props) {
   const [query, setQuery] = useState("");
-  const [selectedCustomerOrderId, setSelectedCustomerOrderId] = useState<number | null>(
-    _props.initialCustomerOrderId ?? null
-  );
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [activeSubtab, setActiveSubtab] = useState("prehled");
   const [hoverSubtab, setHoverSubtab] = useState<string | null>(null);
@@ -109,12 +124,13 @@ export default function OrdersPage(_props: Props) {
   const [formShipDate, setFormShipDate] = useState("");
   const [formNote, setFormNote] = useState("");
   const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("customer");
+  const [overviewWorkflowFilter, setOverviewWorkflowFilter] = useState<ErpWorkflowListFilter>("active");
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const data = await getOrdersOverview(overviewOrderType);
+      const data = await getOrdersOverview(overviewOrderType, overviewWorkflowFilter);
       setRows(data);
     } catch (e: unknown) {
       setLoadError(e instanceof Error ? e.message : "Nepodařilo se načíst zakázky.");
@@ -122,7 +138,7 @@ export default function OrdersPage(_props: Props) {
     } finally {
       setLoading(false);
     }
-  }, [overviewOrderType]);
+  }, [overviewOrderType, overviewWorkflowFilter]);
 
   useEffect(() => {
     loadOverview();
@@ -192,21 +208,6 @@ export default function OrdersPage(_props: Props) {
     });
   }, [rows, query, activeFilters]);
 
-  if (selectedCustomerOrderId !== null) {
-    return (
-      <OrderCardPage
-        customerOrderId={selectedCustomerOrderId}
-        onBack={() => setSelectedCustomerOrderId(null)}
-        onOpenItemDetail={(jobItemId, source) => {
-          _props.onOpenItemDetail?.(jobItemId, source);
-        }}
-        onOrderDeleted={() => {
-          void loadOverview();
-        }}
-      />
-    );
-  }
-
   const activeSubtabLabel = ZAKAZKY_MODULE_SUBTABS.find((t) => t.id === activeSubtab)?.label ?? "Přehled";
 
   function openCreateForm() {
@@ -247,7 +248,7 @@ export default function OrdersPage(_props: Props) {
       });
       await loadOverview();
       setShowCreateForm(false);
-      setSelectedCustomerOrderId(created.customer_order_id);
+      _props.onOpenOrderInWorkspaceTab(created.customer_order_id);
     } catch (e: unknown) {
       setCreateError(e instanceof Error ? e.message : "Nepodařilo se vytvořit zakázku.");
     } finally {
@@ -391,6 +392,25 @@ export default function OrdersPage(_props: Props) {
                   </button>
                 );
               })}
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#475569", marginLeft: 8 }}>Stav zakázky:</span>
+              {OVERVIEW_WORKFLOW_OPTIONS.map(({ id, label }) => {
+                const active = overviewWorkflowFilter === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setOverviewWorkflowFilter(id)}
+                    disabled={loading}
+                    style={{
+                      ...UI.ordersFilterChip,
+                      ...(active ? UI.ordersFilterChipActive : {}),
+                      ...(loading ? { opacity: 0.6, cursor: "wait" } : {}),
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
 
             {!loading && !loadError && rows.length === 0 ? (
@@ -465,7 +485,7 @@ export default function OrdersPage(_props: Props) {
                             key={rowKey}
                             onClick={() => {
                               if (openable && row.customer_order_id != null) {
-                                setSelectedCustomerOrderId(row.customer_order_id);
+                                _props.onOpenOrderInWorkspaceTab(row.customer_order_id, row.zakazka ?? undefined);
                               }
                             }}
                             onMouseEnter={() => setHoveredKey(rowKey)}
@@ -476,8 +496,26 @@ export default function OrdersPage(_props: Props) {
                               opacity: openable ? 1 : 0.85,
                             }}
                           >
-                            <td style={{ ...UI.td, fontWeight: 1000, color: "#0f172a", padding: "10px 10px", whiteSpace: "nowrap" }}>
-                              {row.zakazka}
+                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                              {openable && row.customer_order_id != null ? (
+                                <button
+                                  type="button"
+                                  style={orderCodeLink}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    _props.onOpenOrderInWorkspaceTab(row.customer_order_id!, row.zakazka ?? undefined);
+                                  }}
+                                >
+                                  {row.zakazka}
+                                </button>
+                              ) : (
+                                <span style={{ fontWeight: 1000, color: "#0f172a" }}>{row.zakazka}</span>
+                              )}
+                              {String(row.workflow_status ?? "").trim().toLowerCase() === "cancelled" ? (
+                                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 800, color: "#991b1b" }}>
+                                  Storno
+                                </span>
+                              ) : null}
                             </td>
                             <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.zakaznik ?? "—"}</td>
                             <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.objednavka ?? "—"}</td>

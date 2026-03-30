@@ -1,7 +1,7 @@
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
@@ -957,13 +957,38 @@ def get_jobs(db: Session = Depends(get_db)):
 
 
 @router.get("/job-items")
-def get_job_items(db: Session = Depends(get_db)):
+def get_job_items(
+    workflow_filter: str = Query("active", description="active | cancelled | all"),
+    db: Session = Depends(get_db),
+):
+    wf = (workflow_filter or "active").strip().lower()
+    if wf not in ("active", "cancelled", "all"):
+        wf = "active"
     rows_cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
     has_desc = "description" in rows_cols
     has_portfolio = "portfolio_item_id" in rows_cols
     rows = db.scalars(select(JobItem).order_by(JobItem.job_id.asc(), JobItem.line_no.asc(), JobItem.id.asc())).all()
+    job_ids = {int(r.job_id) for r in rows}
+    jobs_map: dict[int, Job] = {}
+    if job_ids:
+        for j in db.scalars(select(Job).where(Job.id.in_(job_ids))).all():
+            jobs_map[int(j.id)] = j
+    cos_map: dict[int, CustomerOrder] = {}
+    co_ids = {int(j.customer_order_id) for j in jobs_map.values() if j.customer_order_id is not None}
+    if co_ids:
+        for c in db.scalars(select(CustomerOrder).where(CustomerOrder.id.in_(co_ids))).all():
+            cos_map[int(c.id)] = c
     out = []
     for row in rows:
+        job = jobs_map.get(int(row.job_id)) if row.job_id is not None else None
+        co = cos_map.get(int(job.customer_order_id)) if job is not None and job.customer_order_id is not None else None
+        ji_active = workflow_record_active(row)
+        co_active = co is None or workflow_record_active(co)
+        row_active = ji_active and co_active
+        if wf == "active" and not row_active:
+            continue
+        if wf == "cancelled" and row_active:
+            continue
         item = {
             "id": row.id,
             "job_id": row.job_id,
@@ -972,6 +997,7 @@ def get_job_items(db: Session = Depends(get_db)):
             "qty": row.qty,
             "due_date": row.due_date.isoformat() if row.due_date else None,
             "workflow_status": getattr(row, "workflow_status", None),
+            "order_workflow_status": getattr(co, "workflow_status", None) if co is not None else None,
             "description": None,
             "portfolio_item_id": None,
         }
@@ -1515,23 +1541,36 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
 
 
 @router.get("/production-orders")
-def get_production_orders(db: Session = Depends(get_db)):
+def get_production_orders(
+    workflow_filter: str = Query("active", description="active | cancelled | all"),
+    db: Session = Depends(get_db),
+):
+    wf = (workflow_filter or "active").strip().lower()
+    if wf not in ("active", "cancelled", "all"):
+        wf = "active"
     rows = db.scalars(select(ProductionOrder).order_by(ProductionOrder.id.asc())).all()
-    return [
-        {
-            "id": row.id,
-            "vp_code": row.vp_code,
-            "job_item_id": row.job_item_id,
-            "customer_order_id": row.customer_order_id,
-            "job_id": row.job_id,
-            "portfolio_item_id": row.portfolio_item_id,
-            "gpn": row.gpn,
-            "description": row.description,
-            "quantity": row.quantity,
-            "logistic_mode": row.logistic_mode,
-            "source_type": row.source_type,
-            "status": row.status,
-            "workflow_status": getattr(row, "workflow_status", None),
-        }
-        for row in rows
-    ]
+    out: list[dict] = []
+    for row in rows:
+        po_active = workflow_record_active(row)
+        if wf == "active" and not po_active:
+            continue
+        if wf == "cancelled" and po_active:
+            continue
+        out.append(
+            {
+                "id": row.id,
+                "vp_code": row.vp_code,
+                "job_item_id": row.job_item_id,
+                "customer_order_id": row.customer_order_id,
+                "job_id": row.job_id,
+                "portfolio_item_id": row.portfolio_item_id,
+                "gpn": row.gpn,
+                "description": row.description,
+                "quantity": row.quantity,
+                "logistic_mode": row.logistic_mode,
+                "source_type": row.source_type,
+                "status": row.status,
+                "workflow_status": getattr(row, "workflow_status", None),
+            }
+        )
+    return out
