@@ -22,6 +22,8 @@ export type ProductionOrderOverviewRow = {
   job_item_id?: number | null;
   /** Obchodní workflow; prázdné / active = aktivní VP */
   workflow_status?: string | null;
+  /** Stav skladu + rezervací pro naplánování / start */
+  is_material_ready?: boolean | null;
 };
 
 export type ProductionOrderOperationRow = {
@@ -43,6 +45,21 @@ export type ProductionOrderOperationRow = {
   reported_minutes_total?: number;
 };
 
+export type MaterialTraceabilityAttachment = {
+  id: number;
+  original_filename: string;
+  download_url: string;
+};
+
+/** Resolved from VP-linked výdej → příjem batch (audit / certificate). */
+export type MaterialTraceabilityForInput = {
+  heat_lot: string | null;
+  supplier_name: string | null;
+  delivery_note_no: string | null;
+  certificate_no: string | null;
+  attachments: MaterialTraceabilityAttachment[];
+};
+
 export type ProductionOrderInputRow = {
   id: number;
   input_type: string;
@@ -56,6 +73,8 @@ export type ProductionOrderInputRow = {
   /** (consumption_per_piece + scrap_allowance) * VP quantity; same unit as consumption */
   total_consumption?: number | null;
   note: string | null;
+  material_library_item_id?: number | null;
+  material_traceability?: MaterialTraceabilityForInput | null;
 };
 
 export type ProductionOrderDetail = {

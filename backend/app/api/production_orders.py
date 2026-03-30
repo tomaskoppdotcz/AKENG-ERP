@@ -30,6 +30,7 @@ from app.models.product_stock import ProductStockItem, ProductStockMovement, Pro
 from app.services.business_workflow import WORKFLOW_STATUS_CANCELLED, workflow_active_sql, workflow_record_active
 from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
 from app.services.material_reservation_sync import cancel_active_reservations_for_production_order
+from app.services.material_traceability_vp import vp_material_traceability_for_input
 
 # Rezervace materiálu z TP se synchronizují z orders (vytvoření/úprava VP, řádky zakázky) a z portfolio (vstupy TP).
 # Tento modul nemění portfolio ani množství VP tak, aby bylo potřeba zde spouštět přepočet rezervací.
@@ -560,21 +561,27 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
                 quantity=float(po_qty),
                 total=total_inp,
             )
-            inputs.append(
-                {
-                    "id": int(row.id),
-                    "input_type": (row.input_type or "material"),
-                    "material_code": mat.code if mat is not None else None,
-                    "material_name": mat.name if mat is not None else None,
-                    "portfolio_item_gpn": in_portfolio.gpn if in_portfolio is not None else None,
-                    "portfolio_item_name": in_portfolio.name if in_portfolio is not None else None,
-                    "consumption_per_piece": per_piece,
-                    "consumption_unit": row.consumption_unit,
-                    "scrap_allowance": float(row.scrap_allowance or 0),
-                    "total_consumption": total_inp,
-                    "note": row.note,
-                }
-            )
+            inp_row: dict = {
+                "id": int(row.id),
+                "input_type": (row.input_type or "material"),
+                "material_code": mat.code if mat is not None else None,
+                "material_name": mat.name if mat is not None else None,
+                "portfolio_item_gpn": in_portfolio.gpn if in_portfolio is not None else None,
+                "portfolio_item_name": in_portfolio.name if in_portfolio is not None else None,
+                "consumption_per_piece": per_piece,
+                "consumption_unit": row.consumption_unit,
+                "scrap_allowance": float(row.scrap_allowance or 0),
+                "total_consumption": total_inp,
+                "note": row.note,
+                "material_library_item_id": int(row.material_library_item_id) if row.material_library_item_id is not None else None,
+                "material_traceability": None,
+            }
+            itype = str(row.input_type or "material").strip().lower()
+            if itype == "material" and row.material_library_item_id is not None:
+                inp_row["material_traceability"] = vp_material_traceability_for_input(
+                    db, po, int(row.material_library_item_id)
+                )
+            inputs.append(inp_row)
 
     op_status_by_no, any_activity, all_done = _operation_statuses_for_po(db, int(po.id), operation_nos)
     for op in operations:

@@ -19,6 +19,7 @@ from app.core.database import SessionLocal
 from app.core.scan_code import production_order_operation_scan_code_for_id
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder, ProductionOrderOperation
 from app.models.portfolio import PortfolioItem, PortfolioTechnologyTemplate, PortfolioTechnologyTemplateOperation
+from app.services.material_traceability_vp import vp_material_traceability_for_input
 
 AKENG_TEXT_DARK = "#0F2A30"
 AKENG_BORDER_SOFT = "#A8C7CC"
@@ -301,6 +302,7 @@ def _load_material_traceability(db, po: ProductionOrder, portfolio: PortfolioIte
         ).first()
 
     kg_per_mm_value: float | None = None
+    mat_lib_id: int | None = None
 
     if tpl is not None:
         mat_rows = db.execute(
@@ -514,15 +516,32 @@ def _load_material_traceability(db, po: ProductionOrder, portfolio: PortfolioIte
             computed = round(length_mm * float(kg_per_mm_value), 3)
             out["weight_per_piece_kg"] = f"{computed:.3f}"
 
-    return {"rows": [
+    cert_row: tuple[str, str] | None = None
+    if mat_lib_id is not None:
+        vp_tr = vp_material_traceability_for_input(db, po, mat_lib_id)
+        hl = vp_tr.get("heat_lot")
+        if hl:
+            out["heat_lot"] = _first_non_empty(str(hl).strip(), out["heat_lot"]) or "—"
+        cn = vp_tr.get("certificate_no")
+        if cn and str(cn).strip():
+            cert_row = ("Číslo atestu", str(cn).strip())
+
+    rows_out: list[tuple[str, str]] = [
         ("Kód materiálu", out["material_code"]),
         ("Materiál", out["material_name"]),
         ("Rozměr", out["material_dimension"]),
         ("Tavba / šarže", out["heat_lot"]),
-        ("Délka na kus (mm)", out["length_per_piece_mm"]),
-        ("Váha na kus (kg)", out["weight_per_piece_kg"]),
-        ("Scan kód pohybu materiálu", out["material_move_scan_code"]),
-    ], "source_vp_scan": None}
+    ]
+    if cert_row is not None:
+        rows_out.append(cert_row)
+    rows_out.extend(
+        [
+            ("Délka na kus (mm)", out["length_per_piece_mm"]),
+            ("Váha na kus (kg)", out["weight_per_piece_kg"]),
+            ("Scan kód pohybu materiálu", out["material_move_scan_code"]),
+        ]
+    )
+    return {"rows": rows_out, "source_vp_scan": None}
 
 
 def _load_traceability_data(db, po: ProductionOrder, portfolio: PortfolioItem | None) -> dict:
@@ -737,7 +756,7 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         _draw_barcode(c, po.scan_code or "", barcode_x + 1.2 * mm, barcode_y + 0.8 * mm, width=barcode_w_main - 2.4 * mm, height=barcode_h_main - 1.6 * mm)
 
         y = header_top - block_h - 8 * mm
-        trace_h = 34 * mm
+        trace_h = 40 * mm
         c.setFillColor(colors.HexColor(AKENG_TRACE_FILL))
         c.setStrokeColor(colors.HexColor(AKENG_BORDER_SOFT))
         c.roundRect(margin_x, y - trace_h, w - 2 * margin_x, trace_h, 3, fill=1, stroke=1)
