@@ -1,5 +1,4 @@
 import logging
-from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -8,8 +7,9 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.master_data import Machine
+from app.models.master_data import Customer, Machine
 from app.models.material_library import MaterialLibraryItem
+from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
 from app.models.material_stock import MaterialReservation, MaterialStockItem
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
 from app.models.planning import MachineCalendar, MachineSchedule, PlanningOperation
@@ -21,6 +21,10 @@ from app.services.material_reservation_sync import (
     rebuild_all_tp_material_reservations,
     rebuild_tp_material_reservations_for_job_item,
     rebuild_tp_material_reservations_for_technology_template,
+)
+from app.services.material_requirements_query import (
+    build_standard_material_requirements,
+    build_vp_material_requirements,
 )
 from app.services.planning_engine import PlanningEngineService
 
@@ -382,216 +386,58 @@ def material_reservations_rebuild_for_template_endpoint(template_id: int, db: Se
 
 @router.get("/material/requirements")
 def get_material_requirements(db: Session = Depends(get_db)):
-    mr = MaterialReservation
-    # One row per reservation id (defensive against join fan-out); then sum per material.
-    # Exclude dangling customer orders when job references a deleted CO.
-    base_sq = (
-        select(
-            mr.id.label("rid"),
-            mr.material_library_item_id.label("mid"),
-            mr.production_order_id.label("poid"),
-            mr.job_item_id.label("jiid"),
-            func.max(mr.required_qty).label("rq"),
-            func.max(mr.reserved_qty).label("rs"),
-        )
-        .select_from(mr)
-        .join(ProductionOrder, ProductionOrder.id == mr.production_order_id)
-        .join(
-            JobItem,
-            and_(
-                JobItem.id == mr.job_item_id,
-                JobItem.id == ProductionOrder.job_item_id,
-            ),
-        )
-        .join(Job, Job.id == JobItem.job_id)
-        .join(MaterialLibraryItem, MaterialLibraryItem.id == mr.material_library_item_id)
-        .outerjoin(CustomerOrder, CustomerOrder.id == Job.customer_order_id)
-        .where(
-            mr.status.in_(tuple(MATERIAL_RESERVATION_ACTIVE_STATUSES)),
-            mr.is_active.is_(True),
-            workflow_active_sql(ProductionOrder.workflow_status),
-            workflow_active_sql(JobItem.workflow_status),
-            or_(
-                Job.customer_order_id.is_(None),
-                and_(CustomerOrder.id.isnot(None), workflow_active_sql(CustomerOrder.workflow_status)),
-            ),
-        )
-        .group_by(mr.id, mr.material_library_item_id, mr.production_order_id, mr.job_item_id)
-    ).subquery()
+    return build_standard_material_requirements(db)
 
-    agg_rows = db.execute(
-        select(
-            base_sq.c.mid.label("material_library_item_id"),
-            func.coalesce(func.sum(base_sq.c.rq), 0.0).label("required_qty"),
-            func.coalesce(func.sum(base_sq.c.rs), 0.0).label("reserved_qty"),
-        )
-        .group_by(base_sq.c.mid)
-        .order_by(base_sq.c.mid.asc())
-    ).all()
-    if not agg_rows:
-        return []
 
-    mat_ids = [int(r.material_library_item_id) for r in agg_rows]
-    mats = db.scalars(select(MaterialLibraryItem).where(MaterialLibraryItem.id.in_(mat_ids))).all()
-    mat_by_id = {int(m.id): m for m in mats}
+@router.get("/material/requirements-by-vp")
+def get_material_requirements_by_vp(db: Session = Depends(get_db)):
+    return build_vp_material_requirements(db)
 
-    stock_rows = db.execute(
-        select(
-            MaterialStockItem.material_library_item_id,
-            func.coalesce(func.sum(MaterialStockItem.current_qty), 0.0),
-        )
-        .where(MaterialStockItem.material_library_item_id.in_(mat_ids))
-        .group_by(MaterialStockItem.material_library_item_id)
-    ).all()
-    available_by_material = {int(mid): float(q or 0.0) for mid, q in stock_rows}
 
-    detail_rows_raw = db.execute(
-        select(mr, ProductionOrder, JobItem, Job)
-        .select_from(mr)
-        .join(ProductionOrder, ProductionOrder.id == mr.production_order_id)
-        .join(
-            JobItem,
-            and_(
-                JobItem.id == mr.job_item_id,
-                JobItem.id == ProductionOrder.job_item_id,
-            ),
-        )
-        .join(Job, Job.id == JobItem.job_id)
-        .join(MaterialLibraryItem, MaterialLibraryItem.id == mr.material_library_item_id)
-        .outerjoin(CustomerOrder, CustomerOrder.id == Job.customer_order_id)
-        .where(
-            mr.material_library_item_id.in_(mat_ids),
-            mr.status.in_(tuple(MATERIAL_RESERVATION_ACTIVE_STATUSES)),
-            mr.is_active.is_(True),
-            workflow_active_sql(ProductionOrder.workflow_status),
-            workflow_active_sql(JobItem.workflow_status),
-            or_(
-                Job.customer_order_id.is_(None),
-                and_(CustomerOrder.id.isnot(None), workflow_active_sql(CustomerOrder.workflow_status)),
-            ),
-        )
-        .order_by(mr.material_library_item_id.asc(), ProductionOrder.id.asc(), mr.id.asc())
-    ).all()
+class MaterialPurchaseLinePayload(BaseModel):
+    material_library_item_id: int
+    qty_ordered: float
+    traceability_note: str | None = None
 
-    seen_rid: set[int] = set()
-    detail_rows: list = []
-    for row in detail_rows_raw:
-        rr = row[0]
-        if int(rr.id) in seen_rid:
-            continue
-        seen_rid.add(int(rr.id))
-        detail_rows.append(row)
 
-    included_ids: set[int] = set()
-    for dbg in db.execute(
-        select(
-            base_sq.c.rid,
-            base_sq.c.mid,
-            base_sq.c.poid,
-            base_sq.c.jiid,
-            base_sq.c.rq,
-            MaterialLibraryItem.code,
-        )
-        .select_from(base_sq)
-        .join(MaterialLibraryItem, MaterialLibraryItem.id == base_sq.c.mid)
-    ).all():
-        included_ids.add(int(dbg.rid))
-        logger.info(
-            "[material_requirements] included reservation_id=%s material_id=%s material_code=%s "
-            "production_order_id=%s job_item_id=%s required_qty=%s",
-            int(dbg.rid),
-            int(dbg.mid),
-            dbg.code,
-            int(dbg.poid),
-            int(dbg.jiid),
-            float(dbg.rq or 0.0),
-        )
+class MaterialPurchaseOrderPayload(BaseModel):
+    supplier_customer_id: int
+    lines: list[MaterialPurchaseLinePayload]
+    header_note: str | None = None
 
-    stale = db.scalars(
-        select(mr).where(
-            mr.is_active.is_(True),
-            mr.status.in_(tuple(MATERIAL_RESERVATION_ACTIVE_STATUSES)),
-        )
-    ).all()
-    for s in stale:
-        if int(s.id) in included_ids:
-            continue
-        logger.info(
-            "[material_requirements] excluded reservation_id=%s material_library_item_id=%s "
-            "production_order_id=%s job_item_id=%s required_qty=%s (active but failed validity join)",
-            int(s.id),
-            int(s.material_library_item_id),
-            int(s.production_order_id),
-            int(s.job_item_id),
-            float(s.required_qty or 0.0),
-        )
 
-    co_ids = sorted(
-        {int(job.customer_order_id) for *_, job in detail_rows if job.customer_order_id is not None}
+@router.post("/material/purchase-orders")
+def create_material_purchase_order(body: MaterialPurchaseOrderPayload, db: Session = Depends(get_db)):
+    if not body.lines:
+        raise HTTPException(status_code=422, detail="Alespoň jedna řádka objednávky.")
+    cust = db.get(Customer, int(body.supplier_customer_id))
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Dodavatel (zákazník v adresáři) nebyl nalezen.")
+    po = MaterialPurchaseOrder(
+        supplier_customer_id=int(cust.id),
+        supplier_name_snapshot=(cust.name or "").strip() or cust.code,
+        status="confirmed",
+        header_note=(body.header_note.strip() if body.header_note else None) or None,
     )
-    co_by_id: dict[int, CustomerOrder] = {}
-    if co_ids:
-        cos = db.scalars(select(CustomerOrder).where(CustomerOrder.id.in_(co_ids))).all()
-        co_by_id = {int(o.id): o for o in cos}
-
-    merged: dict[tuple[int, int], dict] = {}
-    for rr, po, ji, job in detail_rows:
-        mid = int(rr.material_library_item_id)
-        pid = int(po.id)
-        key = (mid, pid)
-        co = co_by_id.get(int(job.customer_order_id)) if job.customer_order_id is not None else None
-        if key not in merged:
-            merged[key] = {
-                "production_order_id": pid,
-                "vp_code": po.vp_code,
-                "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
-                "customer_order_id": int(co.id) if co is not None else None,
-                "zakazka": job.zak_code,
-                "gpn": ji.gpn if ji is not None else po.gpn,
-                "_lines": [],
-            }
-        merged[key]["_lines"].append(
-            {
-                "reservation_id": int(rr.id),
-                "required_qty": float(rr.required_qty or 0.0),
-                "reserved_qty": float(rr.reserved_qty or 0.0),
-                "status": rr.status,
-            }
+    db.add(po)
+    db.flush()
+    for ln in body.lines:
+        if ln.qty_ordered <= 0:
+            raise HTTPException(status_code=422, detail="Množství musí být kladné.")
+        db.add(
+            MaterialPurchaseOrderLine(
+                purchase_order_id=int(po.id),
+                material_library_item_id=int(ln.material_library_item_id),
+                qty_ordered=float(ln.qty_ordered),
+                unit=None,
+                traceability_note=(ln.traceability_note.strip() if ln.traceability_note else None) or None,
+            )
         )
-
-    related_by_material: dict[int, list[dict]] = defaultdict(list)
-    for (mid, _pid), payload in sorted(merged.items(), key=lambda kv: (kv[0][0], kv[1].get("vp_code") or "")):
-        lines = sorted(payload["_lines"], key=lambda ln: int(ln["reservation_id"]))
-        req_sum = sum(float(ln["required_qty"]) for ln in lines)
-        res_sum = sum(float(ln["reserved_qty"]) for ln in lines)
-        ids = [int(ln["reservation_id"]) for ln in lines]
-        st = lines[0]["status"]
-        row_out = {k: v for k, v in payload.items() if k != "_lines"}
-        row_out["required_qty"] = req_sum
-        row_out["reserved_qty"] = res_sum
-        row_out["reservation_id"] = ids[0]
-        row_out["reservation_ids"] = ids
-        row_out["reservation_count"] = len(lines)
-        row_out["reservation_lines"] = lines
-        row_out["status"] = st
-        related_by_material[mid].append(row_out)
-
-    out: list[dict] = []
-    for row in agg_rows:
-        material_id = int(row.material_library_item_id)
-        required = float(row.required_qty or 0.0)
-        available = float(available_by_material.get(material_id, 0.0))
-        out.append(
-            {
-                "material_library_item_id": material_id,
-                "material": {
-                    "code": mat_by_id[material_id].code if material_id in mat_by_id else None,
-                    "name": mat_by_id[material_id].name if material_id in mat_by_id else None,
-                },
-                "required": required,
-                "available": available,
-                "shortage": max(required - available, 0.0),
-                "related_orders": related_by_material.get(material_id, []),
-            }
-        )
-    return out
+    db.commit()
+    db.refresh(po)
+    return {
+        "status": "ok",
+        "material_purchase_order_id": int(po.id),
+        "lines_count": len(body.lines),
+        "supplier_name": po.supplier_name_snapshot,
+    }

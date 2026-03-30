@@ -61,6 +61,7 @@ from app.models.portfolio import (
 from app.models.master_data import EmployeeSubgroup  # noqa: F401 — metadata / create_all
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
+from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
 from app.models.material_stock import (
     MaterialStockItem,
     MaterialStockMovement,
