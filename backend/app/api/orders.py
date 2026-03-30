@@ -14,7 +14,13 @@ from app.core.scan_code import (
     production_order_scan_code_for_id,
 )
 from app.models.master_data import Customer
-from app.models.portfolio import PortfolioItem, PortfolioTechnologyTemplate, PortfolioTechnologyTemplateOperation
+from app.models.material_stock import MaterialReservation, MaterialStockItem
+from app.models.portfolio import (
+    PortfolioItem,
+    PortfolioTechnologyTemplate,
+    PortfolioTechnologyTemplateMaterial,
+    PortfolioTechnologyTemplateOperation,
+)
 from app.models.orders import (
     CustomerOrder,
     Job,
@@ -262,6 +268,29 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
                         "id": int(op_row[0]),
                     },
                 )
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS product_issues ("
+                "id INTEGER PRIMARY KEY, "
+                "product_stock_item_id INTEGER NOT NULL, "
+                "job_item_id INTEGER NULL, "
+                "customer_order_id INTEGER NULL, "
+                "qty INTEGER NOT NULL, "
+                "note VARCHAR(500) NULL, "
+                "issued_at DATETIME NOT NULL, "
+                "FOREIGN KEY(product_stock_item_id) REFERENCES product_stock_items (id), "
+                "FOREIGN KEY(job_item_id) REFERENCES job_items (id), "
+                "FOREIGN KEY(customer_order_id) REFERENCES customer_orders (id)"
+                ")"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_product_issues_product_stock_item_id ON product_issues (product_stock_item_id)")
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_product_issues_job_item_id ON product_issues (job_item_id)"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_product_issues_customer_order_id ON product_issues (customer_order_id)")
+        )
 
 
 class CustomerOrderCreatePayload(BaseModel):
@@ -642,6 +671,85 @@ def _ensure_production_order_operation_scans(
         db.add(row)
         db.flush()
         row.scan_code = production_order_operation_scan_code_for_id(int(row.id))
+
+
+def _select_active_template_id(db: Session, portfolio_item_id: int | None) -> int | None:
+    if portfolio_item_id is None:
+        return None
+    tpl = db.scalars(
+        select(PortfolioTechnologyTemplate)
+        .where(
+            PortfolioTechnologyTemplate.portfolio_item_id == int(portfolio_item_id),
+            PortfolioTechnologyTemplate.is_active.is_(True),
+        )
+        .order_by(PortfolioTechnologyTemplate.id.asc())
+    ).first()
+    if tpl is None:
+        tpl = db.scalars(
+            select(PortfolioTechnologyTemplate)
+            .where(PortfolioTechnologyTemplate.portfolio_item_id == int(portfolio_item_id))
+            .order_by(PortfolioTechnologyTemplate.id.asc())
+        ).first()
+    return int(tpl.id) if tpl is not None else None
+
+
+def _available_material_qty(db: Session, material_library_item_id: int) -> float:
+    on_stock = db.scalar(
+        select(func.coalesce(func.sum(MaterialStockItem.current_qty), 0.0)).where(
+            MaterialStockItem.material_library_item_id == int(material_library_item_id)
+        )
+    )
+    reserved = db.scalar(
+        select(func.coalesce(func.sum(MaterialReservation.reserved_qty), 0.0)).where(
+            MaterialReservation.material_library_item_id == int(material_library_item_id),
+            MaterialReservation.status.in_(["planned", "reserved"]),
+        )
+    )
+    return max(float(on_stock or 0.0) - float(reserved or 0.0), 0.0)
+
+
+def _create_material_reservations_for_po(
+    db: Session,
+    *,
+    po: ProductionOrder,
+    portfolio_item_id: int | None,
+    quantity: int,
+) -> None:
+    mode = str(po.logistic_mode or "").strip()
+    if mode not in {"vyroba_zakaznik", "sklad"}:
+        return
+    template_id = _select_active_template_id(db, portfolio_item_id)
+    if template_id is None:
+        return
+    rows = db.scalars(
+        select(PortfolioTechnologyTemplateMaterial)
+        .where(PortfolioTechnologyTemplateMaterial.template_id == int(template_id))
+        .order_by(PortfolioTechnologyTemplateMaterial.id.asc())
+    ).all()
+    for row in rows:
+        input_type = str(row.input_type or "material").strip().lower()
+        if input_type not in {"", "material"}:
+            continue
+        if row.material_library_item_id is None:
+            continue
+        material_id = int(row.material_library_item_id)
+        per_piece = float(row.consumption_per_piece or 0.0)
+        scrap = max(float(row.scrap_allowance or 0.0), 0.0)
+        required_qty = max(per_piece * float(quantity) * (1.0 + scrap), 0.0)
+        available = _available_material_qty(db, material_id)
+        reserved_qty = min(required_qty, available)
+        db.add(
+            MaterialReservation(
+                material_library_item_id=material_id,
+                job_item_id=int(po.job_item_id),
+                production_order_id=int(po.id),
+                required_qty=required_qty,
+                reserved_qty=reserved_qty,
+                status="reserved" if reserved_qty > 0 else "planned",
+                note=f"Auto from {po.vp_code}",
+            )
+        )
+    db.flush()
 
 
 @router.get("/customer-orders")
@@ -1056,6 +1164,12 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                 db.add(po)
                 db.flush()
                 po.scan_code = production_order_scan_code_for_id(int(po.id))
+                _create_material_reservations_for_po(
+                    db,
+                    po=po,
+                    portfolio_item_id=resolved_portfolio_item_id,
+                    quantity=add_q,
+                )
                 _ensure_production_order_operation_scans(
                     db,
                     production_order_id=int(po.id),
@@ -1145,6 +1259,12 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
             db.add(po)
             db.flush()
             po.scan_code = production_order_scan_code_for_id(int(po.id))
+            _create_material_reservations_for_po(
+                db,
+                po=po,
+                portfolio_item_id=resolved_portfolio_item_id,
+                quantity=int(c["quantity"]),
+            )
             _ensure_production_order_operation_scans(
                 db,
                 production_order_id=int(po.id),

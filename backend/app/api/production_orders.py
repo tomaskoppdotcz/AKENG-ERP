@@ -14,6 +14,7 @@ from app.models.orders import (
     CustomerOrder,
     Job,
     JobItem,
+    ProductIssue,
     ProductionOrder,
     ProductionOrderOperation,
     ProductionOrderOperationLog,
@@ -24,6 +25,7 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplateMaterial,
     PortfolioTechnologyTemplateOperation,
 )
+from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.services.pdf_generator import generate_production_order_pdf
 
 router = APIRouter()
@@ -32,6 +34,15 @@ class OperationReportPayload(BaseModel):
     ok_qty: int = Field(ge=0)
     nok_qty: int = Field(ge=0)
     reported_minutes: int = Field(ge=0)
+    note: str | None = None
+
+
+class ProductIssuePayload(BaseModel):
+    product_stock_item_id: int
+    qty: int = Field(gt=0)
+    movement_date: datetime | None = None
+    job_item_id: int | None = None
+    customer_order_id: int | None = None
     note: str | None = None
 
 
@@ -153,6 +164,57 @@ def _operation_nos_for_po(db: Session, po: ProductionOrder) -> list[int]:
     return [int(r.operation_no) for r in op_rows]
 
 
+def _ensure_product_stock_receipt_for_done_po(db: Session, po: ProductionOrder) -> None:
+    if int(po.quantity or 0) <= 0:
+        return
+    existing = db.scalars(
+        select(ProductStockReceipt).where(ProductStockReceipt.production_order_id == int(po.id))
+    ).first()
+    if existing is not None:
+        return
+    portfolio_item_id = int(po.portfolio_item_id) if po.portfolio_item_id is not None else None
+    if portfolio_item_id is None:
+        return
+    stock = db.scalars(
+        select(ProductStockItem)
+        .where(ProductStockItem.portfolio_item_id == portfolio_item_id)
+        .order_by(ProductStockItem.id.asc())
+    ).first()
+    if stock is None:
+        stock = ProductStockItem(
+            portfolio_item_id=portfolio_item_id,
+            location="EXPEDICE",
+            current_qty=0,
+            min_qty=0,
+            unit="ks",
+            note="Auto-created from completed production order.",
+            is_active=True,
+        )
+        db.add(stock)
+        db.flush()
+    qty = float(po.quantity or 0)
+    stock.current_qty = float(stock.current_qty or 0) + qty
+    db.add(
+        ProductStockReceipt(
+            product_stock_item_id=int(stock.id),
+            production_order_id=int(po.id),
+            qty_received=qty,
+            received_at=datetime.utcnow(),
+            note=f"Auto receipt from {po.vp_code}",
+        )
+    )
+    db.add(
+        ProductStockMovement(
+            stock_item_id=int(stock.id),
+            movement_type="prijem",
+            qty=qty,
+            movement_date=datetime.utcnow(),
+            reference=f"VP:{po.vp_code}",
+            note="Auto receipt from production completion.",
+        )
+    )
+
+
 def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
     operation_nos = _operation_nos_for_po(db, po)
     if not operation_nos:
@@ -220,13 +282,18 @@ def list_production_orders(db: Session = Depends(get_db)):
     item_by_id = {int(i.id): i for i in job_items}
     job_by_id = {int(j.id): j for j in jobs}
     co_by_id = {int(c.id): c for c in customer_orders}
-    desc_map, _ = _job_item_optional_map(db, job_item_ids)
+    desc_map, portfolio_map = _job_item_optional_map(db, job_item_ids)
 
     out: list[dict] = []
     for po in rows:
         ji = item_by_id.get(int(po.job_item_id)) if po.job_item_id is not None else None
         job = job_by_id.get(int(po.job_id)) if po.job_id is not None else None
         co = co_by_id.get(int(po.customer_order_id)) if po.customer_order_id is not None else None
+        resolved_portfolio_id: int | None = None
+        if po.portfolio_item_id is not None:
+            resolved_portfolio_id = int(po.portfolio_item_id)
+        elif ji is not None:
+            resolved_portfolio_id = portfolio_map.get(int(ji.id))
         out.append(
             {
                 "id": int(po.id),
@@ -242,6 +309,9 @@ def list_production_orders(db: Session = Depends(get_db)):
                 "line_no": int(ji.line_no) if ji is not None and ji.line_no is not None else None,
                 "due_date": ji.due_date.isoformat() if ji is not None and ji.due_date is not None else None,
                 "order_type": str(getattr(co, "order_type", "customer") or "customer"),
+                "portfolio_item_id": resolved_portfolio_id,
+                "customer_order_id": int(po.customer_order_id) if po.customer_order_id is not None else None,
+                "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
             }
         )
     return {"items": out}
@@ -359,6 +429,8 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         "vp_code": po.vp_code,
         "scan_code": po.scan_code,
         "zakazka": job.zak_code if job is not None else None,
+        "customer_order_id": int(po.customer_order_id) if po.customer_order_id is not None else None,
+        "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
         "order_type": str(getattr(co, "order_type", "customer") or "customer"),
         "line_no": int(ji.line_no) if ji is not None and ji.line_no is not None else None,
         "gpn": po.gpn or (ji.gpn if ji is not None else None),
@@ -436,8 +508,54 @@ def report_production_order_operation(
     )
 
     new_status = _recompute_and_set_po_status(db, po, operation_nos)
+    if new_status == "done":
+        _ensure_product_stock_receipt_for_done_po(db, po)
     db.commit()
     return {"status": "ok", "po_status": new_status}
+
+
+@router.post("/product/issue")
+def issue_product_from_stock(payload: ProductIssuePayload, db: Session = Depends(get_db)):
+    stock = db.get(ProductStockItem, int(payload.product_stock_item_id))
+    if stock is None:
+        raise HTTPException(status_code=404, detail="Skladová karta výrobku nebyla nalezena.")
+    if float(stock.current_qty or 0) < float(payload.qty):
+        raise HTTPException(status_code=409, detail="Nedostatečné množství na skladě výrobků.")
+    movement_date = payload.movement_date or datetime.utcnow()
+    stock.current_qty = float(stock.current_qty or 0) - float(payload.qty)
+    db.add(
+        ProductStockMovement(
+            stock_item_id=int(stock.id),
+            movement_type="vydej",
+            qty=float(payload.qty),
+            movement_date=movement_date,
+            reference=(
+                f"CO:{payload.customer_order_id};JI:{payload.job_item_id}"
+                if payload.customer_order_id or payload.job_item_id
+                else None
+            ),
+            note=(payload.note.strip() if payload.note else None),
+        )
+    )
+    issue = ProductIssue(
+        product_stock_item_id=int(stock.id),
+        job_item_id=payload.job_item_id,
+        customer_order_id=payload.customer_order_id,
+        qty=int(payload.qty),
+        note=(payload.note.strip() if payload.note else None),
+        issued_at=movement_date,
+    )
+    db.add(issue)
+    db.commit()
+    db.refresh(issue)
+    return {
+        "status": "ok",
+        "issue_id": int(issue.id),
+        "product_stock_item_id": int(stock.id),
+        "qty": int(issue.qty),
+        "job_item_id": issue.job_item_id,
+        "customer_order_id": issue.customer_order_id,
+    }
 
 
 @router.get("/{production_order_id}/print")

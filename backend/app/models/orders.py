@@ -103,3 +103,15 @@ class ProductionOrderOperation(Base):
     operation_name = Column(String, nullable=False)
     workplace_name = Column(String, nullable=True)
     scan_code = Column(String(32), nullable=True)
+
+
+class ProductIssue(Base):
+    __tablename__ = "product_issues"
+
+    id = Column(Integer, primary_key=True)
+    product_stock_item_id = Column(Integer, ForeignKey("product_stock_items.id"), nullable=False, index=True)
+    job_item_id = Column(Integer, ForeignKey("job_items.id"), nullable=True, index=True)
+    customer_order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True, index=True)
+    qty = Column(Integer, nullable=False)
+    note = Column(String, nullable=True)
+    issued_at = Column(DateTime, nullable=False, default=datetime.utcnow)

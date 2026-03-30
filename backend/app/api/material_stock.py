@@ -13,7 +13,12 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.scan_code import material_stock_scan_code_for_id
 from app.models.material_library import MaterialLibraryItem
-from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
+from app.models.material_stock import (
+    MaterialReservation,
+    MaterialStockItem,
+    MaterialStockMovement,
+    MaterialStockReservation,
+)
 
 router = APIRouter()
 
@@ -21,7 +26,7 @@ ALLOWED_MOVEMENT_TYPES = frozenset({"prijem", "vydej", "korekce"})
 
 
 def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
-    """SQLite: doplnění scan_code u material_stock_items."""
+    """SQLite: doplnění scan_code + traceability sloupců u material stock."""
     try:
         url = str(engine.url)
     except Exception:
@@ -39,6 +44,64 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE material_stock_items ADD COLUMN scan_code VARCHAR(32)"))
         conn.execute(
             text("CREATE UNIQUE INDEX IF NOT EXISTS uq_material_stock_items_scan_code ON material_stock_items (scan_code)")
+        )
+    if "material_stock_movements" not in insp.get_table_names():
+        return
+    mv_cols = {c["name"] for c in insp.get_columns("material_stock_movements")}
+    with engine.begin() as conn:
+        if "scan_code" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN scan_code VARCHAR(32)"))
+        if "heat_lot" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN heat_lot VARCHAR(120)"))
+        if "length_per_piece_mm" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN length_per_piece_mm FLOAT"))
+        if "weight_per_piece_kg" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN weight_per_piece_kg FLOAT"))
+        if "production_order_id" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN production_order_id INTEGER"))
+        if "job_item_id" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN job_item_id INTEGER"))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_production_order_id "
+                "ON material_stock_movements (production_order_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_job_item_id "
+                "ON material_stock_movements (job_item_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS material_reservations ("
+                "id INTEGER PRIMARY KEY, "
+                "material_library_item_id INTEGER NOT NULL, "
+                "job_item_id INTEGER NOT NULL, "
+                "production_order_id INTEGER NOT NULL, "
+                "required_qty FLOAT NOT NULL DEFAULT 0, "
+                "reserved_qty FLOAT NOT NULL DEFAULT 0, "
+                "status VARCHAR(20) NOT NULL DEFAULT 'planned', "
+                "note VARCHAR(500) NULL, "
+                "FOREIGN KEY(material_library_item_id) REFERENCES material_library_items (id)"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_material_reservations_material_library_item_id "
+                "ON material_reservations (material_library_item_id)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_material_reservations_job_item_id ON material_reservations (job_item_id)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_material_reservations_production_order_id "
+                "ON material_reservations (production_order_id)"
+            )
         )
 
 
@@ -102,7 +165,13 @@ def _movement_payload(row: MaterialStockMovement) -> dict:
         "movement_type": row.movement_type,
         "qty": row.qty,
         "movement_date": row.movement_date,
+        "scan_code": row.scan_code,
         "reference": row.reference,
+        "heat_lot": row.heat_lot,
+        "length_per_piece_mm": row.length_per_piece_mm,
+        "weight_per_piece_kg": row.weight_per_piece_kg,
+        "production_order_id": row.production_order_id,
+        "job_item_id": row.job_item_id,
         "note": row.note,
     }
 
@@ -145,7 +214,13 @@ class MovementCreate(BaseModel):
     movement_type: str = Field(..., min_length=1)
     qty: float
     movement_date: datetime
+    scan_code: str | None = None
     reference: str | None = None
+    heat_lot: str | None = None
+    length_per_piece_mm: float | None = None
+    weight_per_piece_kg: float | None = None
+    production_order_id: int | None = None
+    job_item_id: int | None = None
     note: str | None = None
 
 
@@ -153,7 +228,13 @@ class MovementUpdate(BaseModel):
     movement_type: str = Field(..., min_length=1)
     qty: float
     movement_date: datetime
+    scan_code: str | None = None
     reference: str | None = None
+    heat_lot: str | None = None
+    length_per_piece_mm: float | None = None
+    weight_per_piece_kg: float | None = None
+    production_order_id: int | None = None
+    job_item_id: int | None = None
     note: str | None = None
 
 
@@ -162,6 +243,14 @@ class ReservationCreate(BaseModel):
     job_item_id: int
     gpn: str | None = None
     reserved_qty: float
+    note: str | None = None
+
+
+class MaterialIssuePayload(BaseModel):
+    reservation_id: int | None = None
+    production_order_id: int | None = None
+    material_library_item_id: int | None = None
+    qty: float | None = None
     note: str | None = None
 
 
@@ -349,7 +438,13 @@ def create_movement(item_id: int, payload: MovementCreate, db: Session = Depends
         movement_type=mtype,
         qty=payload.qty,
         movement_date=payload.movement_date,
+        scan_code=(payload.scan_code.strip() if payload.scan_code else None),
         reference=payload.reference,
+        heat_lot=(payload.heat_lot.strip() if payload.heat_lot else None),
+        length_per_piece_mm=payload.length_per_piece_mm,
+        weight_per_piece_kg=payload.weight_per_piece_kg,
+        production_order_id=payload.production_order_id,
+        job_item_id=payload.job_item_id,
         note=payload.note,
     )
     db.add(movement)
@@ -384,7 +479,13 @@ def update_movement(movement_id: int, payload: MovementUpdate, db: Session = Dep
     movement.movement_type = mtype
     movement.qty = payload.qty
     movement.movement_date = payload.movement_date
+    movement.scan_code = payload.scan_code.strip() if payload.scan_code else None
     movement.reference = payload.reference
+    movement.heat_lot = payload.heat_lot.strip() if payload.heat_lot else None
+    movement.length_per_piece_mm = payload.length_per_piece_mm
+    movement.weight_per_piece_kg = payload.weight_per_piece_kg
+    movement.production_order_id = payload.production_order_id
+    movement.job_item_id = payload.job_item_id
     movement.note = payload.note
     db.commit()
     db.refresh(movement)
@@ -403,3 +504,67 @@ def delete_movement(movement_id: int, db: Session = Depends(get_db)):
     db.delete(movement)
     db.commit()
     return {"status": "ok"}
+
+
+@router.post("/issue")
+@router.post("/material/issue")
+def issue_material(payload: MaterialIssuePayload, db: Session = Depends(get_db)):
+    reservation: MaterialReservation | None = None
+    if payload.reservation_id is not None:
+        reservation = db.get(MaterialReservation, int(payload.reservation_id))
+    else:
+        if payload.production_order_id is None or payload.material_library_item_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Provide reservation_id or both production_order_id and material_library_item_id.",
+            )
+        reservation = db.scalars(
+            select(MaterialReservation)
+            .where(
+                MaterialReservation.production_order_id == int(payload.production_order_id),
+                MaterialReservation.material_library_item_id == int(payload.material_library_item_id),
+                MaterialReservation.status != "issued",
+            )
+            .order_by(MaterialReservation.id.asc())
+        ).first()
+    if reservation is None:
+        raise HTTPException(status_code=404, detail="Material reservation not found.")
+
+    issue_qty = float(payload.qty if payload.qty is not None else reservation.reserved_qty)
+    if issue_qty <= 0:
+        raise HTTPException(status_code=422, detail="qty must be greater than 0")
+
+    stock = db.scalars(
+        select(MaterialStockItem)
+        .where(MaterialStockItem.material_library_item_id == int(reservation.material_library_item_id))
+        .order_by(MaterialStockItem.current_qty.desc(), MaterialStockItem.id.asc())
+    ).first()
+    if stock is None:
+        raise HTTPException(status_code=404, detail="No material stock item found for reserved material.")
+    if float(stock.current_qty or 0) < issue_qty:
+        raise HTTPException(status_code=409, detail="Insufficient stock quantity for issue.")
+
+    movement = MaterialStockMovement(
+        stock_item_id=int(stock.id),
+        movement_type="vydej",
+        qty=issue_qty,
+        movement_date=datetime.now(timezone.utc),
+        reference=f"RES-{reservation.id}",
+        production_order_id=int(reservation.production_order_id),
+        job_item_id=int(reservation.job_item_id),
+        note=(payload.note.strip() if payload.note else reservation.note),
+    )
+    db.add(movement)
+    stock.current_qty = float(stock.current_qty or 0) - issue_qty
+    reservation.status = "issued"
+    reservation.reserved_qty = issue_qty
+    if payload.note:
+        reservation.note = payload.note.strip() or reservation.note
+    db.commit()
+    db.refresh(movement)
+    return {
+        "status": "ok",
+        "reservation_id": int(reservation.id),
+        "issued_qty": issue_qty,
+        "movement": _movement_payload(movement),
+    }

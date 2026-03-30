@@ -2,11 +2,14 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.master_data import Machine
+from app.models.material_library import MaterialLibraryItem
+from app.models.material_stock import MaterialReservation, MaterialStockItem
+from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
 from app.models.planning import MachineCalendar, MachineSchedule, PlanningOperation
 from app.services.planning_engine import PlanningEngineService
 
@@ -313,3 +316,94 @@ def build_demo_schedules(db: Session = Depends(get_db)):
             total += len(rows or [])
 
     return {"status": "ok", "scheduled_rows": total, "machines": machine_codes}
+
+
+@router.get("/material/requirements")
+def get_material_requirements(db: Session = Depends(get_db)):
+    rows = db.execute(
+        select(
+            MaterialReservation.material_library_item_id,
+            func.coalesce(func.sum(MaterialReservation.required_qty), 0.0).label("required_qty"),
+            func.coalesce(func.sum(MaterialReservation.reserved_qty), 0.0).label("reserved_qty"),
+        )
+        .where(MaterialReservation.status.in_(["planned", "reserved"]))
+        .group_by(MaterialReservation.material_library_item_id)
+        .order_by(MaterialReservation.material_library_item_id.asc())
+    ).all()
+    if not rows:
+        return []
+
+    mat_ids = [int(r.material_library_item_id) for r in rows]
+    mats = db.scalars(select(MaterialLibraryItem).where(MaterialLibraryItem.id.in_(mat_ids))).all()
+    mat_by_id = {int(m.id): m for m in mats}
+
+    stock_rows = db.execute(
+        select(
+            MaterialStockItem.material_library_item_id,
+            func.coalesce(func.sum(MaterialStockItem.current_qty), 0.0),
+        )
+        .where(MaterialStockItem.material_library_item_id.in_(mat_ids))
+        .group_by(MaterialStockItem.material_library_item_id)
+    ).all()
+    available_by_material = {int(mid): float(q or 0.0) for mid, q in stock_rows}
+
+    reservation_rows = db.scalars(
+        select(MaterialReservation).where(
+            MaterialReservation.material_library_item_id.in_(mat_ids),
+            MaterialReservation.status.in_(["planned", "reserved"]),
+        )
+    ).all()
+    po_ids = sorted({int(r.production_order_id) for r in reservation_rows})
+    pos = db.scalars(select(ProductionOrder).where(ProductionOrder.id.in_(po_ids))).all() if po_ids else []
+    po_by_id = {int(po.id): po for po in pos}
+    job_item_ids = sorted({int(po.job_item_id) for po in pos if po.job_item_id is not None})
+    items = db.scalars(select(JobItem).where(JobItem.id.in_(job_item_ids))).all() if job_item_ids else []
+    item_by_id = {int(it.id): it for it in items}
+    job_ids = sorted({int(it.job_id) for it in items if it.job_id is not None})
+    jobs = db.scalars(select(Job).where(Job.id.in_(job_ids))).all() if job_ids else []
+    job_by_id = {int(j.id): j for j in jobs}
+    co_ids = sorted({int(j.customer_order_id) for j in jobs if j.customer_order_id is not None})
+    orders = db.scalars(select(CustomerOrder).where(CustomerOrder.id.in_(co_ids))).all() if co_ids else []
+    co_by_id = {int(o.id): o for o in orders}
+
+    related_by_material: dict[int, list[dict]] = {mid: [] for mid in mat_ids}
+    for rr in reservation_rows:
+        po = po_by_id.get(int(rr.production_order_id))
+        if po is None:
+            continue
+        it = item_by_id.get(int(po.job_item_id)) if po.job_item_id is not None else None
+        job = job_by_id.get(int(it.job_id)) if it is not None and it.job_id is not None else None
+        co = co_by_id.get(int(job.customer_order_id)) if job is not None and job.customer_order_id is not None else None
+        related_by_material[int(rr.material_library_item_id)].append(
+            {
+                "production_order_id": int(po.id),
+                "vp_code": po.vp_code,
+                "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
+                "customer_order_id": int(co.id) if co is not None else None,
+                "zakazka": job.zak_code if job is not None else None,
+                "gpn": it.gpn if it is not None else po.gpn,
+                "required_qty": float(rr.required_qty or 0.0),
+                "reserved_qty": float(rr.reserved_qty or 0.0),
+                "status": rr.status,
+            }
+        )
+
+    out: list[dict] = []
+    for row in rows:
+        material_id = int(row.material_library_item_id)
+        required = float(row.required_qty or 0.0)
+        available = float(available_by_material.get(material_id, 0.0))
+        out.append(
+            {
+                "material_library_item_id": material_id,
+                "material": {
+                    "code": mat_by_id[material_id].code if material_id in mat_by_id else None,
+                    "name": mat_by_id[material_id].name if material_id in mat_by_id else None,
+                },
+                "required": required,
+                "available": available,
+                "shortage": max(required - available, 0.0),
+                "related_orders": related_by_material.get(material_id, []),
+            }
+        )
+    return out
