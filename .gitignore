@@ -18,4 +18,5 @@ dist
 .vscode
 .idea
 backend/*.db
+backend/uploads/
 __pycache__/

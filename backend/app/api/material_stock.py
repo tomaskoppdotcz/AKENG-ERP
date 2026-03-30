@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import re
+import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, joinedload
@@ -18,6 +23,7 @@ from app.models.material_stock import (
     MaterialReservation,
     MaterialStockItem,
     MaterialStockMovement,
+    MaterialStockMovementAttachment,
     MaterialStockReservation,
 )
 from app.services.material_reservation_sync import MATERIAL_RESERVATION_ACTIVE_STATUSES
@@ -25,6 +31,43 @@ from app.services.material_reservation_sync import MATERIAL_RESERVATION_ACTIVE_S
 router = APIRouter()
 
 ALLOWED_MOVEMENT_TYPES = frozenset({"prijem", "vydej", "korekce"})
+ALLOWED_ATTACHMENT_MIME = frozenset({"application/pdf", "image/jpeg", "image/png"})
+MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
+_MAX_FILES_PER_UPLOAD = 12
+
+
+def _material_upload_root() -> Path:
+    root = Path(__file__).resolve().parent.parent / "uploads" / "material_movements"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _safe_original_name(name: str) -> str:
+    base = Path(name).name
+    base = re.sub(r"[^\w.\-]", "_", base)
+    if not base:
+        base = "document.bin"
+    return base[:200]
+
+
+def _validate_attachment_upload(content_type: str | None, filename: str) -> str:
+    ct = (content_type or "").split(";")[0].strip().lower()
+    ext = Path(filename).suffix.lower()
+    if ct not in ALLOWED_ATTACHMENT_MIME:
+        if ext == ".pdf":
+            ct = "application/pdf"
+        elif ext in {".jpg", ".jpeg"}:
+            ct = "image/jpeg"
+        elif ext == ".png":
+            ct = "image/png"
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Povolené typy souborů: PDF, JPG, PNG.",
+            )
+    if ct not in ALLOWED_ATTACHMENT_MIME:
+        raise HTTPException(status_code=422, detail="Povolené typy souborů: PDF, JPG, PNG.")
+    return ct
 
 
 def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
@@ -73,6 +116,30 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_job_item_id "
                 "ON material_stock_movements (job_item_id)"
+            )
+        )
+        if "supplier_name" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN supplier_name VARCHAR(200)"))
+        if "delivery_note_no" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN delivery_note_no VARCHAR(120)"))
+        if "certificate_no" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN certificate_no VARCHAR(120)"))
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS material_stock_movement_attachments ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "movement_id INTEGER NOT NULL REFERENCES material_stock_movements (id) ON DELETE CASCADE, "
+                "original_filename VARCHAR(260) NOT NULL, "
+                "stored_relpath VARCHAR(500) NOT NULL, "
+                "mime_type VARCHAR(120) NOT NULL, "
+                "size_bytes INTEGER NOT NULL, "
+                "created_at TIMESTAMP NOT NULL"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_msma_movement_id ON material_stock_movement_attachments (movement_id)"
             )
         )
         conn.execute(
@@ -171,8 +238,19 @@ def _reservation_payload(row: MaterialStockReservation) -> dict:
     }
 
 
-def _movement_payload(row: MaterialStockMovement) -> dict:
+def _attachment_payload(row: MaterialStockMovementAttachment) -> dict:
     return {
+        "id": row.id,
+        "original_filename": row.original_filename,
+        "mime_type": row.mime_type,
+        "size_bytes": row.size_bytes,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "download_url": f"/material-stock/movements/{row.movement_id}/attachments/{row.id}/file",
+    }
+
+
+def _movement_payload(row: MaterialStockMovement, attachments: list[dict] | None = None) -> dict:
+    out = {
         "id": row.id,
         "movement_type": row.movement_type,
         "qty": row.qty,
@@ -185,7 +263,12 @@ def _movement_payload(row: MaterialStockMovement) -> dict:
         "production_order_id": row.production_order_id,
         "job_item_id": row.job_item_id,
         "note": row.note,
+        "supplier_name": getattr(row, "supplier_name", None),
+        "delivery_note_no": getattr(row, "delivery_note_no", None),
+        "certificate_no": getattr(row, "certificate_no", None),
+        "attachments": attachments if attachments is not None else [],
     }
+    return out
 
 
 def _normalize_location(value: str | None) -> str | None:
@@ -234,6 +317,18 @@ class MovementCreate(BaseModel):
     production_order_id: int | None = None
     job_item_id: int | None = None
     note: str | None = None
+    supplier_name: str | None = None
+    delivery_note_no: str | None = None
+    certificate_no: str | None = None
+
+    @model_validator(mode="after")
+    def require_heat_lot_for_prijem(self):
+        mtype = str(self.movement_type or "").strip().lower()
+        if mtype == "prijem":
+            hl = (self.heat_lot or "").strip()
+            if not hl:
+                raise ValueError("U příjmu je povinné pole tavba / šarže (heat_lot).")
+        return self
 
 
 class MovementUpdate(BaseModel):
@@ -248,6 +343,18 @@ class MovementUpdate(BaseModel):
     production_order_id: int | None = None
     job_item_id: int | None = None
     note: str | None = None
+    supplier_name: str | None = None
+    delivery_note_no: str | None = None
+    certificate_no: str | None = None
+
+    @model_validator(mode="after")
+    def require_heat_lot_for_prijem(self):
+        mtype = str(self.movement_type or "").strip().lower()
+        if mtype == "prijem":
+            hl = (self.heat_lot or "").strip()
+            if not hl:
+                raise ValueError("U příjmu je povinné pole tavba / šarže (heat_lot).")
+        return self
 
 
 class ReservationCreate(BaseModel):
@@ -265,6 +372,7 @@ class MaterialIssuePayload(BaseModel):
     stock_item_id: int | None = None
     qty: float | None = None
     note: str | None = None
+    heat_lot: str | None = None
 
 
 @router.get("/items")
@@ -379,7 +487,15 @@ def list_movements(item_id: int, db: Session = Depends(get_db)):
         .where(MaterialStockMovement.stock_item_id == item_id)
         .order_by(MaterialStockMovement.movement_date.desc(), MaterialStockMovement.id.desc())
     ).all()
-    return [_movement_payload(r) for r in rows]
+    mid_list = [int(r.id) for r in rows]
+    att_by_mid: dict[int, list[dict]] = defaultdict(list)
+    if mid_list:
+        att_rows = db.scalars(
+            select(MaterialStockMovementAttachment).where(MaterialStockMovementAttachment.movement_id.in_(mid_list))
+        ).all()
+        for a in att_rows:
+            att_by_mid[int(a.movement_id)].append(_attachment_payload(a))
+    return [_movement_payload(r, attachments=att_by_mid.get(int(r.id), [])) for r in rows]
 
 
 @router.get("/items/{item_id}/reservations")
@@ -459,6 +575,9 @@ def create_movement(item_id: int, payload: MovementCreate, db: Session = Depends
         production_order_id=payload.production_order_id,
         job_item_id=payload.job_item_id,
         note=payload.note,
+        supplier_name=(payload.supplier_name.strip() if payload.supplier_name else None),
+        delivery_note_no=(payload.delivery_note_no.strip() if payload.delivery_note_no else None),
+        certificate_no=(payload.certificate_no.strip() if payload.certificate_no else None),
     )
     db.add(movement)
     stock.current_qty = stock.current_qty + delta
@@ -467,7 +586,7 @@ def create_movement(item_id: int, payload: MovementCreate, db: Session = Depends
     refresh_material_readiness_for_material_library_item(db, int(stock.material_library_item_id))
     db.commit()
     db.refresh(movement)
-    return _movement_payload(movement)
+    return _movement_payload(movement, attachments=[])
 
 
 @router.put("/movements/{movement_id}")
@@ -503,12 +622,18 @@ def update_movement(movement_id: int, payload: MovementUpdate, db: Session = Dep
     movement.production_order_id = payload.production_order_id
     movement.job_item_id = payload.job_item_id
     movement.note = payload.note
+    movement.supplier_name = payload.supplier_name.strip() if payload.supplier_name else None
+    movement.delivery_note_no = payload.delivery_note_no.strip() if payload.delivery_note_no else None
+    movement.certificate_no = payload.certificate_no.strip() if payload.certificate_no else None
     from app.services.material_readiness import refresh_material_readiness_for_material_library_item
 
     refresh_material_readiness_for_material_library_item(db, int(stock.material_library_item_id))
     db.commit()
     db.refresh(movement)
-    return _movement_payload(movement)
+    att_rows = db.scalars(
+        select(MaterialStockMovementAttachment).where(MaterialStockMovementAttachment.movement_id == int(movement.id))
+    ).all()
+    return _movement_payload(movement, attachments=[_attachment_payload(a) for a in att_rows])
 
 
 @router.delete("/movements/{movement_id}")
@@ -521,12 +646,85 @@ def delete_movement(movement_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Stock item not found")
     mid = int(stock.material_library_item_id)
     stock.current_qty = stock.current_qty - _movement_delta(movement.movement_type, movement.qty)
+    root = _material_upload_root()
+    for a in db.scalars(
+        select(MaterialStockMovementAttachment).where(MaterialStockMovementAttachment.movement_id == int(movement.id))
+    ).all():
+        fp = root / a.stored_relpath
+        if fp.is_file():
+            fp.unlink()
     db.delete(movement)
     from app.services.material_readiness import refresh_material_readiness_for_material_library_item
 
     refresh_material_readiness_for_material_library_item(db, mid)
     db.commit()
     return {"status": "ok"}
+
+
+@router.post("/movements/{movement_id}/attachments")
+async def upload_movement_attachments(
+    movement_id: int,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    if not files:
+        raise HTTPException(status_code=422, detail="Nahrajte alespoň jeden soubor (PDF, JPG, PNG).")
+    if len(files) > _MAX_FILES_PER_UPLOAD:
+        raise HTTPException(status_code=422, detail="Příliš mnoho souborů najednou.")
+    movement = db.scalar(select(MaterialStockMovement).where(MaterialStockMovement.id == int(movement_id)))
+    if movement is None:
+        raise HTTPException(status_code=404, detail="Movement not found")
+    if str(movement.movement_type or "").strip().lower() != "prijem":
+        raise HTTPException(
+            status_code=422,
+            detail="Přílohy lze nahrávat jen u pohybu typu příjem.",
+        )
+    root = _material_upload_root()
+    out: list[dict] = []
+    for file in files:
+        raw = await file.read()
+        if len(raw) > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=422, detail="Soubor je příliš velký (max 15 MB).")
+        safe = _safe_original_name(file.filename or "document.bin")
+        ct = _validate_attachment_upload(file.content_type, safe)
+        uid = uuid.uuid4().hex
+        rel = f"{movement_id}/{uid}_{safe}"
+        dest = root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(raw)
+        row = MaterialStockMovementAttachment(
+            movement_id=int(movement_id),
+            original_filename=safe,
+            stored_relpath=rel,
+            mime_type=ct,
+            size_bytes=len(raw),
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(row)
+        db.flush()
+        out.append(_attachment_payload(row))
+    db.commit()
+    return {"status": "ok", "attachments": out}
+
+
+@router.get("/movements/{movement_id}/attachments/{attachment_id}/file")
+def download_movement_attachment(
+    movement_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(
+        select(MaterialStockMovementAttachment).where(
+            MaterialStockMovementAttachment.id == int(attachment_id),
+            MaterialStockMovementAttachment.movement_id == int(movement_id),
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    path = _material_upload_root() / row.stored_relpath
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Soubor na disku neexistuje.")
+    return FileResponse(path, filename=row.original_filename, media_type=row.mime_type)
 
 
 @router.post("/issue")
@@ -589,6 +787,7 @@ def issue_material(payload: MaterialIssuePayload, db: Session = Depends(get_db))
         qty=issue_qty,
         movement_date=datetime.now(timezone.utc),
         reference=f"RES-{reservation.id}",
+        heat_lot=(payload.heat_lot.strip() if payload.heat_lot else None),
         production_order_id=int(reservation.production_order_id),
         job_item_id=int(reservation.job_item_id),
         note=(payload.note.strip() if payload.note else reservation.note),
@@ -612,5 +811,5 @@ def issue_material(payload: MaterialIssuePayload, db: Session = Depends(get_db))
         "status": "ok",
         "reservation_id": int(reservation.id),
         "issued_qty": issue_qty,
-        "movement": _movement_payload(movement),
+        "movement": _movement_payload(movement, attachments=[]),
     }

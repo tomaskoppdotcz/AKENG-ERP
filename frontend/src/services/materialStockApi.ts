@@ -20,6 +20,16 @@ export type MaterialStockItem = {
   available_qty: number;
 };
 
+export type MaterialStockMovementAttachment = {
+  id: number;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: string | null;
+  /** Path-only; prepend API base for download */
+  download_url: string;
+};
+
 export type MaterialStockMovement = {
   id: number;
   movement_type: "prijem" | "vydej" | "korekce";
@@ -27,6 +37,12 @@ export type MaterialStockMovement = {
   movement_date: string;
   reference: string | null;
   note: string | null;
+  heat_lot?: string | null;
+  scan_code?: string | null;
+  supplier_name?: string | null;
+  delivery_note_no?: string | null;
+  certificate_no?: string | null;
+  attachments?: MaterialStockMovementAttachment[];
 };
 
 export type MaterialStockMovementCreatePayload = {
@@ -35,6 +51,10 @@ export type MaterialStockMovementCreatePayload = {
   movement_date: string;
   reference: string | null;
   note: string | null;
+  heat_lot?: string | null;
+  supplier_name?: string | null;
+  delivery_note_no?: string | null;
+  certificate_no?: string | null;
 };
 
 export type MaterialStockMovementUpdatePayload = MaterialStockMovementCreatePayload;
@@ -74,6 +94,12 @@ export type MaterialStockItemUpdatePayload = {
   note?: string | null;
   is_active?: boolean;
 };
+
+export function materialMovementAttachmentFileUrl(downloadUrl: string): string {
+  if (!downloadUrl) return "";
+  if (downloadUrl.startsWith("http")) return downloadUrl;
+  return `${API_BASE.replace(/\/$/, "")}${downloadUrl.startsWith("/") ? "" : "/"}${downloadUrl}`;
+}
 
 export async function getMaterialStockItems(): Promise<MaterialStockItem[]> {
   const res = await fetch(`${API_BASE}/material-stock/items`);
@@ -174,8 +200,37 @@ export async function createMaterialStockMovement(
     try {
       const data = await res.json();
       if (typeof data?.detail === "string" && data.detail) detail = data.detail;
+      if (Array.isArray(data?.detail) && data.detail[0]?.msg) detail = String(data.detail[0].msg);
     } catch {
       // ignore json parse fail
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function uploadMaterialMovementAttachments(
+  movementId: number,
+  files: File[]
+): Promise<{ status: string; attachments: MaterialStockMovementAttachment[] }> {
+  if (!files.length) {
+    throw new Error("Vyberte alespoň jeden soubor.");
+  }
+  const fd = new FormData();
+  for (const f of files) {
+    fd.append("files", f);
+  }
+  const res = await fetch(`${API_BASE}/material-stock/movements/${movementId}/attachments`, {
+    method: "POST",
+    body: fd,
+  });
+  if (!res.ok) {
+    let detail = "Nahrání příloh se nepodařilo.";
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string" && data.detail) detail = data.detail;
+    } catch {
+      // ignore
     }
     throw new Error(detail);
   }
@@ -191,7 +246,16 @@ export async function updateMaterialStockMovement(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error("Nepodařilo se upravit pohyb.");
+  if (!res.ok) {
+    let detail = "Nepodařilo se upravit pohyb.";
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string" && data.detail) detail = data.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
   return res.json();
 }
 

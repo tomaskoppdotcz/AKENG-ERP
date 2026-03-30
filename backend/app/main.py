@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import SessionLocal, engine
 from app.models.base import Base
 
-from app.api.master_data import router as master_data_router
+from app.api.master_data import run_master_data_startup, router as master_data_router
 from app.api.master_libraries import ensure_master_libraries_sqlite_schema, router as master_libraries_router
 from app.api.orders import ensure_orders_sqlite_schema, router as orders_router
 from app.api.orders_overview import router as orders_overview_router
@@ -58,9 +58,15 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplate,
     PortfolioTechnologyTemplateOperation,
 )
+from app.models.master_data import EmployeeSubgroup  # noqa: F401 — metadata / create_all
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
-from app.models.material_stock import MaterialStockItem, MaterialStockMovement, MaterialStockReservation
+from app.models.material_stock import (
+    MaterialStockItem,
+    MaterialStockMovement,
+    MaterialStockMovementAttachment,
+    MaterialStockReservation,
+)
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.storage_location import StorageLocation
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
@@ -89,6 +95,7 @@ def startup():
     ensure_portfolio_items_sqlite_schema(engine)
     db = SessionLocal()
     try:
+        run_master_data_startup(db)
         seed_material_groups(db)
         normalize_nerez_material_groups(db)
     finally:

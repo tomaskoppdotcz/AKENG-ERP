@@ -62,8 +62,33 @@ class MaterialStockMovement(Base):
     production_order_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     job_item_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    delivery_note_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    certificate_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     stock_item: Mapped["MaterialStockItem"] = relationship("MaterialStockItem", back_populates="movements")
+    attachments: Mapped[list["MaterialStockMovementAttachment"]] = relationship(
+        "MaterialStockMovementAttachment",
+        back_populates="movement",
+        cascade="all, delete-orphan",
+        order_by="MaterialStockMovementAttachment.id.asc()",
+    )
+
+
+class MaterialStockMovementAttachment(Base):
+    __tablename__ = "material_stock_movement_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    movement_id: Mapped[int] = mapped_column(
+        ForeignKey("material_stock_movements.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    original_filename: Mapped[str] = mapped_column(String(260), nullable=False)
+    stored_relpath: Mapped[str] = mapped_column(String(500), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    movement: Mapped["MaterialStockMovement"] = relationship("MaterialStockMovement", back_populates="attachments")
 
 
 class MaterialStockReservation(Base):
@@ -91,5 +116,8 @@ class MaterialReservation(Base):
     production_order_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     required_qty: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     reserved_qty: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    # planned | reserved = active pipeline for requirements; issued = fulfilled; superseded | cancelled = terminal (excluded)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="planned")
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # False = excluded from requirements (orphan cleanup); preserves row for audit vs hard delete
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
