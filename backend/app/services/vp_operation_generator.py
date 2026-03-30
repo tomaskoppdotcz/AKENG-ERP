@@ -95,7 +95,7 @@ def generate_operations_from_vp(db: Session):
                 latest_start=None,
                 buffer_after_min=int(op.buffer_after_min or 20),
                 queue_position=None,
-                material_ready=True,
+                material_ready=bool(getattr(vp, "is_material_ready", True)),
                 status=status,
                 planning_mode="auto",
                 is_locked=False,

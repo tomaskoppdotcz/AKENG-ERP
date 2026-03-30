@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
+from app.models.material_stock import MaterialReservation
 from app.core.scan_code import production_order_operation_scan_code_for_id, product_stock_scan_code_for_id
 from app.models.orders import (
     CustomerOrder,
@@ -342,6 +343,7 @@ def list_production_orders(
                 "customer_order_id": int(po.customer_order_id) if po.customer_order_id is not None else None,
                 "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
                 "workflow_status": getattr(po, "workflow_status", None) or "active",
+                "is_material_ready": bool(getattr(po, "is_material_ready", True)),
             }
         )
     return {"items": out}
@@ -355,7 +357,27 @@ def storno_production_order(production_order_id: int, db: Session = Depends(get_
     if not workflow_record_active(po):
         raise HTTPException(status_code=409, detail="Výrobní příkaz je již stornován.")
     po.workflow_status = WORKFLOW_STATUS_CANCELLED
+    ji_id = int(po.job_item_id) if po.job_item_id is not None else None
+    material_ids: set[int] = set()
+    if ji_id is not None:
+        material_ids = {
+            int(mid)
+            for mid in db.scalars(
+                select(MaterialReservation.material_library_item_id).where(
+                    MaterialReservation.job_item_id == ji_id
+                ).distinct()
+            ).all()
+            if mid is not None
+        }
     cancel_active_reservations_for_production_order(db, int(po.id), reason="production_order_storno")
+    from app.services.material_readiness import (
+        refresh_material_readiness_for_material_library_item,
+        refresh_production_order_material_readiness,
+    )
+
+    refresh_production_order_material_readiness(db, po)
+    for mid in material_ids:
+        refresh_material_readiness_for_material_library_item(db, mid)
     db.commit()
     db.refresh(po)
     return {"status": "ok", "production_order_id": int(po.id)}
@@ -584,6 +606,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         "logistic_mode": po.logistic_mode,
         "source_type": po.source_type,
         "status": po_status,
+        "is_material_ready": bool(getattr(po, "is_material_ready", True)),
         "quantity": int(po.quantity or 0),
         "technology_template": {
             "id": int(tp_template.id),
@@ -605,6 +628,11 @@ def start_production_order_operation(
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
     if not workflow_record_active(po):
         raise HTTPException(status_code=409, detail="Výrobní příkaz je stornován.")
+    if not bool(getattr(po, "is_material_ready", True)):
+        raise HTTPException(
+            status_code=409,
+            detail="Nelze zahájit operaci: materiál pro tento výrobní příkaz není připraven (nedostatečný stav skladu nebo rezervace).",
+        )
     _ensure_operation_scan_rows(db, po)
     operation_nos = _operation_nos_for_po(db, po)
     if operation_nos and int(operation_no) not in operation_nos:

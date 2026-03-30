@@ -166,9 +166,12 @@ def _workflow_blocks_tp_rebuild(db: Session, po: ProductionOrder) -> str | None:
 
 
 def rebuild_tp_material_reservations_for_production_order(db: Session, po: ProductionOrder) -> dict[str, Any]:
+    from app.services.material_readiness import refresh_production_order_material_readiness
+
     block = _workflow_blocks_tp_rebuild(db, po)
     if block:
         n = cancel_tp_auto_for_ineligible_po(db, po, reason=block)
+        refresh_production_order_material_readiness(db, po)
         return {
             "production_order_id": int(po.id),
             "vp_code": po.vp_code,
@@ -184,6 +187,7 @@ def rebuild_tp_material_reservations_for_production_order(db: Session, po: Produ
         portfolio_item_id=int(po.portfolio_item_id) if po.portfolio_item_id is not None else None,
         quantity=int(po.quantity or 0),
     )
+    refresh_production_order_material_readiness(db, po)
     return {
         "production_order_id": int(po.id),
         "vp_code": po.vp_code,
@@ -191,6 +195,8 @@ def rebuild_tp_material_reservations_for_production_order(db: Session, po: Produ
 
 
 def rebuild_all_tp_material_reservations(db: Session) -> dict[str, Any]:
+    from app.services.material_readiness import refresh_production_order_material_readiness
+
     eligible_modes = {"vyroba_zakaznik", "sklad"}
     pos = db.scalars(select(ProductionOrder).order_by(ProductionOrder.id.asc())).all()
     out: dict[str, Any] = {
@@ -205,6 +211,7 @@ def rebuild_all_tp_material_reservations(db: Session) -> dict[str, Any]:
                 po,
                 reason=block,
             )
+            refresh_production_order_material_readiness(db, po)
             continue
         mode = str(po.logistic_mode or "").strip()
         ji_ok = po.job_item_id is not None and db.get(JobItem, int(po.job_item_id)) is not None
@@ -217,6 +224,7 @@ def rebuild_all_tp_material_reservations(db: Session) -> dict[str, Any]:
                 po,
                 reason="po_ineligible_or_missing_job_item_portfolio",
             )
+            refresh_production_order_material_readiness(db, po)
     logger.info("[material_reservation_sync] rebuild_all %s", out)
     return out
 
@@ -249,6 +257,8 @@ def rebuild_tp_material_reservations_for_technology_template(db: Session, templa
 
 
 def rebuild_tp_material_reservations_for_job_item(db: Session, job_item_id: int) -> dict[str, Any]:
+    from app.services.material_readiness import refresh_production_order_material_readiness
+
     ji = db.get(JobItem, int(job_item_id))
     pos = db.scalars(
         select(ProductionOrder)
@@ -259,6 +269,7 @@ def rebuild_tp_material_reservations_for_job_item(db: Session, job_item_id: int)
     if ji is not None and not workflow_record_active(ji):
         for po in pos:
             n = cancel_tp_auto_for_ineligible_po(db, po, reason="job_item_workflow_inactive")
+            refresh_production_order_material_readiness(db, po)
             details.append(
                 {
                     "action": "cancelled_tp_auto",
@@ -276,6 +287,7 @@ def rebuild_tp_material_reservations_for_job_item(db: Session, job_item_id: int)
             details.append({"action": "rebuilt", **d})
         else:
             n = cancel_tp_auto_for_ineligible_po(db, po, reason="job_item_rebuild_ineligible_po")
+            refresh_production_order_material_readiness(db, po)
             details.append(
                 {
                     "action": "cancelled_tp_auto",

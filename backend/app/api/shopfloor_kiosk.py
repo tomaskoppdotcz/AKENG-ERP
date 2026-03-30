@@ -161,6 +161,10 @@ def start_operation(payload: StartOperationRequest, db: Session = Depends(get_db
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
 
+    from app.services.material_readiness import ensure_planning_operation_material_ready_for_start
+
+    ensure_planning_operation_material_ready_for_start(db, op)
+
     now = datetime.now()
 
     if op.actual_start is None:

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String
 from datetime import datetime
 from sqlalchemy.orm import relationship
 from app.models.base import Base
@@ -13,6 +13,8 @@ class CustomerOrder(Base):
     customer_name = Column(String, nullable=True)
     order_date = Column(Date, nullable=True)
     order_type = Column(String, nullable=False, default="customer")
+    # active | cancelled (storno); NULL = legacy active
+    workflow_status = Column(String(20), nullable=True)
 
     jobs = relationship("Job", back_populates="customer_order")
 
@@ -39,6 +41,7 @@ class JobItem(Base):
     gpn = Column(String, nullable=False)
     qty = Column(Integer, nullable=False)
     due_date = Column(Date, nullable=True)
+    workflow_status = Column(String(20), nullable=True)
 
     job = relationship("Job", back_populates="items")
     production_orders = relationship("ProductionOrder", back_populates="job_item")
@@ -61,6 +64,10 @@ class ProductionOrder(Base):
     logistic_mode = Column(String, nullable=True)
     source_type = Column(String, nullable=True)
     status = Column(String, nullable=True)
+    # Operational status (planned/done/...) vs business lifecycle: use workflow_status for storno
+    workflow_status = Column(String(20), nullable=True)
+    # True when every active TP material line has reserved_qty + free pool covering required_qty
+    is_material_ready = Column(Boolean, nullable=False, default=True)
 
     job_item = relationship("JobItem", back_populates="production_orders")
 

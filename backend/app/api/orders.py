@@ -215,6 +215,10 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
             po_stmts.append("ALTER TABLE production_orders ADD COLUMN scan_code VARCHAR(32)")
         if "workflow_status" not in po_cols:
             po_stmts.append("ALTER TABLE production_orders ADD COLUMN workflow_status VARCHAR(20)")
+        if "is_material_ready" not in po_cols:
+            po_stmts.append(
+                "ALTER TABLE production_orders ADD COLUMN is_material_ready BOOLEAN NOT NULL DEFAULT 1"
+            )
         with engine.begin() as conn:
             for stmt in po_stmts:
                 conn.execute(text(stmt))
@@ -932,13 +936,30 @@ def storno_customer_order(customer_order_id: int, db: Session = Depends(get_db))
 
     co.workflow_status = WORKFLOW_STATUS_CANCELLED
     jobs = db.scalars(select(Job).where(Job.customer_order_id == customer_order_id)).all()
+    from app.services.material_readiness import (
+        refresh_material_readiness_for_material_library_item,
+        refresh_production_order_material_readiness,
+    )
+
+    material_ids: set[int] = set()
     for job in jobs:
         items = db.scalars(select(JobItem).where(JobItem.job_id == job.id)).all()
         for it in items:
             it.workflow_status = WORKFLOW_STATUS_CANCELLED
             for po in db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id == it.id)).all():
                 po.workflow_status = WORKFLOW_STATUS_CANCELLED
+            for mid in db.scalars(
+                select(MaterialReservation.material_library_item_id).where(
+                    MaterialReservation.job_item_id == int(it.id)
+                ).distinct()
+            ).all():
+                if mid is not None:
+                    material_ids.add(int(mid))
             cancel_reservations_for_job_item(db, int(it.id), reason="customer_order_storno")
+            for po in db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id == it.id)).all():
+                refresh_production_order_material_readiness(db, po)
+    for mid in material_ids:
+        refresh_material_readiness_for_material_library_item(db, mid)
     db.commit()
     return {"status": "ok", "customer_order_id": int(customer_order_id)}
 
@@ -1132,7 +1153,25 @@ def storno_job_item(item_id: int, db: Session = Depends(get_db)):
     row.workflow_status = WORKFLOW_STATUS_CANCELLED
     for po in db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id == item_id)).all():
         po.workflow_status = WORKFLOW_STATUS_CANCELLED
+    material_ids: set[int] = {
+        int(mid)
+        for mid in db.scalars(
+            select(MaterialReservation.material_library_item_id).where(
+                MaterialReservation.job_item_id == int(item_id)
+            ).distinct()
+        ).all()
+        if mid is not None
+    }
     cancel_reservations_for_job_item(db, int(item_id), reason="job_item_storno")
+    from app.services.material_readiness import (
+        refresh_material_readiness_for_material_library_item,
+        refresh_production_order_material_readiness,
+    )
+
+    for po in db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id == item_id)).all():
+        refresh_production_order_material_readiness(db, po)
+    for mid in material_ids:
+        refresh_material_readiness_for_material_library_item(db, mid)
     db.commit()
     return {"status": "ok", "job_item_id": int(item_id)}
 

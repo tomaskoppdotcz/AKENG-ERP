@@ -107,6 +107,7 @@ class PlanningEngineService:
             day.planned_minutes = 0
 
         ops = self._get_ready_ops(machine_id)
+        ops = [op for op in ops if op.material_ready]
         if not ops:
             self.db.commit()
             return []

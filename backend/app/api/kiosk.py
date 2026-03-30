@@ -31,6 +31,7 @@ class KioskStartOperationRequest(BaseModel):
 class KioskPauseOperationRequest(BaseModel):
     kiosk_code: str
     planning_operation_id: int
+    pause_reason: str | None = None
     reason: str | None = None
     note: str | None = None
 
@@ -61,6 +62,7 @@ class MachineOperationIdRequest(BaseModel):
 class MachinePauseRequest(BaseModel):
     machine_code: str = Field(..., min_length=1)
     planning_operation_id: int
+    pause_reason: str | None = None
     reason: str | None = None
     note: str | None = None
 
@@ -110,6 +112,11 @@ def _kiosk_from_machine_code(db: Session, machine_code: str) -> Kiosk:
     return _get_or_create_kiosk_for_machine(db, machine)
 
 
+SESSION_REQUIRED_DETAIL = (
+    "Není přihlášen operátor. Přihlaste se na administrativní obrazovce kiosk (stejný stroj)."
+)
+
+
 def _get_active_session(db: Session, kiosk_id: int) -> KioskSession:
     session = db.scalar(
         select(KioskSession)
@@ -117,7 +124,7 @@ def _get_active_session(db: Session, kiosk_id: int) -> KioskSession:
         .where(KioskSession.is_active.is_(True))
     )
     if not session:
-        raise HTTPException(status_code=400, detail="Žádná aktivní kiosk session — přihlaste operátora.")
+        raise HTTPException(status_code=403, detail=SESSION_REQUIRED_DETAIL)
     return session
 
 
@@ -133,6 +140,7 @@ def _serialize_op(op: PlanningOperation) -> dict:
         "planned_start": op.planned_start.isoformat() if op.planned_start else None,
         "planned_end": op.planned_end.isoformat() if op.planned_end else None,
         "status": op.status,
+        "material_ready": bool(op.material_ready),
         "qty_ok": op.qty_ok,
         "qty_nok": op.qty_nok,
         "actual_start": op.actual_start.isoformat() if op.actual_start else None,
@@ -218,6 +226,8 @@ def kiosk_session_state(machine_code: str, db: Session = Depends(get_db)):
             else None
         ),
         "session_started_at": session.started_at.isoformat() if session else None,
+        "login_state": "active" if session else "none",
+        "has_active_session": bool(session),
     }
 
 
@@ -317,6 +327,10 @@ def _run_start(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
     if int(op.machine_id) != int(kiosk.machine_id):
         raise HTTPException(status_code=400, detail="Operation does not belong to this machine")
 
+    from app.services.material_readiness import ensure_planning_operation_material_ready_for_start
+
+    ensure_planning_operation_material_ready_for_start(db, op)
+
     db.add(
         OperationEvent(
             planning_operation_id=op.id,
@@ -334,13 +348,21 @@ def _run_start(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
     return {"status": "ok", "planning_operation_id": op.id, "operation_status": op.status, "operation": _serialize_op(op)}
 
 
-def _run_pause(kiosk: Kiosk, planning_operation_id: int, db: Session, reason: str | None, note: str | None) -> dict:
+def _run_pause(
+    kiosk: Kiosk,
+    planning_operation_id: int,
+    db: Session,
+    pause_reason: str | None,
+    reason: str | None,
+    note: str | None,
+) -> dict:
     session = _get_active_session(db, kiosk.id)
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
     if int(op.machine_id) != int(kiosk.machine_id):
         raise HTTPException(status_code=400, detail="Operation does not belong to this machine")
+    final_reason = (pause_reason or reason or "").strip() or None
     db.add(
         OperationEvent(
             planning_operation_id=op.id,
@@ -348,14 +370,19 @@ def _run_pause(kiosk: Kiosk, planning_operation_id: int, db: Session, reason: st
             employee_id=session.employee_id,
             event_type="pause",
             event_time=datetime.utcnow(),
-            reason=reason,
+            reason=final_reason,
             note=note,
         )
     )
     op.status = "paused"
     db.commit()
     db.refresh(op)
-    return {"status": "ok", "planning_operation_id": op.id, "operation_status": op.status}
+    return {
+        "status": "ok",
+        "planning_operation_id": op.id,
+        "operation_status": op.status,
+        "pause_reason": final_reason,
+    }
 
 
 def _run_resume(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
@@ -448,7 +475,14 @@ def kiosk_operation_start_machine(payload: MachineOperationIdRequest, db: Sessio
 @router.post("/operation/pause")
 def kiosk_operation_pause_machine(payload: MachinePauseRequest, db: Session = Depends(get_db)):
     kiosk = _kiosk_from_machine_code(db, payload.machine_code)
-    return _run_pause(kiosk, payload.planning_operation_id, db, payload.reason, payload.note)
+    return _run_pause(
+        kiosk,
+        payload.planning_operation_id,
+        db,
+        payload.pause_reason,
+        payload.reason,
+        payload.note,
+    )
 
 
 @router.post("/operation/resume")
@@ -534,7 +568,14 @@ def kiosk_pause_operation(payload: KioskPauseOperationRequest, db: Session = Dep
     kiosk = db.scalar(select(Kiosk).where(Kiosk.kiosk_code == payload.kiosk_code))
     if not kiosk:
         raise HTTPException(status_code=404, detail="Kiosk not found")
-    return _run_pause(kiosk, payload.planning_operation_id, db, payload.reason, payload.note)
+    return _run_pause(
+        kiosk,
+        payload.planning_operation_id,
+        db,
+        payload.pause_reason,
+        payload.reason,
+        payload.note,
+    )
 
 
 @router.post("/finish-operation")
