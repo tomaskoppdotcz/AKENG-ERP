@@ -95,6 +95,8 @@ export default function ProductionOrdersPage({
         r.source_type ?? "",
         r.logistic_mode ?? "",
         r.status ?? "",
+        r.order_type ?? "",
+        r.order_type === "internal" ? "interní internal" : "",
       ]
         .join(" ")
         .toLowerCase()
@@ -233,17 +235,36 @@ export default function ProductionOrdersPage({
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{labelSourceType(row.source_type)}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.status ?? "—"}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                        {row.customer_order_id != null && onOpenCustomerOrderCard && row.zakazka ? (
-                          <button
-                            type="button"
-                            style={linkButtonReset}
-                            onClick={() => onOpenCustomerOrderCard(row.customer_order_id!)}
-                          >
-                            {row.zakazka}
-                          </button>
-                        ) : (
-                          row.zakazka ?? "—"
-                        )}
+                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+                          {row.order_type === "internal" ? (
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 900,
+                                textTransform: "uppercase",
+                                letterSpacing: "0.04em",
+                                color: "#475569",
+                                background: "#f1f5f9",
+                                border: "1px solid #e2e8f0",
+                                borderRadius: 6,
+                                padding: "2px 6px",
+                              }}
+                            >
+                              Interní
+                            </span>
+                          ) : null}
+                          {row.customer_order_id != null && onOpenCustomerOrderCard && row.zakazka ? (
+                            <button
+                              type="button"
+                              style={linkButtonReset}
+                              onClick={() => onOpenCustomerOrderCard(row.customer_order_id!)}
+                            >
+                              {row.zakazka}
+                            </button>
+                          ) : (
+                            row.zakazka ?? "—"
+                          )}
+                        </div>
                       </td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.line_no ?? "—"}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.due_date ?? "—"}</td>

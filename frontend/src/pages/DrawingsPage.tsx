@@ -95,6 +95,9 @@ function formatVpCodes(codes: string[]): string {
   return `${cleaned[0]}, ${cleaned[1]} +${cleaned.length - 2}`;
 }
 
+/** VP typy navázané na řádek zakázky (včetně interního doplnění skladu). */
+const VP_SOURCE_FOR_DRAWINGS_ROW = new Set(["stock_allocation", "order_allocation", "restock_allocation"]);
+
 export default function DrawingsPage({
   onBackToDashboard,
   onOpenItemDetail,
@@ -129,7 +132,8 @@ export default function DrawingsPage({
         const jobById = new Map(jobs.map((j) => [j.id, j]));
         const vpByItemId = new Map<number, ProductionOrderRow[]>();
         for (const vp of productionOrders) {
-          if (!(vp.source_type === "stock_allocation" || vp.source_type === "order_allocation")) {
+          const st = String(vp.source_type ?? "").trim();
+          if (!VP_SOURCE_FOR_DRAWINGS_ROW.has(st)) {
             continue;
           }
           const arr = vpByItemId.get(vp.job_item_id) ?? [];
@@ -231,7 +235,9 @@ export default function DrawingsPage({
       <div style={UI.pageHeaderRow}>
         <div>
           <div style={UI.sectionTitle}>Výkresy</div>
-          <div style={UI.sectionSubtitle}>Odvozený přehled položek zakázek (GPN / řádky z objednávek)</div>
+          <div style={UI.sectionSubtitle}>
+            Položky zákaznických i interních zakázek (GPN / řádky); VP včetně doplnění skladu (restock).
+          </div>
         </div>
         <div style={UI.pageHeaderActions}>
           {query.trim() ? (
