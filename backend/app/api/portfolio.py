@@ -22,6 +22,14 @@ from app.models.portfolio import (
 router = APIRouter()
 
 
+def _sync_material_reservations_for_template(db: Session, template_id: int) -> None:
+    """Napojení na automatickou synchronizaci rezervací při změně TP vstupů."""
+    from app.services.material_reservation_sync import rebuild_tp_material_reservations_for_technology_template
+
+    rebuild_tp_material_reservations_for_technology_template(db, int(template_id))
+    db.commit()
+
+
 def ensure_portfolio_technology_operation_library_fks(engine: Engine) -> None:
     """SQLite: add FK columns to template operations if missing (create_all does not migrate)."""
     try:
@@ -792,6 +800,7 @@ def create_item_technology_template(item_id: int, db: Session = Depends(get_db))
     db.add(template)
     db.commit()
     db.refresh(template)
+    _sync_material_reservations_for_template(db, int(template.id))
     return {
         "template_id": template.id,
         "template_name": template.name,
@@ -999,6 +1008,7 @@ def create_template_technology_material(
     db.add(row)
     db.commit()
     db.refresh(row)
+    _sync_material_reservations_for_template(db, int(template_id))
 
     row = db.scalar(
         select(PortfolioTechnologyTemplateMaterial)
@@ -1076,6 +1086,8 @@ def update_template_technology_material(
 
     db.commit()
     db.refresh(row)
+    tid = int(row.template_id)
+    _sync_material_reservations_for_template(db, tid)
     row = db.scalar(
         select(PortfolioTechnologyTemplateMaterial)
         .where(PortfolioTechnologyTemplateMaterial.id == row.id)
@@ -1096,8 +1108,10 @@ def delete_template_technology_material(material_id: int, db: Session = Depends(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Technology template material not found")
+    tid = int(row.template_id)
     db.delete(row)
     db.commit()
+    _sync_material_reservations_for_template(db, tid)
     return {"status": "ok"}
 
 

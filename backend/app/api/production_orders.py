@@ -3,13 +3,13 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
-from app.core.scan_code import production_order_operation_scan_code_for_id
+from app.core.scan_code import production_order_operation_scan_code_for_id, product_stock_scan_code_for_id
 from app.models.orders import (
     CustomerOrder,
     Job,
@@ -26,6 +26,12 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplateOperation,
 )
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
+from app.services.business_workflow import WORKFLOW_STATUS_CANCELLED, workflow_active_sql, workflow_record_active
+from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
+from app.services.material_reservation_sync import cancel_active_reservations_for_production_order
+
+# Rezervace materiálu z TP se synchronizují z orders (vytvoření/úprava VP, řádky zakázky) a z portfolio (vstupy TP).
+# Tento modul nemění portfolio ani množství VP tak, aby bylo potřeba zde spouštět přepočet rezervací.
 from app.services.pdf_generator import generate_production_order_pdf
 
 router = APIRouter()
@@ -44,6 +50,18 @@ class ProductIssuePayload(BaseModel):
     job_item_id: int | None = None
     customer_order_id: int | None = None
     note: str | None = None
+
+
+class ReceiveToStockPayload(BaseModel):
+    qty: float = Field(gt=0)
+    location: str | None = None
+
+
+def _normalize_stock_location(value: str | None) -> str | None:
+    if value is None:
+        return None
+    t = value.strip()
+    return t if t else None
 
 
 def _job_item_optional_map(db: Session, item_ids: list[int]) -> tuple[dict[int, str | None], dict[int, int | None]]:
@@ -264,7 +282,11 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
 
 @router.get("")
 def list_production_orders(db: Session = Depends(get_db)):
-    rows = db.scalars(select(ProductionOrder).order_by(ProductionOrder.id.desc())).all()
+    rows = db.scalars(
+        select(ProductionOrder)
+        .where(workflow_active_sql(ProductionOrder.workflow_status))
+        .order_by(ProductionOrder.id.desc())
+    ).all()
     if not rows:
         return {"items": []}
 
@@ -312,9 +334,106 @@ def list_production_orders(db: Session = Depends(get_db)):
                 "portfolio_item_id": resolved_portfolio_id,
                 "customer_order_id": int(po.customer_order_id) if po.customer_order_id is not None else None,
                 "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
+                "workflow_status": getattr(po, "workflow_status", None) or "active",
             }
         )
     return {"items": out}
+
+
+@router.post("/{production_order_id}/storno")
+def storno_production_order(production_order_id: int, db: Session = Depends(get_db)):
+    po = db.get(ProductionOrder, production_order_id)
+    if po is None:
+        raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    if not workflow_record_active(po):
+        raise HTTPException(status_code=409, detail="Výrobní příkaz je již stornován.")
+    po.workflow_status = WORKFLOW_STATUS_CANCELLED
+    cancel_active_reservations_for_production_order(db, int(po.id), reason="production_order_storno")
+    db.commit()
+    db.refresh(po)
+    return {"status": "ok", "production_order_id": int(po.id)}
+
+
+@router.post("/{production_order_id}/receive-to-stock")
+def receive_finished_goods_to_stock(
+    production_order_id: int,
+    payload: ReceiveToStockPayload,
+    db: Session = Depends(get_db),
+):
+    """Ruční příjem hotového výrobku na sklad výrobků (pohyb příjem + zápis příjemky)."""
+    po = db.get(ProductionOrder, production_order_id)
+    if po is None:
+        raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    if not workflow_record_active(po):
+        raise HTTPException(status_code=409, detail="Výrobní příkaz je stornován.")
+    portfolio_item_id = int(po.portfolio_item_id) if po.portfolio_item_id is not None else None
+    if portfolio_item_id is None:
+        raise HTTPException(status_code=422, detail="VP nemá navázanou portfolio položku — nelze přijmout na sklad.")
+
+    loc = _normalize_stock_location(payload.location)
+    qty = float(payload.qty)
+
+    if loc is not None:
+        stock = db.scalars(
+            select(ProductStockItem)
+            .where(
+                ProductStockItem.portfolio_item_id == portfolio_item_id,
+                ProductStockItem.location == loc,
+            )
+            .order_by(ProductStockItem.id.asc())
+        ).first()
+    else:
+        stock = db.scalars(
+            select(ProductStockItem)
+            .where(ProductStockItem.portfolio_item_id == portfolio_item_id)
+            .where(or_(ProductStockItem.location.is_(None), ProductStockItem.location == ""))
+            .order_by(ProductStockItem.id.asc())
+        ).first()
+
+    if stock is None:
+        stock = ProductStockItem(
+            portfolio_item_id=portfolio_item_id,
+            location=loc,
+            current_qty=0,
+            min_qty=0,
+            unit="ks",
+            note="Vytvořeno ručním příjmem z VP.",
+            is_active=True,
+        )
+        db.add(stock)
+        db.flush()
+        stock.scan_code = product_stock_scan_code_for_id(int(stock.id))
+
+    stock.current_qty = float(stock.current_qty or 0) + qty
+    if loc is not None:
+        stock.location = loc
+
+    db.add(
+        ProductStockReceipt(
+            product_stock_item_id=int(stock.id),
+            production_order_id=int(po.id),
+            qty_received=qty,
+            received_at=datetime.utcnow(),
+            note=f"Ruční příjem VP {po.vp_code}",
+        )
+    )
+    db.add(
+        ProductStockMovement(
+            stock_item_id=int(stock.id),
+            movement_type="prijem",
+            qty=qty,
+            movement_date=datetime.utcnow(),
+            reference=f"VP:{po.vp_code}",
+            note="Ruční příjem na sklad výrobků.",
+        )
+    )
+    db.commit()
+    return {
+        "status": "ok",
+        "product_stock_item_id": int(stock.id),
+        "qty_received": qty,
+        "current_qty": float(stock.current_qty or 0),
+    }
 
 
 @router.get("/{production_order_id}")
@@ -322,6 +441,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
     po = db.get(ProductionOrder, production_order_id)
     if po is None:
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    wf = getattr(po, "workflow_status", None)
     _ensure_operation_scan_rows(db, po)
     db.flush()
 
@@ -394,9 +514,23 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
             .where(PortfolioTechnologyTemplateMaterial.template_id == int(tp_template.id))
             .order_by(PortfolioTechnologyTemplateMaterial.id.asc())
         ).all()
+        po_qty = int(po.quantity or 0)
         for row in input_rows:
             mat = db.get(MaterialLibraryItem, row.material_library_item_id) if row.material_library_item_id is not None else None
             in_portfolio = db.get(PortfolioItem, row.portfolio_item_id) if row.portfolio_item_id is not None else None
+            per_piece = float(row.consumption_per_piece or 0)
+            kerf = max(float(row.scrap_allowance or 0), 0.0)
+            total_inp = total_material_consumption(per_piece, kerf, po_qty)
+            log_material_consumption_debug(
+                context="production_order_detail_inputs",
+                vp_code=po.vp_code,
+                material_library_item_id=int(row.material_library_item_id) if row.material_library_item_id is not None else None,
+                template_material_id=int(row.id),
+                consumption_per_piece=per_piece,
+                kerf_per_piece=kerf,
+                quantity=float(po_qty),
+                total=total_inp,
+            )
             inputs.append(
                 {
                     "id": int(row.id),
@@ -405,9 +539,10 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
                     "material_name": mat.name if mat is not None else None,
                     "portfolio_item_gpn": in_portfolio.gpn if in_portfolio is not None else None,
                     "portfolio_item_name": in_portfolio.name if in_portfolio is not None else None,
-                    "consumption_per_piece": float(row.consumption_per_piece or 0),
+                    "consumption_per_piece": per_piece,
                     "consumption_unit": row.consumption_unit,
                     "scrap_allowance": float(row.scrap_allowance or 0),
+                    "total_consumption": total_inp,
                     "note": row.note,
                 }
             )
@@ -428,6 +563,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         "id": int(po.id),
         "vp_code": po.vp_code,
         "scan_code": po.scan_code,
+        "workflow_status": wf,
         "zakazka": job.zak_code if job is not None else None,
         "customer_order_id": int(po.customer_order_id) if po.customer_order_id is not None else None,
         "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
@@ -460,6 +596,8 @@ def start_production_order_operation(
     po = db.get(ProductionOrder, production_order_id)
     if po is None:
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    if not workflow_record_active(po):
+        raise HTTPException(status_code=409, detail="Výrobní příkaz je stornován.")
     _ensure_operation_scan_rows(db, po)
     operation_nos = _operation_nos_for_po(db, po)
     if operation_nos and int(operation_no) not in operation_nos:
@@ -489,6 +627,8 @@ def report_production_order_operation(
     po = db.get(ProductionOrder, production_order_id)
     if po is None:
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    if not workflow_record_active(po):
+        raise HTTPException(status_code=409, detail="Výrobní příkaz je stornován.")
     _ensure_operation_scan_rows(db, po)
     operation_nos = _operation_nos_for_po(db, po)
     if operation_nos and int(operation_no) not in operation_nos:

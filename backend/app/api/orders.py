@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,8 +30,67 @@ from app.models.orders import (
     ProductionOrder,
     ProductionOrderOperation,
 )
+from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
+from app.services.business_workflow import (
+    WORKFLOW_STATUS_CANCELLED,
+    workflow_active_sql,
+    workflow_record_active,
+)
+from app.services.material_reservation_sync import (
+    MATERIAL_RESERVATION_ACTIVE_STATUSES,
+    cancel_reservations_for_job_item,
+    rebuild_tp_material_reservations_for_job_item,
+    rebuild_tp_material_reservations_for_production_order,
+    supersede_active_tp_auto_for_po,
+)
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _production_orders_for_job_item_and_source(
+    db: Session,
+    *,
+    job_item_id: int,
+    source_type: str,
+) -> list[ProductionOrder]:
+    return db.scalars(
+        select(ProductionOrder)
+        .where(
+            ProductionOrder.job_item_id == int(job_item_id),
+            ProductionOrder.source_type == str(source_type),
+            workflow_active_sql(ProductionOrder.workflow_status),
+        )
+        .order_by(ProductionOrder.id.asc())
+    ).all()
+
+
+def _log_duplicate_production_flow(
+    *,
+    job_item_id: int,
+    source_type: str,
+    rows: list[ProductionOrder],
+    duplicate_flow_warnings: list[dict],
+) -> None:
+    if len(rows) <= 1:
+        return
+    ids = [int(p.id) for p in rows]
+    logger.warning(
+        "[production_flow] DUPLICATE_FLOW job_item_id=%s source_type=%s production_order_count=%s ids=%s",
+        job_item_id,
+        source_type,
+        len(rows),
+        ids,
+    )
+    duplicate_flow_warnings.append(
+        {
+            "job_item_id": int(job_item_id),
+            "source_type": source_type,
+            "production_order_count": len(rows),
+            "production_order_ids": ids,
+            "flag": "duplicate_production_orders_same_job_item_source",
+        }
+    )
 
 
 def ensure_orders_sqlite_schema(engine: Engine) -> None:
@@ -57,6 +117,8 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
         stmts.append("ALTER TABLE customer_orders ADD COLUMN order_type VARCHAR(20)")
     if "scan_code" not in cols:
         stmts.append("ALTER TABLE customer_orders ADD COLUMN scan_code VARCHAR(32)")
+    if "workflow_status" not in cols:
+        stmts.append("ALTER TABLE customer_orders ADD COLUMN workflow_status VARCHAR(20)")
     with engine.begin() as conn:
         for stmt in stmts:
             conn.execute(text(stmt))
@@ -92,6 +154,8 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
             item_stmts.append("ALTER TABLE job_items ADD COLUMN portfolio_item_id INTEGER")
         if "scan_code" not in item_cols:
             item_stmts.append("ALTER TABLE job_items ADD COLUMN scan_code VARCHAR(32)")
+        if "workflow_status" not in item_cols:
+            item_stmts.append("ALTER TABLE job_items ADD COLUMN workflow_status VARCHAR(20)")
         with engine.begin() as conn:
             for stmt in item_stmts:
                 conn.execute(text(stmt))
@@ -149,13 +213,18 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
             po_stmts.append("ALTER TABLE production_orders ADD COLUMN status VARCHAR(30)")
         if "scan_code" not in po_cols:
             po_stmts.append("ALTER TABLE production_orders ADD COLUMN scan_code VARCHAR(32)")
+        if "workflow_status" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN workflow_status VARCHAR(20)")
         with engine.begin() as conn:
             for stmt in po_stmts:
                 conn.execute(text(stmt))
+            conn.execute(text("DROP INDEX IF EXISTS uq_production_orders_item_source"))
             conn.execute(
                 text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_production_orders_item_source "
-                    "ON production_orders (job_item_id, source_type)"
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_production_orders_item_source_active "
+                    "ON production_orders (job_item_id, source_type) "
+                    "WHERE COALESCE(workflow_status, 'active') = 'active' "
+                    "AND job_item_id IS NOT NULL AND source_type IS NOT NULL"
                 )
             )
             conn.execute(
@@ -702,7 +771,8 @@ def _available_material_qty(db: Session, material_library_item_id: int) -> float
     reserved = db.scalar(
         select(func.coalesce(func.sum(MaterialReservation.reserved_qty), 0.0)).where(
             MaterialReservation.material_library_item_id == int(material_library_item_id),
-            MaterialReservation.status.in_(["planned", "reserved"]),
+            MaterialReservation.status.in_(tuple(MATERIAL_RESERVATION_ACTIVE_STATUSES)),
+            MaterialReservation.is_active.is_(True),
         )
     )
     return max(float(on_stock or 0.0) - float(reserved or 0.0), 0.0)
@@ -721,6 +791,9 @@ def _create_material_reservations_for_po(
     template_id = _select_active_template_id(db, portfolio_item_id)
     if template_id is None:
         return
+    # Idempotent: supersede prior TP-auto rows (status superseded); never touch issued.
+    supersede_active_tp_auto_for_po(db, po)
+
     rows = db.scalars(
         select(PortfolioTechnologyTemplateMaterial)
         .where(PortfolioTechnologyTemplateMaterial.template_id == int(template_id))
@@ -734,8 +807,19 @@ def _create_material_reservations_for_po(
             continue
         material_id = int(row.material_library_item_id)
         per_piece = float(row.consumption_per_piece or 0.0)
-        scrap = max(float(row.scrap_allowance or 0.0), 0.0)
-        required_qty = max(per_piece * float(quantity) * (1.0 + scrap), 0.0)
+        kerf = max(float(row.scrap_allowance or 0.0), 0.0)
+        qty_f = float(quantity)
+        required_qty = total_material_consumption(per_piece, kerf, quantity)
+        log_material_consumption_debug(
+            context="material_reservation",
+            vp_code=po.vp_code,
+            material_library_item_id=material_id,
+            template_material_id=int(row.id),
+            consumption_per_piece=per_piece,
+            kerf_per_piece=kerf,
+            quantity=qty_f,
+            total=required_qty,
+        )
         available = _available_material_qty(db, material_id)
         reserved_qty = min(required_qty, available)
         db.add(
@@ -747,6 +831,7 @@ def _create_material_reservations_for_po(
                 reserved_qty=reserved_qty,
                 status="reserved" if reserved_qty > 0 else "planned",
                 note=f"Auto from {po.vp_code}",
+                is_active=True,
             )
         )
     db.flush()
@@ -814,6 +899,8 @@ def update_customer_order(customer_order_id: int, payload: CustomerOrderUpdatePa
     co = db.get(CustomerOrder, customer_order_id)
     if co is None:
         raise HTTPException(status_code=404, detail="Objednávka nebyla nalezena.")
+    if not workflow_record_active(co):
+        raise HTTPException(status_code=409, detail="Objednávka je stornována — úpravy nejsou povoleny.")
 
     customer = db.scalar(select(Customer).where(Customer.id == payload.customer_id))
     if customer is None:
@@ -834,25 +921,26 @@ def update_customer_order(customer_order_id: int, payload: CustomerOrderUpdatePa
     return {"status": "ok", "customer_order_id": co.id}
 
 
-@router.delete("/customer-orders/{customer_order_id}")
-def delete_customer_order(customer_order_id: int, db: Session = Depends(get_db)):
+@router.post("/customer-orders/{customer_order_id}/storno")
+def storno_customer_order(customer_order_id: int, db: Session = Depends(get_db)):
+    """Storno celé objednávky — zachová záznamy, zruší aktivní rezervace materiálu."""
     co = db.get(CustomerOrder, customer_order_id)
     if co is None:
         raise HTTPException(status_code=404, detail="Objednávka nebyla nalezena.")
+    if not workflow_record_active(co):
+        raise HTTPException(status_code=409, detail="Objednávka je již stornována.")
 
+    co.workflow_status = WORKFLOW_STATUS_CANCELLED
     jobs = db.scalars(select(Job).where(Job.customer_order_id == customer_order_id)).all()
     for job in jobs:
         items = db.scalars(select(JobItem).where(JobItem.job_id == job.id)).all()
         for it in items:
-            for cov in db.scalars(select(JobItemCoverage).where(JobItemCoverage.job_item_id == it.id)).all():
-                db.delete(cov)
+            it.workflow_status = WORKFLOW_STATUS_CANCELLED
             for po in db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id == it.id)).all():
-                db.delete(po)
-            db.delete(it)
-        db.delete(job)
-    db.delete(co)
+                po.workflow_status = WORKFLOW_STATUS_CANCELLED
+            cancel_reservations_for_job_item(db, int(it.id), reason="customer_order_storno")
     db.commit()
-    return {"status": "ok"}
+    return {"status": "ok", "customer_order_id": int(customer_order_id)}
 
 
 @router.get("/jobs")
@@ -883,6 +971,7 @@ def get_job_items(db: Session = Depends(get_db)):
             "gpn": row.gpn,
             "qty": row.qty,
             "due_date": row.due_date.isoformat() if row.due_date else None,
+            "workflow_status": getattr(row, "workflow_status", None),
             "description": None,
             "portfolio_item_id": None,
         }
@@ -912,6 +1001,10 @@ def create_job_item(payload: JobItemCreatePayload, db: Session = Depends(get_db)
     job = db.scalar(select(Job).where(Job.id == payload.job_id))
     if job is None:
         raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+    if job.customer_order_id is not None:
+        head = db.get(CustomerOrder, int(job.customer_order_id))
+        if head is not None and not workflow_record_active(head):
+            raise HTTPException(status_code=409, detail="Objednávka je stornována — nelze přidávat položky.")
 
     gpn = payload.gpn.strip()
     if not gpn:
@@ -961,6 +1054,8 @@ def update_job_item(item_id: int, payload: JobItemUpdatePayload, db: Session = D
     row = db.get(JobItem, item_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Položka zakázky nebyla nalezena.")
+    if not workflow_record_active(row):
+        raise HTTPException(status_code=409, detail="Položka je stornována — úpravy nejsou povoleny.")
 
     gpn = payload.gpn.strip()
     if not gpn:
@@ -985,6 +1080,8 @@ def update_job_item(item_id: int, payload: JobItemUpdatePayload, db: Session = D
         )
     db.commit()
     db.refresh(row)
+    rebuild_tp_material_reservations_for_job_item(db, item_id)
+    db.commit()
     return {
         "id": row.id,
         "job_id": row.job_id,
@@ -997,19 +1094,21 @@ def update_job_item(item_id: int, payload: JobItemUpdatePayload, db: Session = D
     }
 
 
-@router.delete("/job-items/{item_id}")
-def delete_job_item(item_id: int, db: Session = Depends(get_db)):
+@router.post("/job-items/{item_id}/storno")
+def storno_job_item(item_id: int, db: Session = Depends(get_db)):
+    """Storno řádku zakázky — VP zůstávají v historii, materiál se uvolní."""
     row = db.get(JobItem, item_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Položka zakázky nebyla nalezena.")
+    if not workflow_record_active(row):
+        raise HTTPException(status_code=409, detail="Položka je již stornována.")
 
-    for cov in db.scalars(select(JobItemCoverage).where(JobItemCoverage.job_item_id == item_id)).all():
-        db.delete(cov)
+    row.workflow_status = WORKFLOW_STATUS_CANCELLED
     for po in db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id == item_id)).all():
-        db.delete(po)
-    db.delete(row)
+        po.workflow_status = WORKFLOW_STATUS_CANCELLED
+    cancel_reservations_for_job_item(db, int(item_id), reason="job_item_storno")
     db.commit()
-    return {"status": "ok"}
+    return {"status": "ok", "job_item_id": int(item_id)}
 
 
 @router.post("/{customer_order_id}/create-production-orders")
@@ -1017,6 +1116,8 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
     co = db.get(CustomerOrder, customer_order_id)
     if co is None:
         raise HTTPException(status_code=404, detail="Objednávka nebyla nalezena.")
+    if not workflow_record_active(co):
+        raise HTTPException(status_code=409, detail="Objednávka je stornována — nelze tvořit výrobní příkazy.")
 
     ot = str(getattr(co, "order_type", None) or "customer").strip().lower()
     if ot == "internal":
@@ -1038,9 +1139,12 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
     has_desc = "description" in cols
 
     result: list[dict] = []
+    duplicate_flow_warnings: list[dict] = []
     internal_co: CustomerOrder | None = None
     internal_job: Job | None = None
     for it in items:
+        if not workflow_record_active(it):
+            continue
         row = None
         if has_portfolio or has_desc:
             sel = "portfolio_item_id, description" if (has_portfolio and has_desc) else (
@@ -1106,13 +1210,25 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                 )
                 add_q = int(c["quantity"])
                 if internal_item is not None:
-                    existing_restock = db.scalar(
-                        select(ProductionOrder).where(
-                            ProductionOrder.job_item_id == internal_item.id,
-                            ProductionOrder.source_type == "restock_allocation",
-                        )
+                    restock_existing = _production_orders_for_job_item_and_source(
+                        db,
+                        job_item_id=int(internal_item.id),
+                        source_type="restock_allocation",
                     )
-                    if existing_restock is not None:
+                    logger.info(
+                        "[production_flow] job_item_id=%s source_type=restock_allocation production_order_count=%s ids=%s",
+                        int(internal_item.id),
+                        len(restock_existing),
+                        [int(p.id) for p in restock_existing],
+                    )
+                    _log_duplicate_production_flow(
+                        job_item_id=int(internal_item.id),
+                        source_type="restock_allocation",
+                        rows=restock_existing,
+                        duplicate_flow_warnings=duplicate_flow_warnings,
+                    )
+                    if restock_existing:
+                        existing_restock = restock_existing[0]
                         if not getattr(existing_restock, "scan_code", None):
                             existing_restock.scan_code = production_order_scan_code_for_id(int(existing_restock.id))
                         _ensure_production_order_operation_scans(
@@ -1122,6 +1238,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                         )
                         existing_restock.quantity = int(existing_restock.quantity or 0) + add_q
                         db.flush()
+                        rebuild_tp_material_reservations_for_production_order(db, existing_restock)
                         _sync_internal_restock_job_item_qty(db, internal_item.id)
                         result.append(
                             {
@@ -1133,6 +1250,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                                 "quantity": int(existing_restock.quantity or 0),
                                 "status": existing_restock.status or "planned",
                                 "state": "existing",
+                                "duplicate_flow": len(restock_existing) > 1,
                             }
                         )
                         continue
@@ -1164,12 +1282,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                 db.add(po)
                 db.flush()
                 po.scan_code = production_order_scan_code_for_id(int(po.id))
-                _create_material_reservations_for_po(
-                    db,
-                    po=po,
-                    portfolio_item_id=resolved_portfolio_item_id,
-                    quantity=add_q,
-                )
+                rebuild_tp_material_reservations_for_production_order(db, po)
                 _ensure_production_order_operation_scans(
                     db,
                     production_order_id=int(po.id),
@@ -1186,17 +1299,31 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                         "quantity": int(po.quantity or 0),
                         "status": po.status or "planned",
                         "state": "created",
+                        "duplicate_flow": False,
                     }
                 )
                 continue
 
-            existing = db.scalar(
-                select(ProductionOrder).where(
-                    ProductionOrder.job_item_id == it.id,
-                    ProductionOrder.source_type == c["source_type"],
-                )
+            existing_list = _production_orders_for_job_item_and_source(
+                db,
+                job_item_id=int(it.id),
+                source_type=str(c["source_type"]),
             )
-            if existing is not None:
+            logger.info(
+                "[production_flow] job_item_id=%s source_type=%s production_order_count=%s ids=%s",
+                int(it.id),
+                str(c["source_type"]),
+                len(existing_list),
+                [int(p.id) for p in existing_list],
+            )
+            _log_duplicate_production_flow(
+                job_item_id=int(it.id),
+                source_type=str(c["source_type"]),
+                rows=existing_list,
+                duplicate_flow_warnings=duplicate_flow_warnings,
+            )
+            if existing_list:
+                existing = existing_list[0]
                 if not getattr(existing, "scan_code", None):
                     existing.scan_code = production_order_scan_code_for_id(int(existing.id))
                 _ensure_production_order_operation_scans(
@@ -1239,6 +1366,73 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                         "quantity": int(existing.quantity or c["quantity"]),
                         "status": existing.status or "planned",
                         "state": "existing",
+                        "duplicate_flow": len(existing_list) > 1,
+                    }
+                )
+                continue
+
+            race_guard = _production_orders_for_job_item_and_source(
+                db,
+                job_item_id=int(it.id),
+                source_type=str(c["source_type"]),
+            )
+            if race_guard:
+                logger.warning(
+                    "[production_flow] skipped_new_po_allocation_already_exists job_item_id=%s source_type=%s ids=%s",
+                    int(it.id),
+                    str(c["source_type"]),
+                    [int(p.id) for p in race_guard],
+                )
+                _log_duplicate_production_flow(
+                    job_item_id=int(it.id),
+                    source_type=str(c["source_type"]),
+                    rows=race_guard,
+                    duplicate_flow_warnings=duplicate_flow_warnings,
+                )
+                existing = race_guard[0]
+                if not getattr(existing, "scan_code", None):
+                    existing.scan_code = production_order_scan_code_for_id(int(existing.id))
+                _ensure_production_order_operation_scans(
+                    db,
+                    production_order_id=int(existing.id),
+                    portfolio_item_id=resolved_portfolio_item_id,
+                )
+                if c["source_type"] == "order_allocation":
+                    _ensure_job_item_coverage(
+                        db,
+                        job_item_id=it.id,
+                        coverage_type="new_production",
+                        qty=int(existing.quantity or c["quantity"]),
+                        consuming_production_order_id=int(existing.id),
+                        source_production_order_id=None,
+                        source_stock_receipt_id=None,
+                        note=None,
+                    )
+                elif c["source_type"] == "stock_allocation":
+                    src_po_id, src_receipt_id = _best_source_receipt_for_portfolio_item(
+                        db, resolved_portfolio_item_id
+                    )
+                    _ensure_job_item_coverage(
+                        db,
+                        job_item_id=it.id,
+                        coverage_type="stock",
+                        qty=int(existing.quantity or c["quantity"]),
+                        consuming_production_order_id=int(existing.id),
+                        source_production_order_id=src_po_id,
+                        source_stock_receipt_id=src_receipt_id,
+                        note=None,
+                    )
+                result.append(
+                    {
+                        "id": existing.id,
+                        "vp_code": existing.vp_code,
+                        "job_item_id": existing.job_item_id,
+                        "source_type": existing.source_type or c["source_type"],
+                        "logistic_mode": existing.logistic_mode or c["logistic_mode"],
+                        "quantity": int(existing.quantity or c["quantity"]),
+                        "status": existing.status or "planned",
+                        "state": "existing",
+                        "duplicate_flow": len(race_guard) > 1,
                     }
                 )
                 continue
@@ -1259,12 +1453,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
             db.add(po)
             db.flush()
             po.scan_code = production_order_scan_code_for_id(int(po.id))
-            _create_material_reservations_for_po(
-                db,
-                po=po,
-                portfolio_item_id=resolved_portfolio_item_id,
-                quantity=int(c["quantity"]),
-            )
+            rebuild_tp_material_reservations_for_production_order(db, po)
             _ensure_production_order_operation_scans(
                 db,
                 production_order_id=int(po.id),
@@ -1305,11 +1494,24 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                     "quantity": int(po.quantity or 0),
                     "status": po.status or "planned",
                     "state": "created",
+                    "duplicate_flow": False,
                 }
             )
 
     db.commit()
-    return {"production_orders": result}
+    for it in items:
+        n = db.scalar(
+            select(func.count()).select_from(ProductionOrder).where(ProductionOrder.job_item_id == int(it.id))
+        )
+        logger.info(
+            "[production_flow] job_item_id=%s production_order_total_count=%s",
+            int(it.id),
+            int(n or 0),
+        )
+    return {
+        "production_orders": result,
+        "duplicate_flow_warnings": duplicate_flow_warnings,
+    }
 
 
 @router.get("/production-orders")
@@ -1329,6 +1531,7 @@ def get_production_orders(db: Session = Depends(get_db)):
             "logistic_mode": row.logistic_mode,
             "source_type": row.source_type,
             "status": row.status,
+            "workflow_status": getattr(row, "workflow_status", None),
         }
         for row in rows
     ]
