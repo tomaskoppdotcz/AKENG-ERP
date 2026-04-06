@@ -7,18 +7,10 @@ import re
 
 from app.core.database import get_db
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
+from app.services.business_numbering import next_vp_code, next_zak_code
+from app.services.vp_operation_generator import ensure_planning_operations_for_production_order
 
 router = APIRouter()
-
-
-def generate_zak(db: Session) -> str:
-    year = datetime.datetime.now().year % 100
-    count = db.query(Job).count() + 1
-    return f"ZAK{year}{count:04d}"
-
-
-def generate_vp(year: int, counter: int) -> str:
-    return f"VP{year}{counter:04d}"
 
 
 def _parse_qty_token(qty_raw: str) -> int:
@@ -149,8 +141,8 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
     db.add(customer_order)
     db.flush()
 
-    # 2) ZAK
-    zak_code = generate_zak(db)
+    # 2) ZAK (monotonic; never reuse after deletes)
+    zak_code = next_zak_code(db)
     job = Job(
         zak_code=zak_code,
         customer_order_id=customer_order.id,
@@ -158,9 +150,7 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
     db.add(job)
     db.flush()
 
-    # 3) line items + VP
-    year = datetime.datetime.now().year % 100
-    vp_counter = 1
+    # 3) line items + VP (monotonic VP-######)
     created_items = []
     have_price = _job_items_have_price_column(db)
 
@@ -193,13 +183,15 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
                 # Best-effort; ignore pricing persistence failures.
                 pass
 
-        vp_code = generate_vp(year, vp_counter)
-
+        db.flush()
+        vp_code = next_vp_code(db)
         vp = ProductionOrder(
             vp_code=vp_code,
             job_item_id=job_item.id,
         )
         db.add(vp)
+        db.flush()
+        ensure_planning_operations_for_production_order(db, vp)
 
         created_items.append(
             {
@@ -213,8 +205,6 @@ async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = 
                 "vp": vp_code,
             }
         )
-
-        vp_counter += 1
 
     db.commit()
 

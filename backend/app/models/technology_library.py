@@ -35,6 +35,7 @@ class TechnologyTemplateOperation(Base):
     operation_no = Column(Integer, nullable=False)
     operation_name = Column(String, nullable=False)
 
+    workplace_library_item_id = Column(Integer, ForeignKey("workplace_library_items.id"), nullable=True, index=True)
     machine_code = Column(String, nullable=False)
     machine_name = Column(String, nullable=True)
 

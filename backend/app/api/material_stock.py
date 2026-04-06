@@ -8,15 +8,15 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import func, inspect as sa_inspect, select, text
+from sqlalchemy import func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
-from app.core.scan_code import material_stock_scan_code_for_id
+from app.core.scan_code import material_stock_movement_scan_code_for_id, material_stock_scan_code_for_id
 from app.models.material_library import MaterialLibraryItem
 from app.models.orders import ProductionOrder
 from app.models.material_stock import (
@@ -25,6 +25,21 @@ from app.models.material_stock import (
     MaterialStockMovement,
     MaterialStockMovementAttachment,
     MaterialStockReservation,
+)
+from app.services.business_workflow import workflow_record_active
+from app.services.material_issue_proposal import (
+    available_qty_for_stock_item,
+    propose_material_issue_source,
+    reserved_totals_for_stock_items,
+    resolve_issue_heat_lot,
+)
+from app.services.material_readiness import (
+    count_active_pipeline_reservations_for_production_order,
+    count_planning_operations_material_ready_for_vp,
+    evaluate_production_order_material_released,
+    rebuild_machine_schedules_after_vps_became_material_ready,
+    refresh_material_readiness_for_material_library_item,
+    refresh_production_order_material_readiness,
 )
 from app.services.material_reservation_sync import MATERIAL_RESERVATION_ACTIVE_STATUSES
 
@@ -213,20 +228,6 @@ def _stock_item_list_payload(row: MaterialStockItem, reserved_qty: float = 0.0) 
     return out
 
 
-def _reserved_totals_by_stock_id(db: Session, stock_item_ids: list[int]) -> dict[int, float]:
-    if not stock_item_ids:
-        return {}
-    rows = db.execute(
-        select(
-            MaterialStockReservation.stock_item_id,
-            func.coalesce(func.sum(MaterialStockReservation.reserved_qty), 0.0),
-        )
-        .where(MaterialStockReservation.stock_item_id.in_(stock_item_ids))
-        .group_by(MaterialStockReservation.stock_item_id)
-    ).all()
-    return {int(sid): float(total) for sid, total in rows}
-
-
 def _reservation_payload(row: MaterialStockReservation) -> dict:
     return {
         "id": row.id,
@@ -247,6 +248,69 @@ def _attachment_payload(row: MaterialStockMovementAttachment) -> dict:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "download_url": f"/material-stock/movements/{row.movement_id}/attachments/{row.id}/file",
     }
+
+
+def _iso_movement_dt(dt) -> str | None:
+    if dt is None:
+        return None
+    s = dt.isoformat()
+    if getattr(dt, "tzinfo", None) is None:
+        return f"{s}Z"
+    return s
+
+
+@router.get("/job-items/{job_item_id}/material-issues")
+def list_material_issues_for_job_item(job_item_id: int, db: Session = Depends(get_db)):
+    """
+    Výdeje materiálu (vydej) navázané na řádek zakázky: job_item_id na pohybu
+    nebo production_order_id patřící VP s tímto job_item_id.
+    """
+    ji = int(job_item_id)
+    po_ids = [int(x) for x in db.scalars(select(ProductionOrder.id).where(ProductionOrder.job_item_id == ji)).all()]
+    conds = [MaterialStockMovement.job_item_id == ji]
+    if po_ids:
+        conds.append(MaterialStockMovement.production_order_id.in_(tuple(po_ids)))
+    movements = db.scalars(
+        select(MaterialStockMovement)
+        .where(MaterialStockMovement.movement_type == "vydej", or_(*conds))
+        .order_by(MaterialStockMovement.movement_date.desc(), MaterialStockMovement.id.desc())
+    ).all()
+    seen: set[int] = set()
+    items: list[dict] = []
+    for m in movements:
+        mid = int(m.id)
+        if mid in seen:
+            continue
+        seen.add(mid)
+        stock = db.get(MaterialStockItem, int(m.stock_item_id)) if m.stock_item_id is not None else None
+        lib = (
+            db.get(MaterialLibraryItem, int(stock.material_library_item_id))
+            if stock is not None and stock.material_library_item_id is not None
+            else None
+        )
+        vp = db.get(ProductionOrder, int(m.production_order_id)) if m.production_order_id is not None else None
+        items.append(
+            {
+                "movement_id": mid,
+                "movement_date": _iso_movement_dt(m.movement_date),
+                "qty": float(m.qty or 0),
+                "heat_lot": m.heat_lot,
+                "scan_code": m.scan_code,
+                "reference": m.reference,
+                "note": m.note,
+                "production_order_id": int(m.production_order_id) if m.production_order_id is not None else None,
+                "vp_code": vp.vp_code if vp is not None else None,
+                "job_item_id": int(m.job_item_id) if m.job_item_id is not None else None,
+                "stock_item_id": int(m.stock_item_id) if m.stock_item_id is not None else None,
+                "stock_scan_code": stock.scan_code if stock is not None else None,
+                "stock_location": stock.location if stock is not None else None,
+                "material_code": lib.code if lib is not None else None,
+                "material_name": lib.name if lib is not None else None,
+                "material_dimension": lib.dimension if lib is not None else None,
+                "operator": None,
+            }
+        )
+    return {"items": items}
 
 
 def _movement_payload(row: MaterialStockMovement, attachments: list[dict] | None = None) -> dict:
@@ -376,7 +440,10 @@ class MaterialIssuePayload(BaseModel):
 
 
 @router.get("/items")
-def list_stock_items(db: Session = Depends(get_db)):
+def list_stock_items(
+    for_job_item_id: int | None = Query(None, ge=1, description="Pro výdej: dostupné = stav − rezervace jiných položek."),
+    db: Session = Depends(get_db),
+):
     rows = db.scalars(
         select(MaterialStockItem)
         .join(MaterialLibraryItem, MaterialStockItem.material_library_item_id == MaterialLibraryItem.id)
@@ -386,7 +453,9 @@ def list_stock_items(db: Session = Depends(get_db)):
         .order_by(MaterialLibraryItem.name.asc())
     ).unique().all()
     stock_ids = [r.id for r in rows]
-    reserved_map = _reserved_totals_by_stock_id(db, stock_ids)
+    reserved_map = reserved_totals_for_stock_items(
+        db, stock_ids, exclude_job_item_id=for_job_item_id
+    )
     return [_stock_item_list_payload(r, reserved_map.get(r.id, 0.0)) for r in rows]
 
 
@@ -430,7 +499,7 @@ def create_stock_item(payload: StockItemCreate, db: Session = Depends(get_db)):
             joinedload(MaterialStockItem.material_library_item).joinedload(MaterialLibraryItem.material_group)
         )
     )
-    reserved_map = _reserved_totals_by_stock_id(db, [row.id])
+    reserved_map = reserved_totals_for_stock_items(db, [row.id])
     return _stock_item_list_payload(row, reserved_map.get(row.id, 0.0))
 
 
@@ -462,7 +531,7 @@ def update_stock_item(item_id: int, payload: StockItemUpdate, db: Session = Depe
 
     db.commit()
     db.refresh(row)
-    reserved_map = _reserved_totals_by_stock_id(db, [row.id])
+    reserved_map = reserved_totals_for_stock_items(db, [row.id])
     return _stock_item_list_payload(row, reserved_map.get(row.id, 0.0))
 
 
@@ -727,6 +796,40 @@ def download_movement_attachment(
     return FileResponse(path, filename=row.original_filename, media_type=row.mime_type)
 
 
+@router.get("/issue-proposal")
+def get_material_issue_proposal(reservation_id: int = Query(..., ge=1), db: Session = Depends(get_db)):
+    reservation = db.get(MaterialReservation, int(reservation_id))
+    if reservation is None:
+        raise HTTPException(status_code=404, detail="Material reservation not found.")
+    st = str(reservation.status or "").strip().lower()
+    if st not in {s.lower() for s in MATERIAL_RESERVATION_ACTIVE_STATUSES}:
+        raise HTTPException(
+            status_code=409,
+            detail="Rezervace není aktivní (již vydána, zrušena nebo nahrazena).",
+        )
+    if not reservation.is_active:
+        raise HTTPException(status_code=409, detail="Rezervace není aktivní.")
+    qty_basis = float(reservation.reserved_qty or 0) or float(reservation.required_qty or 0)
+    lib = db.scalar(
+        select(MaterialLibraryItem).where(MaterialLibraryItem.id == int(reservation.material_library_item_id))
+    )
+    prop = propose_material_issue_source(
+        db,
+        int(reservation.material_library_item_id),
+        qty_basis,
+        exclude_job_item_id=int(reservation.job_item_id),
+    )
+    return {
+        "reservation_id": int(reservation.id),
+        "required_qty": float(reservation.required_qty or 0),
+        "reserved_qty": float(reservation.reserved_qty or 0),
+        "material_library_item_id": int(reservation.material_library_item_id),
+        "material_code": lib.code if lib else None,
+        "material_name": lib.name if lib else None,
+        "proposal": prop,
+    }
+
+
 @router.post("/issue")
 @router.post("/material/issue")
 def issue_material(payload: MaterialIssuePayload, db: Session = Depends(get_db)):
@@ -760,6 +863,15 @@ def issue_material(payload: MaterialIssuePayload, db: Session = Depends(get_db))
     if not reservation.is_active:
         raise HTTPException(status_code=409, detail="Rezervace není aktivní.")
 
+    po_for_issue = db.get(ProductionOrder, int(reservation.production_order_id))
+    po_id_int = int(reservation.production_order_id)
+    active_res_before = count_active_pipeline_reservations_for_production_order(db, po_id_int)
+    was_released_before = (
+        bool(evaluate_production_order_material_released(db, po_for_issue))
+        if po_for_issue is not None and workflow_record_active(po_for_issue)
+        else False
+    )
+
     issue_qty = float(payload.qty if payload.qty is not None else reservation.reserved_qty)
     if issue_qty <= 0:
         raise HTTPException(status_code=422, detail="qty must be greater than 0")
@@ -771,15 +883,24 @@ def issue_material(payload: MaterialIssuePayload, db: Session = Depends(get_db))
         if int(stock.material_library_item_id) != int(reservation.material_library_item_id):
             raise HTTPException(status_code=422, detail="Stock item does not match reserved material.")
     else:
-        stock = db.scalars(
-            select(MaterialStockItem)
-            .where(MaterialStockItem.material_library_item_id == int(reservation.material_library_item_id))
-            .order_by(MaterialStockItem.current_qty.desc(), MaterialStockItem.id.asc())
-        ).first()
-    if stock is None:
-        raise HTTPException(status_code=404, detail="No material stock item found for reserved material.")
-    if float(stock.current_qty or 0) < issue_qty:
-        raise HTTPException(status_code=409, detail="Insufficient stock quantity for issue.")
+        prop = propose_material_issue_source(
+            db,
+            int(reservation.material_library_item_id),
+            issue_qty,
+            exclude_job_item_id=int(reservation.job_item_id),
+        )
+        if prop is None:
+            raise HTTPException(status_code=404, detail="No material stock item found for reserved material.")
+        stock = db.get(MaterialStockItem, int(prop["stock_item_id"]))
+        if stock is None:
+            raise HTTPException(status_code=404, detail="No material stock item found for reserved material.")
+
+    avail = available_qty_for_stock_item(db, int(stock.id), exclude_job_item_id=int(reservation.job_item_id))
+    if issue_qty > avail + 1e-6:
+        raise HTTPException(
+            status_code=409,
+            detail="Nedostatečné dostupné množství na kartě (po odečtení rezervací).",
+        )
 
     movement = MaterialStockMovement(
         stock_item_id=int(stock.id),
@@ -787,25 +908,65 @@ def issue_material(payload: MaterialIssuePayload, db: Session = Depends(get_db))
         qty=issue_qty,
         movement_date=datetime.now(timezone.utc),
         reference=f"RES-{reservation.id}",
-        heat_lot=(payload.heat_lot.strip() if payload.heat_lot else None),
+        heat_lot=resolve_issue_heat_lot(db, int(stock.id), payload.heat_lot),
         production_order_id=int(reservation.production_order_id),
         job_item_id=int(reservation.job_item_id),
         note=(payload.note.strip() if payload.note else reservation.note),
     )
     db.add(movement)
+    db.flush()
+    movement.scan_code = material_stock_movement_scan_code_for_id(int(movement.id))
     stock.current_qty = float(stock.current_qty or 0) - issue_qty
     reservation.status = "issued"
     reservation.reserved_qty = issue_qty
     if payload.note:
         reservation.note = payload.note.strip() or reservation.note
-    from app.services.material_readiness import (
-        refresh_material_readiness_for_material_library_item,
-        refresh_production_order_material_readiness,
-    )
 
-    refresh_production_order_material_readiness(db, db.get(ProductionOrder, int(reservation.production_order_id)))
+    db.flush()
+    refresh_production_order_material_readiness(db, po_for_issue)
+    db.flush()
+    refresh_production_order_material_readiness(db, po_for_issue)
     refresh_material_readiness_for_material_library_item(db, int(reservation.material_library_item_id))
     db.commit()
+
+    po_fresh = db.get(ProductionOrder, po_id_int)
+    vp_code_f = (po_fresh.vp_code or "").strip() if po_fresh is not None else ""
+    active_res_after = count_active_pipeline_reservations_for_production_order(db, po_id_int)
+    is_released_eval = (
+        bool(evaluate_production_order_material_released(db, po_fresh))
+        if po_fresh is not None and workflow_record_active(po_fresh)
+        else False
+    )
+    stored_released = bool(getattr(po_fresh, "is_material_released_to_production", False)) if po_fresh else False
+    if po_fresh is not None and is_released_eval and not stored_released:
+        refresh_production_order_material_readiness(db, po_fresh)
+        db.commit()
+        po_fresh = db.get(ProductionOrder, po_id_int)
+
+    is_released_after = (
+        bool(evaluate_production_order_material_released(db, po_fresh))
+        if po_fresh is not None and workflow_record_active(po_fresh)
+        else False
+    )
+    planning_ready_n = count_planning_operations_material_ready_for_vp(db, vp_code_f) if vp_code_f else 0
+
+    rebuild_yes = bool(is_released_after and not was_released_before and po_fresh is not None)
+    print(
+        "[MATERIAL_ISSUE_SYNC] "
+        f"vp_id={po_id_int} vp_code={vp_code_f!r} "
+        f"was_released_before={was_released_before} is_released_after={is_released_after} "
+        f"active_reservation_count_before={active_res_before} active_reservation_count_after={active_res_after} "
+        f"planning_ops_material_ready={planning_ready_n} rebuild_triggered={rebuild_yes}",
+        flush=True,
+    )
+
+    if rebuild_yes and po_fresh is not None:
+        print(
+            "[PLANNER_DIAG] material_stock reservation_issue -> schedule rebuild "
+            f"production_order_id={po_fresh.id} vp_code={po_fresh.vp_code!r}",
+            flush=True,
+        )
+        rebuild_machine_schedules_after_vps_became_material_ready(db, [po_fresh])
     db.refresh(movement)
     return {
         "status": "ok",

@@ -26,3 +26,4 @@ class WorkplaceLibraryItem(Base):
     hourly_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     daily_capacity_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_plannable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

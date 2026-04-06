@@ -13,9 +13,27 @@ from app.models.material_library import MaterialLibraryItem
 from app.models.material_stock import MaterialReservation, MaterialStockItem
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
 from app.services.business_workflow import workflow_active_sql
-from app.services.material_reservation_sync import MATERIAL_RESERVATION_ACTIVE_STATUSES
+from app.services.material_readiness import (
+    evaluate_production_order_material_covered,
+    evaluate_production_order_material_released,
+)
+from app.services.material_reservation_sync import (
+    MATERIAL_RESERVATION_ACTIVE_STATUSES,
+    sum_eligible_reserved_qty_for_material,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _free_unreserved_material_qty(db: Session, material_library_item_id: int) -> float:
+    """Fyzický stav minus eligible rezervace — shodně jako orders._available_material_qty."""
+    on_stock = db.scalar(
+        select(func.coalesce(func.sum(MaterialStockItem.current_qty), 0.0)).where(
+            MaterialStockItem.material_library_item_id == int(material_library_item_id)
+        )
+    )
+    reserved = sum_eligible_reserved_qty_for_material(db, int(material_library_item_id))
+    return max(float(on_stock or 0.0) - reserved, 0.0)
 
 
 def _material_requirements_bundle(db: Session) -> dict[str, Any] | None:
@@ -241,7 +259,11 @@ def build_standard_material_requirements(db: Session) -> list[dict]:
     for row in agg_rows:
         material_id = int(row.material_library_item_id)
         required = float(row.required_qty or 0.0)
-        available = float(available_by_material.get(material_id, 0.0))
+        reserved_sum = float(row.reserved_qty or 0.0)
+        physical = float(available_by_material.get(material_id, 0.0))
+        free = _free_unreserved_material_qty(db, material_id)
+        net_gap = max(required - reserved_sum, 0.0)
+        shortage = max(net_gap - free, 0.0)
         out.append(
             {
                 "material_library_item_id": material_id,
@@ -250,8 +272,10 @@ def build_standard_material_requirements(db: Session) -> list[dict]:
                     "name": mat_by_id[material_id].name if material_id in mat_by_id else None,
                 },
                 "required": required,
-                "available": available,
-                "shortage": max(required - available, 0.0),
+                "reserved": reserved_sum,
+                "available": physical,
+                "free_for_allocation": free,
+                "shortage": shortage,
                 "related_orders": related_by_material.get(material_id, []),
             }
         )
@@ -269,8 +293,6 @@ def build_vp_material_requirements(db: Session) -> list[dict]:
     detail_rows = b["detail_rows"]
     co_by_id = b["co_by_id"]
 
-    agg_required = {int(r.material_library_item_id): float(r.required_qty or 0.0) for r in agg_rows}
-
     po_header: dict[int, dict] = {}
     for _rr, po, ji, job in detail_rows:
         pid = int(po.id)
@@ -286,7 +308,9 @@ def build_vp_material_requirements(db: Session) -> list[dict]:
             "gpn": ji.gpn if ji is not None else po.gpn,
             "due_date": ji.due_date.isoformat() if ji is not None and ji.due_date is not None else None,
             "job_item_id": int(ji.id) if ji is not None else None,
-            "is_material_ready": bool(getattr(po, "is_material_ready", True)),
+            "is_material_covered": bool(evaluate_production_order_material_covered(db, po)),
+            "is_material_released_to_production": bool(evaluate_production_order_material_released(db, po)),
+            "is_material_ready": bool(evaluate_production_order_material_released(db, po)),
         }
 
     by_vp: dict[int, list[dict]] = defaultdict(list)
@@ -298,8 +322,9 @@ def build_vp_material_requirements(db: Session) -> list[dict]:
         st = lines[0]["status"]
         mat = mat_by_id.get(mid)
         avail = float(available_by_material.get(mid, 0.0))
-        total_req = float(agg_required.get(mid, 0.0))
-        shortage = max(total_req - avail, 0.0)
+        free = _free_unreserved_material_qty(db, mid)
+        line_gap = max(float(req_sum) - float(res_sum), 0.0)
+        shortage = max(line_gap - free, 0.0)
         by_vp[pid].append(
             {
                 "material_library_item_id": mid,
@@ -312,6 +337,7 @@ def build_vp_material_requirements(db: Session) -> list[dict]:
                 "required_qty": req_sum,
                 "reserved_qty": res_sum,
                 "available": avail,
+                "free_for_allocation": free,
                 "shortage": shortage,
                 "status": st,
                 "reservation_id": ids[0],
@@ -331,20 +357,23 @@ def build_vp_material_requirements(db: Session) -> list[dict]:
         materials = by_vp[pid]
         header = po_header.get(pid, {})
         covered = True
-        for m in materials:
-            mid = int(m["material_library_item_id"])
-            if float(m["reserved_qty"] or 0) + 1e-9 < float(m["required_qty"] or 0):
-                covered = False
-                break
-            g_short = max(float(agg_required.get(mid, 0.0)) - float(available_by_material.get(mid, 0.0)), 0.0)
-            if g_short > 1e-6:
-                covered = False
-                break
+        if materials:
+            for m in materials:
+                req = float(m["required_qty"] or 0)
+                res = float(m["reserved_qty"] or 0)
+                gap = max(0.0, req - res)
+                if gap <= 1e-9:
+                    continue
+                mid = int(m["material_library_item_id"])
+                free = _free_unreserved_material_qty(db, mid)
+                if free + 1e-9 < gap:
+                    covered = False
+                    break
 
         out.append(
             {
                 **header,
-                "coverage": "covered" if covered and materials else "uncovered",
+                "coverage": "covered" if (not materials or covered) else "uncovered",
                 "materials": materials,
             }
         )

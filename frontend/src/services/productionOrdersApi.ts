@@ -22,7 +22,11 @@ export type ProductionOrderOverviewRow = {
   job_item_id?: number | null;
   /** Obchodní workflow; prázdné / active = aktivní VP */
   workflow_status?: string | null;
-  /** Stav skladu + rezervací pro naplánování / start */
+  /** Pokryto — lze vydat */
+  is_material_covered?: boolean | null;
+  /** Vydáno na výrobu — plánovač / start operace */
+  is_material_released_to_production?: boolean | null;
+  /** Alias: stejné jako is_material_released_to_production */
   is_material_ready?: boolean | null;
 };
 
@@ -58,6 +62,18 @@ export type MaterialTraceabilityForInput = {
   delivery_note_no: string | null;
   certificate_no: string | null;
   attachments: MaterialTraceabilityAttachment[];
+  /** True pokud existuje pohyb výdej navázaný na VP (viz issue_movement_id). */
+  has_issued_movement?: boolean;
+  issue_movement_id?: number | null;
+  /** production_order | job_item — jak byla nalezena vazba výdeje */
+  linkage?: string | null;
+  movement_scan_code?: string | null;
+  stock_location?: string | null;
+  length_per_piece_mm?: number | null;
+  weight_per_piece_kg?: number | null;
+  material_code?: string | null;
+  material_name?: string | null;
+  material_dimension?: string | null;
 };
 
 export type ProductionOrderInputRow = {
@@ -96,6 +112,9 @@ export type ProductionOrderDetail = {
   source_type: string | null;
   status: string | null;
   quantity: number;
+  is_material_covered?: boolean | null;
+  is_material_released_to_production?: boolean | null;
+  is_material_ready?: boolean | null;
   technology_template: {
     id: number;
     name: string;

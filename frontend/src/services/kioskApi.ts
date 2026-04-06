@@ -63,6 +63,8 @@ export async function kioskSession(machineCode: string) {
     machine: KioskMachineInfo;
     employee: KioskEmployee | null;
     session_started_at: string | null;
+    login_state: "active" | "none";
+    has_active_session: boolean;
   }>(await fetch(u.toString()));
 }
 
@@ -110,7 +112,7 @@ export async function kioskOperationStart(machineCode: string, planningOperation
 export async function kioskOperationPause(
   machineCode: string,
   planningOperationId: number,
-  reason?: string
+  pauseReason?: string
 ) {
   return parseJson<Record<string, unknown>>(
     await fetch(`${API_BASE}/kiosk/operation/pause`, {
@@ -119,7 +121,8 @@ export async function kioskOperationPause(
       body: JSON.stringify({
         machine_code: machineCode,
         planning_operation_id: planningOperationId,
-        reason,
+        pause_reason: pauseReason,
+        reason: pauseReason,
       }),
     })
   );

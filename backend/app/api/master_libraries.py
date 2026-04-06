@@ -2,23 +2,26 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import inspect as sa_inspect, select, text
+from sqlalchemy import inspect as sa_inspect, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
+from app.models.orders import ProductionOrderOperation
+from app.services.workplace_scheduling_anchor import (
+    get_or_create_scheduling_machine_for_workplace,
+    sync_synthetic_anchor_machine_names_for_workplace,
+)
 
 router = APIRouter()
 
 
 def ensure_master_libraries_sqlite_schema(engine: Engine) -> None:
-    """Add missing columns on SQLite when create_all does not alter existing tables."""
+    """Add missing columns when create_all does not alter existing tables."""
     try:
         url = str(engine.url)
     except Exception:
-        return
-    if not url.startswith("sqlite"):
         return
 
     insp = sa_inspect(engine)
@@ -26,11 +29,27 @@ def ensure_master_libraries_sqlite_schema(engine: Engine) -> None:
         return
 
     col_names = {c["name"] for c in insp.get_columns("workplace_library_items")}
-    if "daily_capacity_hours" in col_names:
-        return
 
     with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE workplace_library_items ADD COLUMN daily_capacity_hours FLOAT"))
+        if "daily_capacity_hours" not in col_names:
+            if url.startswith("sqlite"):
+                conn.execute(text("ALTER TABLE workplace_library_items ADD COLUMN daily_capacity_hours FLOAT"))
+            else:
+                conn.execute(text("ALTER TABLE workplace_library_items ADD COLUMN daily_capacity_hours DOUBLE PRECISION"))
+
+    col_names = {c["name"] for c in sa_inspect(engine).get_columns("workplace_library_items")}
+    with engine.begin() as conn:
+        if "is_plannable" not in col_names:
+            if url.startswith("sqlite"):
+                conn.execute(
+                    text("ALTER TABLE workplace_library_items ADD COLUMN is_plannable INTEGER NOT NULL DEFAULT 1")
+                )
+            else:
+                conn.execute(
+                    text(
+                        "ALTER TABLE workplace_library_items ADD COLUMN is_plannable BOOLEAN NOT NULL DEFAULT TRUE"
+                    )
+                )
 
 
 def _op_to_dict(r: OperationLibraryItem) -> dict:
@@ -52,6 +71,7 @@ def _wp_to_dict(r: WorkplaceLibraryItem) -> dict:
         "hourly_rate": r.hourly_rate,
         "daily_capacity_hours": r.daily_capacity_hours,
         "is_active": r.is_active,
+        "is_plannable": bool(getattr(r, "is_plannable", True)),
     }
 
 
@@ -84,6 +104,7 @@ class WorkplaceLibraryPayload(BaseModel):
     hourly_rate: float | None = None
     daily_capacity_hours: float | None = None
     is_active: bool = True
+    is_plannable: bool = True
 
     @field_validator("name")
     @classmethod
@@ -212,6 +233,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     hourly_rate=680.0,
                     daily_capacity_hours=8.0,
                     is_active=True,
+                    is_plannable=False,
                 ),
                 WorkplaceLibraryItem(
                     code="KOOP-01",
@@ -220,6 +242,7 @@ def seed_master_libraries_demo_data(db: Session) -> None:
                     hourly_rate=550.0,
                     daily_capacity_hours=8.0,
                     is_active=True,
+                    is_plannable=False,
                 ),
             ]
         )
@@ -294,10 +317,13 @@ def create_workplace_library_item(payload: WorkplaceLibraryPayload, db: Session 
         hourly_rate=payload.hourly_rate,
         daily_capacity_hours=payload.daily_capacity_hours,
         is_active=payload.is_active,
+        is_plannable=payload.is_plannable,
     )
     db.add(row)
     db.commit()
     db.refresh(row)
+    get_or_create_scheduling_machine_for_workplace(db, int(row.id))
+    db.commit()
     return _wp_to_dict(row)
 
 
@@ -316,8 +342,16 @@ def update_workplace_library_item(
     row.hourly_rate = payload.hourly_rate
     row.daily_capacity_hours = payload.daily_capacity_hours
     row.is_active = payload.is_active
+    row.is_plannable = payload.is_plannable
     db.commit()
     db.refresh(row)
+    sync_synthetic_anchor_machine_names_for_workplace(db, int(row.id))
+    db.execute(
+        update(ProductionOrderOperation)
+        .where(ProductionOrderOperation.workplace_library_item_id == int(row.id))
+        .values(workplace_name=row.name)
+    )
+    db.commit()
     return _wp_to_dict(row)
 
 

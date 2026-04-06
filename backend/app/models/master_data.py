@@ -48,6 +48,22 @@ class Machine(Base):
     name: Mapped[str] = mapped_column(String(100))
     machine_type: Mapped[str] = mapped_column(String(50))
     workcenter_id: Mapped[Optional[int]] = mapped_column(ForeignKey('workcenters.id'), nullable=True)
+    workplace_library_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("workplace_library_items.id"), nullable=True, index=True
+    )
+    # planning_enabled: shopfloor / kapacitní přehledy; is_plannable: řádky Planner Gantt
     planning_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_plannable: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     default_shift_minutes: Mapped[int] = mapped_column(Integer, default=450)
+
+
+class EmployeeSubgroup(Base):
+    """Podskupiny knihovny Zaměstnanci (kiosk / evidence)."""
+
+    __tablename__ = "employee_subgroups"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)

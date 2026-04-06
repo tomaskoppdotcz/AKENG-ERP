@@ -101,10 +101,92 @@ export function materialMovementAttachmentFileUrl(downloadUrl: string): string {
   return `${API_BASE.replace(/\/$/, "")}${downloadUrl.startsWith("/") ? "" : "/"}${downloadUrl}`;
 }
 
-export async function getMaterialStockItems(): Promise<MaterialStockItem[]> {
-  const res = await fetch(`${API_BASE}/material-stock/items`);
+export async function getMaterialStockItems(opts?: { forJobItemId?: number }): Promise<MaterialStockItem[]> {
+  const q = new URLSearchParams();
+  if (opts?.forJobItemId != null && Number.isFinite(opts.forJobItemId)) {
+    q.set("for_job_item_id", String(Math.floor(opts.forJobItemId)));
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  const res = await fetch(`${API_BASE}/material-stock/items${suffix}`);
   if (!res.ok) throw new Error("Nepodařilo se načíst sklad materiálu.");
   return res.json();
+}
+
+export type MaterialIssueProposal = {
+  stock_item_id: number;
+  scan_code?: string | null;
+  location: string | null;
+  current_qty: number;
+  available_qty: number;
+  heat_lot: string | null;
+  oldest_prijem_at: string | null;
+  suggested_issue_qty: number;
+  strategy: string;
+  /** True when FIFO z příjmu nenabídne tavbu — doplnit ručně. */
+  heat_lot_must_be_manual?: boolean;
+};
+
+export type MaterialIssueProposalResponse = {
+  reservation_id: number;
+  required_qty: number;
+  reserved_qty: number;
+  material_library_item_id: number;
+  material_code: string | null;
+  material_name: string | null;
+  proposal: MaterialIssueProposal | null;
+};
+
+export async function getMaterialIssueProposal(reservationId: number): Promise<MaterialIssueProposalResponse> {
+  const res = await fetch(
+    `${API_BASE}/material-stock/issue-proposal?reservation_id=${encodeURIComponent(String(reservationId))}`
+  );
+  if (!res.ok) {
+    let message = "Nepodařilo se načíst návrh výdeje.";
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string") message = data.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+export type JobItemMaterialIssueRow = {
+  movement_id: number;
+  movement_date: string | null;
+  qty: number;
+  heat_lot: string | null;
+  scan_code: string | null;
+  reference: string | null;
+  note: string | null;
+  production_order_id: number | null;
+  vp_code: string | null;
+  job_item_id: number | null;
+  stock_item_id: number | null;
+  stock_scan_code: string | null;
+  stock_location: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  material_dimension: string | null;
+  operator: string | null;
+};
+
+export async function getMaterialIssuesForJobItem(jobItemId: number): Promise<{ items: JobItemMaterialIssueRow[] }> {
+  const res = await fetch(`${API_BASE}/material-stock/job-items/${encodeURIComponent(String(jobItemId))}/material-issues`);
+  if (!res.ok) {
+    let message = "Nepodařilo se načíst výdeje materiálu.";
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string") message = data.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
+  }
+  const raw = await res.json();
+  return { items: Array.isArray(raw?.items) ? raw.items : [] };
 }
 
 export async function createMaterialStockItem(

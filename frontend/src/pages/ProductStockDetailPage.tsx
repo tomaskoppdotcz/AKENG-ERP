@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import DetailPageHeader from "../components/DetailPageHeader";
 import { UI } from "../styles/ui";
 import {
   createProductStockMovement,
@@ -142,43 +143,40 @@ export default function ProductStockDetailPage({ item, onBack }: Props) {
 
   return (
     <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" style={UI.buttons.secondary} onClick={onBack}>
-            Zpět na sklad výrobků
-          </button>
-        </div>
-
-        <div style={UI.pageHeaderRow}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 30, fontWeight: 900, color: "#0f172a", lineHeight: 1.2 }}>
-              {stockItem.portfolio_gpn}
-            </h1>
-            <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0 }}>{stockItem.portfolio_name}</p>
-          </div>
-          <div style={{ ...UI.summaryTilesGrid, width: "auto", gap: 8 }}>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 160 }}>
-              <div style={UI.summaryTileLabel}>Aktuální stav</div>
-              <div style={UI.summaryTileValue}>
-                {stockItem.current_qty} {u}
+      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 14 }}>
+        <DetailPageHeader
+          title={stockItem.portfolio_gpn}
+          subtitle={stockItem.portfolio_name}
+          actions={
+            <button type="button" style={UI.buttons.secondary} onClick={onBack}>
+              Zpět na sklad výrobků
+            </button>
+          }
+          summaryTiles={
+            <div style={UI.summaryTilesGrid}>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 160 }}>
+                <div style={UI.summaryTileLabel}>Aktuální stav</div>
+                <div style={UI.summaryTileValue}>
+                  {stockItem.current_qty} {u}
+                </div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 160 }}>
+                <div style={UI.summaryTileLabel}>Min. zásoba</div>
+                <div style={UI.summaryTileValue}>
+                  {stockItem.min_qty == null ? "—" : `${stockItem.min_qty} ${u}`}
+                </div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 160 }}>
+                <div style={UI.summaryTileLabel}>Lokace</div>
+                <div style={UI.summaryTileValue}>{stockItem.location?.trim() ? stockItem.location : "—"}</div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 160 }}>
+                <div style={UI.summaryTileLabel}>Scan kód</div>
+                <div style={UI.summaryTileValue}>{stockItem.scan_code?.trim() ? stockItem.scan_code : "—"}</div>
               </div>
             </div>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 160 }}>
-              <div style={UI.summaryTileLabel}>Min. zásoba</div>
-              <div style={UI.summaryTileValue}>
-                {stockItem.min_qty == null ? "—" : `${stockItem.min_qty} ${u}`}
-              </div>
-            </div>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 160 }}>
-              <div style={UI.summaryTileLabel}>Lokace</div>
-              <div style={UI.summaryTileValue}>{stockItem.location?.trim() ? stockItem.location : "—"}</div>
-            </div>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 160 }}>
-              <div style={UI.summaryTileLabel}>Scan kód</div>
-              <div style={UI.summaryTileValue}>{stockItem.scan_code?.trim() ? stockItem.scan_code : "—"}</div>
-            </div>
-          </div>
-        </div>
+          }
+        />
 
         <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>

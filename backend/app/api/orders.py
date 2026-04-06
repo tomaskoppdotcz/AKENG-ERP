@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +17,7 @@ from app.core.scan_code import (
 )
 from app.models.master_data import Customer
 from app.models.material_stock import MaterialReservation, MaterialStockItem
+from app.models.master_libraries import WorkplaceLibraryItem
 from app.models.portfolio import (
     PortfolioItem,
     PortfolioTechnologyTemplate,
@@ -31,6 +33,11 @@ from app.models.orders import (
     ProductionOrderOperation,
 )
 from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
+from app.services.vp_operation_generator import (
+    _vp_planning_pipeline_snapshot,
+    ensure_planning_operations_for_production_order,
+)
+from app.services.business_numbering import next_internal_code, next_vp_code, next_zak_code
 from app.services.business_workflow import (
     WORKFLOW_STATUS_CANCELLED,
     workflow_active_sql,
@@ -41,6 +48,7 @@ from app.services.material_reservation_sync import (
     cancel_reservations_for_job_item,
     rebuild_tp_material_reservations_for_job_item,
     rebuild_tp_material_reservations_for_production_order,
+    sum_eligible_reserved_qty_for_material,
     supersede_active_tp_auto_for_po,
 )
 
@@ -217,7 +225,15 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
             po_stmts.append("ALTER TABLE production_orders ADD COLUMN workflow_status VARCHAR(20)")
         if "is_material_ready" not in po_cols:
             po_stmts.append(
-                "ALTER TABLE production_orders ADD COLUMN is_material_ready BOOLEAN NOT NULL DEFAULT 1"
+                "ALTER TABLE production_orders ADD COLUMN is_material_ready BOOLEAN NOT NULL DEFAULT 0"
+            )
+        if "is_material_covered" not in po_cols:
+            po_stmts.append(
+                "ALTER TABLE production_orders ADD COLUMN is_material_covered BOOLEAN NOT NULL DEFAULT 0"
+            )
+        if "is_material_released_to_production" not in po_cols:
+            po_stmts.append(
+                "ALTER TABLE production_orders ADD COLUMN is_material_released_to_production BOOLEAN NOT NULL DEFAULT 0"
             )
         with engine.begin() as conn:
             for stmt in po_stmts:
@@ -365,6 +381,14 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
             text("CREATE INDEX IF NOT EXISTS ix_product_issues_customer_order_id ON product_issues (customer_order_id)")
         )
 
+    if "production_order_operations" in insp.get_table_names():
+        poo_cols = {c["name"] for c in sa_inspect(engine).get_columns("production_order_operations")}
+        if "workplace_library_item_id" not in poo_cols:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE production_order_operations ADD COLUMN workplace_library_item_id INTEGER")
+                )
+
 
 class CustomerOrderCreatePayload(BaseModel):
     customer_id: int
@@ -417,35 +441,9 @@ def _normalize_note(v: str | None) -> str | None:
     return t if t else None
 
 
-def _next_zak_code(db: Session) -> str:
-    row_id = db.scalar(select(Job.id).order_by(Job.id.desc()).limit(1)) or 0
-    return f"ZAK-{int(row_id) + 1:06d}"
-
-
-def _next_internal_code(db: Session) -> str:
-    jobs = db.scalars(select(Job).where(Job.zak_code.like("INT-%")).order_by(Job.id.asc())).all()
-    max_num = 0
-    for j in jobs:
-        code = (j.zak_code or "").strip()
-        if not code.startswith("INT-"):
-            continue
-        try:
-            num = int(code.split("-", 1)[1])
-        except Exception:
-            continue
-        if num > max_num:
-            max_num = num
-    return f"INT-{max_num + 1:06d}"
-
-
 def _next_line_no(db: Session, job_id: int) -> int:
     row = db.scalar(select(JobItem.line_no).where(JobItem.job_id == job_id).order_by(JobItem.line_no.desc()).limit(1))
     return (int(row) + 10) if row is not None else 10
-
-
-def _next_vp_code(db: Session) -> str:
-    row_id = db.scalar(select(ProductionOrder.id).order_by(ProductionOrder.id.desc()).limit(1)) or 0
-    return f"VP-{int(row_id) + 1:06d}"
 
 
 def _validate_portfolio_item_gpn(db: Session, gpn: str, portfolio_item_id: int | None) -> None:
@@ -466,6 +464,8 @@ def _get_or_create_internal_order_and_job(db: Session) -> tuple[CustomerOrder, J
         select(CustomerOrder).where(getattr(CustomerOrder, "order_type") == "internal").order_by(CustomerOrder.id.asc())
     ).all()
     for co in internal_orders:
+        if not workflow_record_active(co):
+            continue
         if not getattr(co, "scan_code", None):
             co.scan_code = customer_order_scan_code_for_id(int(co.id))
         job = db.scalars(
@@ -474,7 +474,7 @@ def _get_or_create_internal_order_and_job(db: Session) -> tuple[CustomerOrder, J
         if job is not None:
             return co, job
 
-    internal_code = _next_internal_code(db)
+    internal_code = next_internal_code(db)
     co = CustomerOrder(
         customer_po_no=internal_code,
         customer_name="Interní doplnění skladu",
@@ -595,6 +595,123 @@ def _job_item_allocation_values(
     remaining_after_allocation = stock_qty - from_stock_qty
     restock_qty = max(min_qty - remaining_after_allocation, 0.0)
     return (from_stock_qty, to_production_qty, restock_qty)
+
+
+def _get_active_internal_job(db: Session) -> Job | None:
+    for co in db.scalars(
+        select(CustomerOrder).where(getattr(CustomerOrder, "order_type") == "internal").order_by(CustomerOrder.id.asc())
+    ).all():
+        if not workflow_record_active(co):
+            continue
+        job = db.scalars(select(Job).where(Job.customer_order_id == co.id).order_by(Job.id.asc())).first()
+        if job is not None:
+            return job
+    return None
+
+
+def _sync_linked_production_order_quantities_for_customer_job_item(db: Session, it: JobItem) -> None:
+    """Nastaví množství existujících VP podle aktuální alokace řádku (bez přičítání)."""
+    job = db.get(Job, int(it.job_id)) if it.job_id is not None else None
+    if job is None or job.customer_order_id is None:
+        return
+    co = db.get(CustomerOrder, int(job.customer_order_id))
+    if co is None:
+        return
+    if str(getattr(co, "order_type", "customer") or "customer").strip().lower() != "customer":
+        return
+    if not workflow_record_active(it):
+        return
+
+    cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
+    has_portfolio = "portfolio_item_id" in cols
+    has_desc = "description" in cols
+    row = None
+    if has_portfolio or has_desc:
+        sel = "portfolio_item_id, description" if (has_portfolio and has_desc) else (
+            "portfolio_item_id" if has_portfolio else "description"
+        )
+        row = db.execute(text(f"SELECT {sel} FROM job_items WHERE id = :id"), {"id": it.id}).fetchone()
+    portfolio_item_id = None
+    description = None
+    if row is not None:
+        if has_portfolio and has_desc:
+            portfolio_item_id = row[0]
+            description = row[1]
+        elif has_portfolio:
+            portfolio_item_id = row[0]
+        else:
+            description = row[0]
+
+    from_stock_qty, to_production_qty, restock_qty = _job_item_allocation_values(db, it, portfolio_item_id)
+    t_stock = int(round(from_stock_qty))
+    t_order = int(round(to_production_qty))
+    t_restock = int(round(restock_qty)) if has_portfolio else 0
+
+    stock_list = _production_orders_for_job_item_and_source(db, int(it.id), "stock_allocation")
+    if stock_list:
+        po = stock_list[0]
+        if int(po.quantity or 0) != t_stock:
+            po.quantity = t_stock
+            db.flush()
+            rebuild_tp_material_reservations_for_production_order(db, po)
+        resolved = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=it.gpn, logistic_mode="sklad_zakaznik")
+        rid = int(resolved.id)
+        if t_stock > 0:
+            src_po_id, src_receipt_id = _best_source_receipt_for_portfolio_item(db, rid)
+            _ensure_job_item_coverage(
+                db,
+                job_item_id=it.id,
+                coverage_type="stock",
+                qty=t_stock,
+                consuming_production_order_id=int(po.id),
+                source_production_order_id=src_po_id,
+                source_stock_receipt_id=src_receipt_id,
+                note=None,
+            )
+        else:
+            _ensure_job_item_coverage(
+                db,
+                job_item_id=it.id,
+                coverage_type="stock",
+                qty=0,
+                consuming_production_order_id=int(po.id),
+                source_production_order_id=None,
+                source_stock_receipt_id=None,
+                note=None,
+            )
+
+    order_list = _production_orders_for_job_item_and_source(db, int(it.id), "order_allocation")
+    if order_list:
+        po = order_list[0]
+        if int(po.quantity or 0) != t_order:
+            po.quantity = t_order
+            db.flush()
+            rebuild_tp_material_reservations_for_production_order(db, po)
+        _ensure_job_item_coverage(
+            db,
+            job_item_id=it.id,
+            coverage_type="new_production",
+            qty=t_order,
+            consuming_production_order_id=int(po.id),
+            source_production_order_id=None,
+            source_stock_receipt_id=None,
+            note=None,
+        )
+
+    internal_job = _get_active_internal_job(db)
+    if has_portfolio and internal_job is not None:
+        resolved_re = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=it.gpn, logistic_mode="sklad")
+        rid = int(resolved_re.id)
+        internal_item = _find_internal_job_item_by_portfolio(db, int(internal_job.id), rid, has_portfolio)
+        if internal_item is not None:
+            restock_list = _production_orders_for_job_item_and_source(db, int(internal_item.id), "restock_allocation")
+            if restock_list:
+                rpo = restock_list[0]
+                if int(rpo.quantity or 0) != t_restock:
+                    rpo.quantity = t_restock
+                    db.flush()
+                    rebuild_tp_material_reservations_for_production_order(db, rpo)
+                _sync_internal_restock_job_item_qty(db, int(internal_item.id))
 
 
 def _resolve_portfolio_variant_by_gpn_and_logistics(
@@ -735,11 +852,18 @@ def _ensure_production_order_operation_scans(
         )
         if existing is not None:
             continue
+        wname = op.workplace
+        wid = op.workplace_library_item_id
+        if wid is not None:
+            wp_lib = db.get(WorkplaceLibraryItem, int(wid))
+            if wp_lib is not None:
+                wname = wp_lib.name
         row = ProductionOrderOperation(
             production_order_id=int(production_order_id),
             operation_no=int(op.operation_no),
             operation_name=op.operation_name,
-            workplace_name=op.workplace,
+            workplace_name=wname,
+            workplace_library_item_id=int(wid) if wid is not None else None,
         )
         db.add(row)
         db.flush()
@@ -772,14 +896,8 @@ def _available_material_qty(db: Session, material_library_item_id: int) -> float
             MaterialStockItem.material_library_item_id == int(material_library_item_id)
         )
     )
-    reserved = db.scalar(
-        select(func.coalesce(func.sum(MaterialReservation.reserved_qty), 0.0)).where(
-            MaterialReservation.material_library_item_id == int(material_library_item_id),
-            MaterialReservation.status.in_(tuple(MATERIAL_RESERVATION_ACTIVE_STATUSES)),
-            MaterialReservation.is_active.is_(True),
-        )
-    )
-    return max(float(on_stock or 0.0) - float(reserved or 0.0), 0.0)
+    reserved = sum_eligible_reserved_qty_for_material(db, int(material_library_item_id))
+    return max(float(on_stock or 0.0) - reserved, 0.0)
 
 
 def _create_material_reservations_for_po(
@@ -803,6 +921,7 @@ def _create_material_reservations_for_po(
         .where(PortfolioTechnologyTemplateMaterial.template_id == int(template_id))
         .order_by(PortfolioTechnologyTemplateMaterial.id.asc())
     ).all()
+    pending_by_mid: defaultdict[int, float] = defaultdict(float)
     for row in rows:
         input_type = str(row.input_type or "material").strip().lower()
         if input_type not in {"", "material"}:
@@ -824,8 +943,9 @@ def _create_material_reservations_for_po(
             quantity=qty_f,
             total=required_qty,
         )
-        available = _available_material_qty(db, material_id)
-        reserved_qty = min(required_qty, available)
+        pool = max(0.0, _available_material_qty(db, material_id) - pending_by_mid[material_id])
+        reserved_qty = min(required_qty, pool)
+        pending_by_mid[material_id] += reserved_qty
         db.add(
             MaterialReservation(
                 material_library_item_id=material_id,
@@ -884,7 +1004,7 @@ def create_customer_order(payload: CustomerOrderCreatePayload, db: Session = Dep
     co.scan_code = customer_order_scan_code_for_id(int(co.id))
 
     job = Job(
-        zak_code=_next_zak_code(db),
+        zak_code=next_zak_code(db),
         customer_order_id=co.id,
     )
     db.add(job)
@@ -1127,6 +1247,7 @@ def update_job_item(item_id: int, payload: JobItemUpdatePayload, db: Session = D
         )
     db.commit()
     db.refresh(row)
+    _sync_linked_production_order_quantities_for_customer_job_item(db, row)
     rebuild_tp_material_reservations_for_job_item(db, item_id)
     db.commit()
     return {
@@ -1301,7 +1422,8 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                             production_order_id=int(existing_restock.id),
                             portfolio_item_id=resolved_portfolio_item_id,
                         )
-                        existing_restock.quantity = int(existing_restock.quantity or 0) + add_q
+                        ensure_planning_operations_for_production_order(db, existing_restock)
+                        existing_restock.quantity = int(add_q)
                         db.flush()
                         rebuild_tp_material_reservations_for_production_order(db, existing_restock)
                         _sync_internal_restock_job_item_qty(db, internal_item.id)
@@ -1332,7 +1454,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                     )
 
                 po = ProductionOrder(
-                    vp_code=_next_vp_code(db),
+                    vp_code=next_vp_code(db),
                     job_item_id=internal_item.id,
                     customer_order_id=int(internal_co.id),
                     job_id=ij_id,
@@ -1353,6 +1475,8 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                     production_order_id=int(po.id),
                     portfolio_item_id=resolved_portfolio_item_id,
                 )
+                plan_info = ensure_planning_operations_for_production_order(db, po)
+                _vp_planning_pipeline_snapshot(db, po, "orders_after_new_vp_internal_restock", plan_info)
                 _sync_internal_restock_job_item_qty(db, internal_item.id)
                 result.append(
                     {
@@ -1396,12 +1520,18 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                     production_order_id=int(existing.id),
                     portfolio_item_id=resolved_portfolio_item_id,
                 )
+                ensure_planning_operations_for_production_order(db, existing)
+                target_q = int(round(c["quantity"]))
+                if int(existing.quantity or 0) != target_q:
+                    existing.quantity = target_q
+                    db.flush()
+                    rebuild_tp_material_reservations_for_production_order(db, existing)
                 if c["source_type"] == "order_allocation":
                     _ensure_job_item_coverage(
                         db,
                         job_item_id=it.id,
                         coverage_type="new_production",
-                        qty=int(existing.quantity or c["quantity"]),
+                        qty=target_q,
                         consuming_production_order_id=int(existing.id),
                         source_production_order_id=None,
                         source_stock_receipt_id=None,
@@ -1415,7 +1545,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                         db,
                         job_item_id=it.id,
                         coverage_type="stock",
-                        qty=int(existing.quantity or c["quantity"]),
+                        qty=target_q,
                         consuming_production_order_id=int(existing.id),
                         source_production_order_id=src_po_id,
                         source_stock_receipt_id=src_receipt_id,
@@ -1428,7 +1558,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                         "job_item_id": existing.job_item_id,
                         "source_type": existing.source_type or c["source_type"],
                         "logistic_mode": existing.logistic_mode or c["logistic_mode"],
-                        "quantity": int(existing.quantity or c["quantity"]),
+                        "quantity": int(existing.quantity or 0),
                         "status": existing.status or "planned",
                         "state": "existing",
                         "duplicate_flow": len(existing_list) > 1,
@@ -1462,6 +1592,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                     production_order_id=int(existing.id),
                     portfolio_item_id=resolved_portfolio_item_id,
                 )
+                ensure_planning_operations_for_production_order(db, existing)
                 if c["source_type"] == "order_allocation":
                     _ensure_job_item_coverage(
                         db,
@@ -1503,7 +1634,7 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                 continue
 
             po = ProductionOrder(
-                vp_code=_next_vp_code(db),
+                vp_code=next_vp_code(db),
                 job_item_id=it.id,
                 customer_order_id=customer_order_id,
                 job_id=job.id,
@@ -1524,6 +1655,8 @@ def create_production_orders_from_allocation(customer_order_id: int, db: Session
                 production_order_id=int(po.id),
                 portfolio_item_id=resolved_portfolio_item_id,
             )
+            plan_info = ensure_planning_operations_for_production_order(db, po)
+            _vp_planning_pipeline_snapshot(db, po, "orders_after_new_vp_allocation", plan_info)
             if c["source_type"] == "order_allocation":
                 _ensure_job_item_coverage(
                     db,

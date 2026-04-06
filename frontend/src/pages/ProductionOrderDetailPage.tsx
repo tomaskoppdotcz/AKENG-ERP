@@ -1,6 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import DetailPageHeader from "../components/DetailPageHeader";
+import ProductionOrderLocationContext from "../components/ProductionOrderLocationContext";
 import SimpleModal from "../components/SimpleModal";
 import { UI } from "../styles/ui";
+import { buildProductionOrderLocationSummary } from "../utils/productionOrderLocationUi";
 import {
   getProductionOrderDetail,
   receiveFinishedGoodsToStock,
@@ -217,6 +220,10 @@ export default function ProductionOrderDetailPage({
   }
 
   const poWorkflowActive = isBusinessWorkflowActive(data.workflow_status);
+  const locationSummary = useMemo(
+    () => buildProductionOrderLocationSummary(data.operations),
+    [data.operations]
+  );
   const summary: Array<[string, string]> = [
     ["VP", data.vp_code],
     [labelOrderType(data.order_type), data.zakazka ?? "—"],
@@ -235,71 +242,106 @@ export default function ProductionOrderDetailPage({
   return (
     <div style={UI.container}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {!poWorkflowActive ? (
-          <div
-            style={{
-              padding: "12px 16px",
-              borderRadius: 10,
-              border: "1px solid #fecaca",
-              background: "#fef2f2",
-              color: "#991b1b",
-              fontWeight: 700,
-            }}
-          >
-            Tento výrobní příkaz je stornován — provozní akce (zahájit/odvést, příjem) nejsou povoleny.
-          </div>
-        ) : null}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-          <div>
-            <div style={UI.pageTitle}>Detail výrobního příkazu</div>
-            <div style={UI.sectionSubtitle}>Karta VP a navázaný technologický postup</div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => window.open(`${API_URL}/production-orders/${productionOrderId}/print`, "_blank")}
-              style={UI.buttonPrimary}
-            >
-              Tisk VP
-            </button>
-            <button
-              type="button"
-              style={UI.buttons.secondary}
-              onClick={() =>
-                window.open(buildErpUrl({ view: "productionOrder", productionOrderId }), "_blank")
-              }
-            >
-              Otevřít v novém okně
-            </button>
-            {data.portfolio_item_id != null && onPreviewPortfolioById ? (
-              <button type="button" style={UI.buttons.secondary} onClick={() => onPreviewPortfolioById(data.portfolio_item_id!)}>
-                Náhled portfolia
-              </button>
-            ) : null}
-            {data.portfolio_item_id != null ? (
-              <button
-                type="button"
-                style={UI.buttons.primary}
-                disabled={!poWorkflowActive}
-                onClick={() => {
-                  setReceiveMessage(null);
-                  setReceiveError(null);
-                  setReceiveQty(data.quantity > 0 ? String(data.quantity) : "1");
-                  setReceiveLocation("");
-                  setReceiveOpen(true);
+        <DetailPageHeader
+          preHeader={
+            !poWorkflowActive ? (
+              <div
+                style={{
+                  padding: "12px 16px",
+                  borderRadius: 10,
+                  border: "1px solid #fecaca",
+                  background: "#fef2f2",
+                  color: "#991b1b",
+                  fontWeight: 700,
                 }}
               >
-                Přijmout na sklad
+                Tento výrobní příkaz je stornován — provozní akce (zahájit/odvést, příjem) nejsou povoleny.
+              </div>
+            ) : null
+          }
+          title="Detail výrobního příkazu"
+          subtitle="Karta VP a navázaný technologický postup"
+          context={<ProductionOrderLocationContext summary={locationSummary} />}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => window.open(`${API_URL}/production-orders/${productionOrderId}/print`, "_blank")}
+                style={UI.buttonPrimary}
+              >
+                Tisk VP
               </button>
-            ) : null}
-            <button type="button" style={UI.buttons.secondary} disabled={!poWorkflowActive || stornoBusy} onClick={() => void handleStornoVp()}>
-              {stornoBusy ? "Stornuji…" : "Stornovat VP"}
-            </button>
-            <button onClick={onBack} style={UI.buttonSecondary}>
-              Zpět na výrobní příkazy
-            </button>
-          </div>
-        </div>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={() =>
+                  window.open(buildErpUrl({ view: "productionOrder", productionOrderId }), "_blank")
+                }
+              >
+                Otevřít v novém okně
+              </button>
+              {data.portfolio_item_id != null && onPreviewPortfolioById ? (
+                <button type="button" style={UI.buttons.secondary} onClick={() => onPreviewPortfolioById(data.portfolio_item_id!)}>
+                  Náhled portfolia
+                </button>
+              ) : null}
+              {data.portfolio_item_id != null ? (
+                <button
+                  type="button"
+                  style={UI.buttons.primary}
+                  disabled={!poWorkflowActive}
+                  onClick={() => {
+                    setReceiveMessage(null);
+                    setReceiveError(null);
+                    setReceiveQty(data.quantity > 0 ? String(data.quantity) : "1");
+                    setReceiveLocation("");
+                    setReceiveOpen(true);
+                  }}
+                >
+                  Přijmout na sklad
+                </button>
+              ) : null}
+              <button type="button" style={UI.buttons.secondary} disabled={!poWorkflowActive || stornoBusy} onClick={() => void handleStornoVp()}>
+                {stornoBusy ? "Stornuji…" : "Stornovat VP"}
+              </button>
+              <button onClick={onBack} style={UI.buttonSecondary}>
+                Zpět na výrobní příkazy
+              </button>
+            </>
+          }
+          summaryTiles={
+            <div style={UI.summaryTilesGrid}>
+              {summary.map(([k, v]) => (
+                <div key={k} style={{ ...UI.summaryTile, flex: "1 1 220px" }}>
+                  <div style={UI.summaryTileLabel}>{k}</div>
+                  <div style={{ ...UI.summaryTileValue, fontSize: 18 }}>
+                    {k === "GPN" &&
+                    data.portfolio_item_id != null &&
+                    onOpenPortfolioItemId &&
+                    v !== "—" ? (
+                      <button type="button" style={linkButtonReset} onClick={() => onOpenPortfolioItemId(data.portfolio_item_id!)}>
+                        {v}
+                      </button>
+                    ) : k === zakazkaTileLabel &&
+                      data.customer_order_id != null &&
+                      onOpenCustomerOrderCard &&
+                      v !== "—" ? (
+                      <button
+                        type="button"
+                        style={linkButtonReset}
+                        onClick={() => onOpenCustomerOrderCard(data.customer_order_id!)}
+                      >
+                        {v}
+                      </button>
+                    ) : (
+                      v
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          }
+        />
 
         {receiveMessage ? (
           <div
@@ -315,37 +357,6 @@ export default function ProductionOrderDetailPage({
             {receiveMessage}
           </div>
         ) : null}
-
-        <div style={UI.summaryTilesGrid}>
-          {summary.map(([k, v]) => (
-            <div key={k} style={{ ...UI.summaryTile, flex: "1 1 220px" }}>
-              <div style={UI.summaryTileLabel}>{k}</div>
-              <div style={{ ...UI.summaryTileValue, fontSize: 18 }}>
-                {k === "GPN" &&
-                data.portfolio_item_id != null &&
-                onOpenPortfolioItemId &&
-                v !== "—" ? (
-                  <button type="button" style={linkButtonReset} onClick={() => onOpenPortfolioItemId(data.portfolio_item_id!)}>
-                    {v}
-                  </button>
-                ) : k === zakazkaTileLabel &&
-                  data.customer_order_id != null &&
-                  onOpenCustomerOrderCard &&
-                  v !== "—" ? (
-                  <button
-                    type="button"
-                    style={linkButtonReset}
-                    onClick={() => onOpenCustomerOrderCard(data.customer_order_id!)}
-                  >
-                    {v}
-                  </button>
-                ) : (
-                  v
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
 
         <div style={{ ...UI.card, borderRadius: 14 }}>
           <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Technologický postup VP</div>
@@ -445,7 +456,11 @@ export default function ProductionOrderDetailPage({
                     const showTrace =
                       inp.input_type === "material" &&
                       mt &&
-                      (mt.heat_lot ||
+                      (mt.has_issued_movement === true ||
+                        (mt.issue_movement_id != null && mt.issue_movement_id > 0) ||
+                        mt.heat_lot ||
+                        mt.movement_scan_code ||
+                        mt.stock_location ||
                         mt.supplier_name ||
                         mt.delivery_note_no ||
                         mt.certificate_no ||
@@ -471,7 +486,44 @@ export default function ProductionOrderDetailPage({
                         {showTrace && mt ? (
                           <tr>
                             <td colSpan={7} style={{ ...UI.td, background: "#f1f5f9", borderTop: "none", paddingTop: 6, paddingBottom: 10 }}>
+                              {mt.issue_movement_id != null && mt.issue_movement_id > 0 ? (
+                                <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700, marginBottom: 8 }}>
+                                  Výdej materiálu #{mt.issue_movement_id}
+                                  {mt.linkage ? ` · vazba: ${mt.linkage}` : ""}
+                                </div>
+                              ) : null}
                               <div style={{ display: "flex", flexWrap: "wrap", gap: "10px 18px", fontSize: 12, color: "#334155", fontWeight: 600 }}>
+                                {mt.material_code || mt.material_dimension ? (
+                                  <span>
+                                    Kód / rozměr (sklad):{" "}
+                                    <span style={{ fontWeight: 800, color: "#0f172a" }}>
+                                      {[mt.material_code, mt.material_dimension].filter(Boolean).join(" · ") || "—"}
+                                    </span>
+                                  </span>
+                                ) : null}
+                                {mt.stock_location ? (
+                                  <span>
+                                    Lokace karty: <span style={{ fontWeight: 800, color: "#0f172a" }}>{mt.stock_location}</span>
+                                  </span>
+                                ) : null}
+                                {mt.movement_scan_code ? (
+                                  <span>
+                                    Scan pohybu / karty:{" "}
+                                    <span style={{ fontWeight: 800, color: "#0f172a" }}>{mt.movement_scan_code}</span>
+                                  </span>
+                                ) : null}
+                                {mt.length_per_piece_mm != null && Number.isFinite(Number(mt.length_per_piece_mm)) ? (
+                                  <span>
+                                    Délka na kus (mm):{" "}
+                                    <span style={{ fontWeight: 800, color: "#0f172a" }}>{Number(mt.length_per_piece_mm)}</span>
+                                  </span>
+                                ) : null}
+                                {mt.weight_per_piece_kg != null && Number.isFinite(Number(mt.weight_per_piece_kg)) ? (
+                                  <span>
+                                    Váha na kus (kg):{" "}
+                                    <span style={{ fontWeight: 800, color: "#0f172a" }}>{Number(mt.weight_per_piece_kg)}</span>
+                                  </span>
+                                ) : null}
                                 {mt.heat_lot ? (
                                   <span>
                                     Tavba / šarže: <span style={{ fontWeight: 800, color: "#0f172a" }}>{mt.heat_lot}</span>

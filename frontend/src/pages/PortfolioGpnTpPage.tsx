@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { buildErpUrl } from "../utils/erpDeepLink";
 
-const API_BASE = "http://127.0.0.1:8001";
+const API_BASE =
+  (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
-type Machine = {
+type WorkplaceRow = {
   id: number;
-  machine_code: string;
+  code: string | null;
   name: string;
-  machine_type: string;
+  is_active: boolean;
 };
 
 type TemplateListRow = {
@@ -24,6 +26,7 @@ type TemplateOperation = {
   id?: number;
   operation_no: number;
   operation_name: string;
+  workplace_library_item_id?: number | null;
   machine_code: string;
   machine_name?: string | null;
   setup_time_min: number;
@@ -46,7 +49,7 @@ type TemplateDetail = {
 type NewTemplateOperation = {
   operation_no: number;
   operation_name: string;
-  machine_code: string;
+  workplace_library_item_id: number;
   setup_time_min: number;
   labor_time_per_piece_min: number;
   buffer_after_min: number;
@@ -66,7 +69,7 @@ type EditTemplateOperation = {
   id?: number;
   operation_no: number;
   operation_name: string;
-  machine_code: string;
+  workplace_library_item_id: number;
   setup_time_min: number;
   labor_time_per_piece_min: number;
   buffer_after_min: number;
@@ -82,7 +85,7 @@ type EditTemplateState = {
   operations: EditTemplateOperation[];
 };
 
-const defaultNewTemplate = (): NewTemplateState => ({
+const defaultNewTemplate = (defaultWorkplaceId: number): NewTemplateState => ({
   gpn: "",
   name: "",
   revision: "",
@@ -92,7 +95,7 @@ const defaultNewTemplate = (): NewTemplateState => ({
     {
       operation_no: 10,
       operation_name: "Rezani",
-      machine_code: "PILA",
+      workplace_library_item_id: defaultWorkplaceId,
       setup_time_min: 5,
       labor_time_per_piece_min: 1,
       buffer_after_min: 20,
@@ -197,7 +200,7 @@ export default function PortfolioGpnTpPage() {
   const [templates, setTemplates] = useState<TemplateListRow[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateDetail | null>(null);
-  const [machines, setMachines] = useState<Machine[]>([]);
+  const [workplaces, setWorkplaces] = useState<WorkplaceRow[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -205,15 +208,36 @@ export default function PortfolioGpnTpPage() {
 
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("vse");
-  const [newTemplate, setNewTemplate] = useState<NewTemplateState>(defaultNewTemplate());
+  const [newTemplate, setNewTemplate] = useState<NewTemplateState>(() => defaultNewTemplate(0));
 
   const [editMode, setEditMode] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editTemplate, setEditTemplate] = useState<EditTemplateState | null>(null);
 
   useEffect(() => {
-    loadMachines();
+    void loadWorkplaces();
     loadTemplates();
+  }, []);
+
+  useEffect(() => {
+    const first = workplaces.find((w) => w.is_active)?.id ?? workplaces[0]?.id ?? 0;
+    if (first > 0) {
+      setNewTemplate((prev) => {
+        if (prev.operations.some((o) => o.workplace_library_item_id > 0)) return prev;
+        return defaultNewTemplate(first);
+      });
+    }
+  }, [workplaces]);
+
+  useEffect(() => {
+    const raw = window.location.hash.replace(/^#/, "");
+    const m = raw.match(/gpnTpTemplate=(\d+)/);
+    if (m) {
+      const id = Number(m[1]);
+      if (Number.isFinite(id) && id > 0) {
+        setSelectedTemplateId(id);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -226,14 +250,22 @@ export default function PortfolioGpnTpPage() {
     }
   }, [selectedTemplateId]);
 
-  async function loadMachines() {
+  async function loadWorkplaces() {
     try {
-      const res = await fetch(`${API_BASE}/master-data/machines`);
+      const res = await fetch(`${API_BASE}/libraries/workplaces`);
       const data = await res.json();
-      setMachines(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      setWorkplaces(
+        rows.map((r: any) => ({
+          id: Number(r.id),
+          code: r.code ?? null,
+          name: String(r.name || ""),
+          is_active: r.is_active !== false,
+        }))
+      );
     } catch (e) {
       console.error(e);
-      setMachines([]);
+      setWorkplaces([]);
     }
   }
 
@@ -274,7 +306,7 @@ export default function PortfolioGpnTpPage() {
           id: op.id,
           operation_no: op.operation_no,
           operation_name: op.operation_name,
-          machine_code: op.machine_code,
+          workplace_library_item_id: Number(op.workplace_library_item_id) || 0,
           setup_time_min: op.setup_time_min,
           labor_time_per_piece_min: op.labor_time_per_piece_min,
           buffer_after_min: op.buffer_after_min,
@@ -317,12 +349,19 @@ export default function PortfolioGpnTpPage() {
     }));
   }
 
+  function pickDefaultWorkplaceId(): number {
+    const active = workplaces.filter((w) => w.is_active);
+    const pool = active.length ? active : workplaces;
+    return pool[0]?.id ?? 0;
+  }
+
   function addOperationRow() {
     setNewTemplate((prev) => {
       const nextNo =
         prev.operations.length > 0
           ? Math.max(...prev.operations.map((o) => Number(o.operation_no) || 0)) + 10
           : 10;
+      const wid = pickDefaultWorkplaceId();
 
       return {
         ...prev,
@@ -331,7 +370,7 @@ export default function PortfolioGpnTpPage() {
           {
             operation_no: nextNo,
             operation_name: "",
-            machine_code: machines[0]?.machine_code || "",
+            workplace_library_item_id: wid,
             setup_time_min: 0,
             labor_time_per_piece_min: 0,
             buffer_after_min: 20,
@@ -359,6 +398,10 @@ export default function PortfolioGpnTpPage() {
       alert("TP musi obsahovat alespon jednu operaci.");
       return;
     }
+    if (newTemplate.operations.some((op) => !op.workplace_library_item_id)) {
+      alert("U kazde operace vyberte pracoviste (knihovna).");
+      return;
+    }
 
     const payload = {
       gpn: newTemplate.gpn.trim(),
@@ -369,7 +412,7 @@ export default function PortfolioGpnTpPage() {
       operations: newTemplate.operations.map((op) => ({
         operation_no: Number(op.operation_no),
         operation_name: op.operation_name.trim(),
-        machine_code: op.machine_code.trim(),
+        workplace_library_item_id: Number(op.workplace_library_item_id),
         setup_time_min: Number(op.setup_time_min),
         labor_time_per_piece_min: Number(op.labor_time_per_piece_min),
         buffer_after_min: Number(op.buffer_after_min),
@@ -391,7 +434,7 @@ export default function PortfolioGpnTpPage() {
         throw new Error(result?.detail || "Ulozeni TP selhalo.");
       }
 
-      setNewTemplate(defaultNewTemplate());
+      setNewTemplate(defaultNewTemplate(pickDefaultWorkplaceId()));
       await loadTemplates();
 
       if (result.template_id) {
@@ -407,6 +450,7 @@ export default function PortfolioGpnTpPage() {
 
   function startEditMode() {
     if (!selectedTemplate) return;
+    const fallbackWid = pickDefaultWorkplaceId();
     setEditTemplate({
       gpn: selectedTemplate.gpn || "",
       name: selectedTemplate.name || "",
@@ -417,7 +461,7 @@ export default function PortfolioGpnTpPage() {
         id: op.id,
         operation_no: op.operation_no,
         operation_name: op.operation_name,
-        machine_code: op.machine_code,
+        workplace_library_item_id: Number((op as TemplateOperation).workplace_library_item_id) || fallbackWid,
         setup_time_min: op.setup_time_min,
         labor_time_per_piece_min: op.labor_time_per_piece_min,
         buffer_after_min: op.buffer_after_min,
@@ -434,6 +478,7 @@ export default function PortfolioGpnTpPage() {
       return;
     }
 
+    const fallbackWid = pickDefaultWorkplaceId();
     setEditTemplate({
       gpn: selectedTemplate.gpn || "",
       name: selectedTemplate.name || "",
@@ -444,7 +489,7 @@ export default function PortfolioGpnTpPage() {
         id: op.id,
         operation_no: op.operation_no,
         operation_name: op.operation_name,
-        machine_code: op.machine_code,
+        workplace_library_item_id: Number((op as TemplateOperation).workplace_library_item_id) || fallbackWid,
         setup_time_min: op.setup_time_min,
         labor_time_per_piece_min: op.labor_time_per_piece_min,
         buffer_after_min: op.buffer_after_min,
@@ -484,7 +529,7 @@ export default function PortfolioGpnTpPage() {
           {
             operation_no: nextNo,
             operation_name: "",
-            machine_code: machines[0]?.machine_code || "",
+            workplace_library_item_id: pickDefaultWorkplaceId(),
             setup_time_min: 0,
             labor_time_per_piece_min: 0,
             buffer_after_min: 20,
@@ -518,6 +563,10 @@ export default function PortfolioGpnTpPage() {
       alert("TP musi obsahovat alespon jednu operaci.");
       return;
     }
+    if (editTemplate.operations.some((op) => !op.workplace_library_item_id)) {
+      alert("U kazde operace vyberte pracoviste (knihovna).");
+      return;
+    }
 
     const payload = {
       gpn: editTemplate.gpn.trim(),
@@ -528,7 +577,7 @@ export default function PortfolioGpnTpPage() {
       operations: editTemplate.operations.map((op) => ({
         operation_no: Number(op.operation_no),
         operation_name: op.operation_name.trim(),
-        machine_code: op.machine_code.trim(),
+        workplace_library_item_id: Number(op.workplace_library_item_id),
         setup_time_min: Number(op.setup_time_min),
         labor_time_per_piece_min: Number(op.labor_time_per_piece_min),
         buffer_after_min: Number(op.buffer_after_min),
@@ -709,7 +758,18 @@ export default function PortfolioGpnTpPage() {
                           background: selectedTemplateId === row.id ? "#e0f2fe" : "#fff",
                         }}
                       >
-                        <td style={{ fontWeight: 800, whiteSpace: "nowrap" }}>{row.gpn}</td>
+                        <td
+                          style={{ fontWeight: 800, whiteSpace: "nowrap" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSearch(row.gpn);
+                          }}
+                          title="Kliknutím vyfiltruje seznam podle GPN"
+                        >
+                          <span style={{ textDecoration: "underline", textUnderlineOffset: 3, cursor: "pointer" }}>
+                            {row.gpn}
+                          </span>
+                        </td>
                         <td>{row.name || "-"}</td>
                         <td>{row.product_group ? <ProductBadge text={row.product_group} /> : "-"}</td>
                         <td>{row.operations_count}</td>
@@ -733,8 +793,32 @@ export default function PortfolioGpnTpPage() {
               }}
             >
               <h2 style={{ ...sectionTitleStyle(), fontSize: 28 }}>Detail GPN + TP</h2>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 {selectedTemplate?.product_group ? <ProductBadge text={selectedTemplate.product_group} /> : null}
+                {selectedTemplateId ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const u = new URL(window.location.href);
+                      u.hash = `gpnTpTemplate=${selectedTemplateId}`;
+                      window.open(u.toString(), "_blank");
+                    }}
+                    style={buttonSecondaryStyle()}
+                  >
+                    Otevřít v novém okně
+                  </button>
+                ) : null}
+                {selectedTemplate?.gpn ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      window.open(buildErpUrl({ view: "portfolioSearch", gpn: selectedTemplate.gpn.trim() }), "_blank")
+                    }
+                    style={buttonSecondaryStyle()}
+                  >
+                    Portfolio v ERP (GPN)
+                  </button>
+                ) : null}
                 {selectedTemplate && !editMode && (
                   <button onClick={startEditMode} style={buttonSecondaryStyle()}>
                     Upravit TP
@@ -875,7 +959,7 @@ export default function PortfolioGpnTpPage() {
                     <tr>
                       <th align="left">Operace</th>
                       <th align="left">Nazev</th>
-                      <th align="left">Stroj</th>
+                      <th align="left">Pracoviště</th>
                       <th align="left">Setup</th>
                       <th align="left">Cas / kus</th>
                       <th align="left">Buffer</th>
@@ -895,8 +979,15 @@ export default function PortfolioGpnTpPage() {
                           <td style={{ fontWeight: 800, whiteSpace: "nowrap" }}>{op.operation_no}</td>
                           <td style={{ fontWeight: 700 }}>{op.operation_name}</td>
                           <td>
-                            <div style={{ fontWeight: 700 }}>{op.machine_name || op.machine_code}</div>
-                            <div style={{ color: "#64748b", fontSize: 12 }}>{op.machine_code}</div>
+                            <div style={{ fontWeight: 700 }}>
+                              {workplaces.find((w) => w.id === (op as TemplateOperation).workplace_library_item_id)
+                                ?.name ||
+                                op.machine_name ||
+                                op.machine_code}
+                            </div>
+                            <div style={{ color: "#64748b", fontSize: 12 }}>
+                              id pracoviště: {(op as TemplateOperation).workplace_library_item_id ?? "—"}
+                            </div>
                           </td>
                           <td>{op.setup_time_min} min</td>
                           <td>{op.labor_time_per_piece_min} min</td>
@@ -950,18 +1041,25 @@ export default function PortfolioGpnTpPage() {
                       </div>
 
                       <div>
-                        <div style={labelStyle()}>Stroj</div>
+                        <div style={labelStyle()}>Pracoviště</div>
                         <select
-                          value={op.machine_code}
-                          onChange={(e) => updateEditOperation(index, { machine_code: e.target.value })}
+                          value={String(op.workplace_library_item_id || "")}
+                          onChange={(e) =>
+                            updateEditOperation(index, {
+                              workplace_library_item_id: Number(e.target.value) || 0,
+                            })
+                          }
                           style={fieldStyle()}
                         >
-                          <option value="">Vyber stroj</option>
-                          {machines.map((m) => (
-                            <option key={m.id} value={m.machine_code}>
-                              {m.name} ({m.machine_code})
-                            </option>
-                          ))}
+                          <option value="">Vyberte pracoviště</option>
+                          {(workplaces.filter((w) => w.is_active).length ? workplaces.filter((w) => w.is_active) : workplaces).map(
+                            (w) => (
+                              <option key={w.id} value={String(w.id)}>
+                                {w.name}
+                                {w.code ? ` (${w.code})` : ""}
+                              </option>
+                            )
+                          )}
                         </select>
                       </div>
 
@@ -1149,18 +1247,25 @@ export default function PortfolioGpnTpPage() {
                   </div>
 
                   <div>
-                    <div style={labelStyle()}>Stroj</div>
+                    <div style={labelStyle()}>Pracoviště</div>
                     <select
-                      value={op.machine_code}
-                      onChange={(e) => updateOperation(index, { machine_code: e.target.value })}
+                      value={String(op.workplace_library_item_id || "")}
+                      onChange={(e) =>
+                        updateOperation(index, {
+                          workplace_library_item_id: Number(e.target.value) || 0,
+                        })
+                      }
                       style={fieldStyle()}
                     >
-                      <option value="">Vyber stroj</option>
-                      {machines.map((m) => (
-                        <option key={m.id} value={m.machine_code}>
-                          {m.name} ({m.machine_code})
-                        </option>
-                      ))}
+                      <option value="">Vyberte pracoviště</option>
+                      {(workplaces.filter((w) => w.is_active).length ? workplaces.filter((w) => w.is_active) : workplaces).map(
+                        (w) => (
+                          <option key={w.id} value={String(w.id)}>
+                            {w.name}
+                            {w.code ? ` (${w.code})` : ""}
+                          </option>
+                        )
+                      )}
                     </select>
                   </div>
 

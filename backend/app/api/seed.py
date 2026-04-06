@@ -8,17 +8,33 @@ from app.core.database import get_db
 from app.models.master_data import Machine
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
 from app.models.kiosk import Employee, Kiosk
+from app.services.demo_e2e_scenario import cleanup_demo_e2e, run_demo_e2e_seed
 
 router = APIRouter()
+
+# Nové záznamy: sklad / expedice / pračka nejsou defaultně řádky Planner Gantt (lze zapnout is_plannable).
+_MACHINE_CODES_NOT_PLANNABLE_BY_DEFAULT = frozenset(
+    {
+        "PRACKA",
+        "MEZIOPERACNI_KONTROLA",
+        "VYSTUPNI_KONTROLA",
+        "EXPEDICE",
+        "BALENI",
+        "PRIJEM_SKLAD",
+        "VYDEJ_SKLAD",
+    }
+)
 
 
 def get_or_create_machine(db: Session, machine_code: str, name: str, machine_type: str = "WORKCENTER"):
     machine = db.scalar(select(Machine).where(Machine.machine_code == machine_code))
     if not machine:
+        plannable = machine_code not in _MACHINE_CODES_NOT_PLANNABLE_BY_DEFAULT
         machine = Machine(
             machine_code=machine_code,
             name=name,
             machine_type=machine_type,
+            is_plannable=plannable,
         )
         db.add(machine)
         db.flush()
@@ -195,3 +211,15 @@ def seed_demo_planning_data(db: Session = Depends(get_db)):
 
     db.commit()
     return {"status": "ok", "rows_seeded": 9}
+
+
+@router.post("/demo-e2e")
+def seed_demo_e2e(db: Session = Depends(get_db)):
+    """Repeatable E2E demo: customer TEST-DEMO-PO-001, portfolio DEMO-TEST-*, VP via alokace, planning + kiosk queue."""
+    return run_demo_e2e_seed(db)
+
+
+@router.post("/demo-e2e/cleanup")
+def seed_demo_e2e_cleanup(db: Session = Depends(get_db)):
+    """Remove demo E2E data (orders, VP, planning for DEMO-TEST-* GPNs, demo portfolio stock, demo technology_templates)."""
+    return cleanup_demo_e2e(db)

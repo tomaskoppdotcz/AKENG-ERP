@@ -13,6 +13,11 @@ def material_stock_scan_code_for_id(row_id: int) -> str:
     return f"STK-{row_id:06d}"
 
 
+def material_stock_movement_scan_code_for_id(row_id: int) -> str:
+    """Jednoznačný kód skladového pohybu materiálu (výdej / příjem / korekce)."""
+    return f"MVM-{row_id:06d}"
+
+
 def product_stock_scan_code_for_id(row_id: int) -> str:
     return f"STKP-{row_id:06d}"
 

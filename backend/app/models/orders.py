@@ -66,8 +66,12 @@ class ProductionOrder(Base):
     status = Column(String, nullable=True)
     # Operational status (planned/done/...) vs business lifecycle: use workflow_status for storno
     workflow_status = Column(String(20), nullable=True)
-    # True when every active TP material line has reserved_qty + free pool covering required_qty
-    is_material_ready = Column(Boolean, nullable=False, default=True)
+    # Stock / rezervace: lze vydat (pokrytí požadavku volným skladem + rezervacemi)
+    is_material_covered = Column(Boolean, nullable=False, default=False)
+    # Skutečné vydání na výrobu: žádná aktivní rezervace planned/reserved — plánovač jen po tomto
+    is_material_released_to_production = Column(Boolean, nullable=False, default=False)
+    # Legacy: držíme v sync s is_material_released_to_production (API / starší klienti)
+    is_material_ready = Column(Boolean, nullable=False, default=False)
 
     job_item = relationship("JobItem", back_populates="production_orders")
 
@@ -109,6 +113,7 @@ class ProductionOrderOperation(Base):
     operation_no = Column(Integer, nullable=False)
     operation_name = Column(String, nullable=False)
     workplace_name = Column(String, nullable=True)
+    workplace_library_item_id = Column(Integer, ForeignKey("workplace_library_items.id"), nullable=True)
     scan_code = Column(String(32), nullable=True)
 
 

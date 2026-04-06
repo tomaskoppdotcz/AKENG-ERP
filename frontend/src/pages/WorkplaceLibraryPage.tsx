@@ -44,6 +44,7 @@ export default function WorkplaceLibraryPage() {
   const [formHourly, setFormHourly] = useState("");
   const [formDailyCap, setFormDailyCap] = useState("");
   const [formActive, setFormActive] = useState(true);
+  const [formPlannable, setFormPlannable] = useState(true);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -81,6 +82,7 @@ export default function WorkplaceLibraryPage() {
     setFormHourly("");
     setFormDailyCap("");
     setFormActive(true);
+    setFormPlannable(true);
     setShowForm(true);
     setError(null);
   }
@@ -93,6 +95,7 @@ export default function WorkplaceLibraryPage() {
     setFormHourly(r.hourly_rate != null ? String(r.hourly_rate) : "");
     setFormDailyCap(r.daily_capacity_hours != null ? String(r.daily_capacity_hours) : "");
     setFormActive(r.is_active);
+    setFormPlannable(r.is_plannable !== false);
     setShowForm(true);
     setError(null);
   }
@@ -127,6 +130,7 @@ export default function WorkplaceLibraryPage() {
       hourly_rate: hourly,
       daily_capacity_hours: daily,
       is_active: formActive,
+      is_plannable: formPlannable,
     };
     try {
       if (editingId != null) {
@@ -212,10 +216,14 @@ export default function WorkplaceLibraryPage() {
               <div style={UI.inputs.label}>Denní kapacita (h)</div>
               <input value={formDailyCap} onChange={(e) => setFormDailyCap(e.target.value)} style={UI.inputs.base} />
             </div>
-            <div style={{ display: "flex", alignItems: "center", paddingTop: 20 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 20 }}>
               <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}>
                 <input type="checkbox" checked={formActive} onChange={(e) => setFormActive(e.target.checked)} />
                 Aktivní
+              </label>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}>
+                <input type="checkbox" checked={formPlannable} onChange={(e) => setFormPlannable(e.target.checked)} />
+                V Planneru (Gantt)
               </label>
             </div>
           </div>
@@ -243,7 +251,16 @@ export default function WorkplaceLibraryPage() {
           <table style={UI.table}>
             <thead>
               <tr style={{ background: "#f8fafc" }}>
-                {["Kód", "Název", "Typ pracoviště", "Hodinová sazba", "Denní kapacita (h)", "Aktivní", "Akce"].map((h) => (
+                {[
+                  "Kód",
+                  "Název",
+                  "Typ pracoviště",
+                  "Hodinová sazba",
+                  "Denní kapacita (h)",
+                  "Aktivní",
+                  "Planner",
+                  "Akce",
+                ].map((h) => (
                   <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                     {h}
                   </th>
@@ -261,6 +278,9 @@ export default function WorkplaceLibraryPage() {
                     {formatHours(r.daily_capacity_hours)}
                   </td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.is_active ? "ANO" : "NE"}</td>
+                  <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                    {r.is_plannable !== false ? "ANO" : "NE"}
+                  </td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button type="button" style={UI.buttons.secondary} onClick={() => openEdit(r)}>
                       Upravit

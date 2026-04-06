@@ -15,7 +15,11 @@ from app.models.orders import ProductionOrder
 from app.models.portfolio import PortfolioTechnologyTemplate, PortfolioTechnologyTemplateMaterial
 
 from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
-from app.services.material_reservation_sync import MATERIAL_RESERVATION_ACTIVE_STATUSES
+from app.services.material_reservation_sync import (
+    MATERIAL_RESERVATION_ACTIVE_STATUSES,
+    enforce_material_reservation_stock_ceiling,
+    sum_eligible_reserved_qty_for_material,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +54,12 @@ def _available_qty_excluding_reservation(
             MaterialStockItem.material_library_item_id == int(material_library_item_id)
         )
     )
-    reserved = db.scalar(
-        select(func.coalesce(func.sum(MaterialReservation.reserved_qty), 0.0)).where(
-            MaterialReservation.material_library_item_id == int(material_library_item_id),
-            MaterialReservation.status.in_(tuple(MATERIAL_RESERVATION_ACTIVE_STATUSES)),
-            MaterialReservation.is_active.is_(True),
-            MaterialReservation.id != int(exclude_reservation_id),
-        )
+    reserved = sum_eligible_reserved_qty_for_material(
+        db,
+        int(material_library_item_id),
+        exclude_reservation_id=int(exclude_reservation_id),
     )
-    return max(float(on_stock or 0.0) - float(reserved or 0.0), 0.0)
+    return max(float(on_stock or 0.0) - reserved, 0.0)
 
 
 def _material_template_rows(
@@ -237,10 +238,13 @@ def run_material_reservation_rebuild(
 
     refresh_material_readiness_for_production_order_ids(db, po_ids)
 
+    ceiling = enforce_material_reservation_stock_ceiling(db)
+
     return {
         "rows_checked": rows_checked,
         "rows_updated": rows_updated,
         "rows_skipped": rows_skipped,
         "rows_unchanged": rows_unchanged,
         "skip_reasons": skip_reasons,
+        "stock_ceiling": ceiling,
     }

@@ -1,10 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragEndEvent,
   DragOverlay,
   PointerSensor,
-  useDraggable,
   useDroppable,
   useSensor,
   useSensors,
@@ -13,9 +12,20 @@ import {
   getPlannerGantt,
   moveGanttOperation,
   PlannerGanttItem,
+  PlannerGanttMachineGroup,
   PlannerGanttResponse,
   updatePlanningOperation,
 } from "../services/plannerApi";
+import { PlannerGanttDayColumn } from "../components/PlannerGanttDayColumn";
+import {
+  PlannerGanttOperationBlock,
+  plannerGanttHoverDetails,
+} from "../components/PlannerGanttOperationBlock";
+import {
+  groupItemsByVisibleDay,
+  maxDayStackCount,
+  plannerGlobalMachineOrder,
+} from "../components/plannerGanttDayUtils";
 
 function formatDateInput(date: Date): string {
   const y = date.getFullYear();
@@ -28,24 +38,6 @@ function addDays(date: Date, days: number): Date {
   const x = new Date(date);
   x.setDate(x.getDate() + days);
   return x;
-}
-
-function startOfDay(dateStr: string): Date {
-  return new Date(`${dateStr}T00:00:00`);
-}
-
-function endOfDay(dateStr: string): Date {
-  return new Date(`${dateStr}T23:59:59`);
-}
-
-function diffMinutes(a: Date, b: Date): number {
-  return Math.max(0, Math.round((b.getTime() - a.getTime()) / 60000));
-}
-
-function clampDate(date: Date, min: Date, max: Date): Date {
-  if (date < min) return min;
-  if (date > max) return max;
-  return date;
 }
 
 function normalizeStatus(status: string): string {
@@ -97,182 +89,99 @@ function statusLabel(status: string): string {
   }
 }
 
-const LEFT_COL_WIDTH = 240;
-const DAY_COL_WIDTH = 150;
-const ROW_STEP = 56;
-
-type GanttBarProps = {
-  item: PlannerGanttItem;
-  visibleFrom: Date;
-  visibleTo: Date;
-  totalMinutes: number;
-  isDragging?: boolean;
-  onSelect: (item: PlannerGanttItem) => void;
-};
-
-function BarContent({ item, compact = false }: { item: PlannerGanttItem; compact?: boolean }) {
-  return (
-    <>
-      <div
-        style={{
-          fontWeight: 800,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          fontSize: compact ? 11 : 12,
-        }}
-      >
-        {item.operationName}
-      </div>
-      <div
-        style={{
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          opacity: 0.95,
-          fontSize: compact ? 10 : 12,
-        }}
-      >
-        {item.workOrderNo ?? "-"} | {item.gpn ?? "-"} | {statusLabel(item.status)}
-      </div>
-    </>
-  );
+function materialLineLabel(materialReady: boolean): string {
+  return materialReady ? "Materiál: připraven" : "Materiál: čeká na materiál";
 }
 
-function DraggableGanttBar({
-  item,
-  visibleFrom,
-  visibleTo,
-  totalMinutes,
-  isDragging = false,
-  onSelect,
-}: GanttBarProps) {
-  if (!item.plannedStart || !item.plannedEnd) return null;
+/** Pořadí řádků Planneru — shoda podle názvu nebo kódu pracoviště (ne abecedně). */
+const PLANNER_WORKPLACE_SPECS: readonly { code: string; patterns: RegExp[] }[] = [
+  { code: "PILA", patterns: [/^pila$/i, /\bpila\b/i, /píla/i] },
+  { code: "ST40", patterns: [/st\s*40/i, /^st40$/i] },
+  { code: "SAB LT-52", patterns: [/sab\s*lt[- ]?52/i] },
+  { code: "CLX450 TC", patterns: [/clx\s*450\s*tc/i] },
+  { code: "CMX 600 V", patterns: [/cmx\s*600\s*v/i] },
+  { code: "CTX BETA 800", patterns: [/ctx\s*beta\s*800/i] },
+  { code: "NEF 400 I", patterns: [/nef\s*400\s*i\b/i, /\(leva\)/i, /\bleva\b/i] },
+  { code: "NEF 400 II", patterns: [/nef\s*400\s*ii/i, /\(prav/i, /\bii\b/i] },
+  { code: "SU50", patterns: [/su\s*50/i, /^su50$/i] },
+  { code: "RUCNI", patterns: [/ručn/i, /rucni/i] },
+  { code: "LASER", patterns: [/\blaser\b/i] },
+  { code: "KONTROLA", patterns: [/kontrola/i] },
+  { code: "EXPEDICE", patterns: [/expedic/i] },
+  { code: "SKLAD", patterns: [/\bsklad\b/i] },
+  { code: "HAAS VF3", patterns: [/haas\s*vf\s*3/i] },
+  { code: "SAB LT-42", patterns: [/sab\s*lt[- ]?42/i] },
+];
 
-  const itemStart = new Date(item.plannedStart);
-  const itemEnd = new Date(item.plannedEnd);
+function normalizeWs(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
 
-  const barStart = clampDate(itemStart, visibleFrom, visibleTo);
-  const barEnd = clampDate(itemEnd, visibleFrom, visibleTo);
+function ganttRowRank(m: { machineName: string; workplaceCode?: string | null }): number {
+  const name = normalizeWs(m.machineName || "");
+  const code = (m.workplaceCode || "").trim().toUpperCase().replace(/\s+/g, " ");
+  for (let i = 0; i < PLANNER_WORKPLACE_SPECS.length; i++) {
+    const spec = PLANNER_WORKPLACE_SPECS[i];
+    const specCode = spec.code.toUpperCase().replace(/\s+/g, " ");
+    if (code && code === specCode) return i;
+    if (spec.patterns.some((re) => re.test(m.machineName || ""))) return i;
+  }
+  if (name.includes("nef 400") && name.includes("ii")) return 7;
+  if (name.includes("nef 400") && (name.includes("(leva") || name.includes("levá"))) return 6;
+  return 1000;
+}
 
-  const offsetMin = diffMinutes(visibleFrom, barStart);
-  const durationMin = Math.max(30, diffMinutes(barStart, barEnd));
-
-  const leftPct = (offsetMin / totalMinutes) * 100;
-  const widthPct = (durationMin / totalMinutes) * 100;
-
-  const { attributes, listeners, setNodeRef, transform } = useDraggable({
-    id: `op-${item.operationId}`,
-    data: {
-      type: "planning-operation",
-      item,
-    },
+function orderMachinesForGantt(machines: PlannerGanttMachineGroup[]) {
+  return [...machines].sort((a, b) => {
+    const ra = ganttRowRank(a);
+    const rb = ganttRowRank(b);
+    if (ra !== rb) return ra - rb;
+    return (a.machineName || "").localeCompare(b.machineName || "", "cs");
   });
+}
 
-  const dragTransform = transform
-    ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
-    : undefined;
+const LEFT_COL_WIDTH = 168;
+const MIN_DAY_COL_WIDTH = 56;
+/** Minimální výška jednoho bloku v buňce dne (3 řádky textu) */
+const LANE_HEIGHT = 44;
+const HEADER_HEIGHT = 34;
+const STACK_CELL_GAP_PX = 3;
+const STACK_CELL_PAD_PX = 3;
+const DROP_SPACER_H_PX = 5;
 
+function stackedRowMinHeightPx(maxStack: number, minBlockH: number): number {
+  if (maxStack <= 0) return LANE_HEIGHT + 14;
+  const flexChildren = 2 * maxStack + 1;
   return (
-    <div
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect(item);
-      }}
-      title={[
-        `VP: ${item.workOrderNo ?? "-"}`,
-        `GPN: ${item.gpn ?? "-"}`,
-        `Operace: ${item.operationName}`,
-        `Stroj: ${item.machineName}`,
-        `Fronta: ${item.queuePosition ?? "-"}`,
-      ].join("\n")}
-      style={{
-        position: "absolute",
-        top: 8,
-        left: `${leftPct}%`,
-        width: `${widthPct}%`,
-        minWidth: 120,
-        height: 44,
-        borderRadius: 12,
-        padding: "6px 10px",
-        background: statusColor(item.status),
-        color: "#fff",
-        overflow: "hidden",
-        boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
-        fontSize: 12,
-        cursor: "grab",
-        touchAction: "none",
-        opacity: isDragging ? 0.35 : 1,
-        transform: dragTransform,
-        zIndex: transform ? 1000 : 2,
-      }}
-    >
-      <BarContent item={item} />
-    </div>
+    STACK_CELL_PAD_PX * 2 +
+    (maxStack + 1) * DROP_SPACER_H_PX +
+    maxStack * minBlockH +
+    (flexChildren - 1) * STACK_CELL_GAP_PX
   );
 }
 
 function OverlayBar({ item }: { item: PlannerGanttItem }) {
   return (
     <div
+      title={plannerGanttHoverDetails(item)}
       style={{
-        minWidth: 220,
-        maxWidth: 280,
-        height: 52,
-        borderRadius: 12,
-        padding: "8px 10px",
+        minWidth: 200,
+        maxWidth: 320,
+        minHeight: LANE_HEIGHT + 8,
+        borderRadius: 6,
+        padding: "6px 10px",
         background: statusColor(item.status),
         color: "#fff",
         overflow: "hidden",
-        boxShadow: "0 12px 32px rgba(15,23,42,0.28)",
-        fontSize: 12,
-        border: "2px solid rgba(255,255,255,0.45)",
+        boxSizing: "border-box",
+        boxShadow: item.materialReady
+          ? "0 8px 24px rgba(15,23,42,0.28)"
+          : "0 8px 24px rgba(15,23,42,0.28), inset 0 0 0 1px rgba(251,191,36,0.95)",
+        border: "1px solid rgba(255,255,255,0.35)",
       }}
     >
-      <BarContent item={item} compact />
+      <PlannerGanttOperationBlock item={item} />
     </div>
-  );
-}
-
-function DropSlot({
-  machineId,
-  queuePosition,
-  top,
-  width,
-}: {
-  machineId: number;
-  queuePosition: number;
-  top: number;
-  width: number;
-}) {
-  const { isOver, setNodeRef } = useDroppable({
-    id: `slot-${machineId}-${queuePosition}`,
-    data: {
-      type: "queue-slot",
-      machineId,
-      queuePosition,
-    },
-  });
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        position: "absolute",
-        left: 0,
-        top,
-        width,
-        height: 14,
-        zIndex: 5,
-        background: isOver ? "rgba(59,130,246,0.18)" : "transparent",
-        borderTop: isOver ? "3px solid #3b82f6" : "3px solid transparent",
-        borderRadius: 8,
-        transition: "all 120ms ease",
-      }}
-    />
   );
 }
 
@@ -296,17 +205,17 @@ function EmptyMachineDrop({
     <div
       ref={setNodeRef}
       style={{
-        padding: 18,
+        padding: "6px 8px",
         color: isOver ? "#1d4ed8" : "#94a3b8",
-        fontSize: 14,
-        minHeight: 72,
+        fontSize: 11,
+        minHeight: LANE_HEIGHT + 8,
         width,
         background: isOver ? "rgba(59,130,246,0.08)" : undefined,
-        outline: isOver ? "2px dashed #3b82f6" : "none",
-        outlineOffset: -4,
+        outline: isOver ? "1px dashed #3b82f6" : "none",
+        outlineOffset: -2,
       }}
     >
-      Sem muzes pretahnout operaci.
+      Přetáhnout sem…
     </div>
   );
 }
@@ -333,10 +242,14 @@ function OperationDetailPanel({
   item,
   onClose,
   onSaved,
+  onOpenProductionOrder,
+  onOpenMaterialRequirements,
 }: {
   item: PlannerGanttItem | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
+  onOpenProductionOrder?: (productionOrderId: number, title?: string) => void;
+  onOpenMaterialRequirements?: () => void;
 }) {
   const [status, setStatus] = useState("");
   const [materialReady, setMaterialReady] = useState(false);
@@ -440,6 +353,8 @@ function OperationDetailPanel({
 
         <DetailRow label="VP" value={item.workOrderNo ?? "-"} />
         <DetailRow label="GPN" value={item.gpn ?? "-"} />
+        <DetailRow label="WP kód" value={item.workplaceCode ?? "—"} />
+        <DetailRow label="Další WP" value={item.nextWorkplaceCode ?? "—"} />
         <DetailRow label="Operace" value={item.operationName} />
         <DetailRow label="Stroj" value={item.machineName} />
         <DetailRow label="Fronta" value={item.queuePosition ?? "-"} />
@@ -456,7 +371,53 @@ function OperationDetailPanel({
           label="Planned end"
           value={item.plannedEnd ? new Date(item.plannedEnd).toLocaleString("cs-CZ") : "-"}
         />
-        <DetailRow label="Material ready" value={item.materialReady ? "ANO" : "NE"} />
+        <DetailRow
+          label="Materiál"
+          value={
+            <span style={{ color: item.materialReady ? "#15803d" : "#c2410c", fontWeight: 800 }}>
+              {item.materialReady ? "Připraven" : "Čeká na materiál"}
+            </span>
+          }
+        />
+
+        <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {onOpenProductionOrder && item.productionOrderId != null ? (
+            <button
+              type="button"
+              onClick={() => onOpenProductionOrder(item.productionOrderId!, item.workOrderNo ?? undefined)}
+              style={{
+                border: "1px solid #2563eb",
+                background: "#eff6ff",
+                color: "#1e40af",
+                borderRadius: 10,
+                padding: "8px 12px",
+                fontWeight: 800,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Otevřít výrobní příkaz
+            </button>
+          ) : null}
+          {onOpenMaterialRequirements ? (
+            <button
+              type="button"
+              onClick={() => onOpenMaterialRequirements()}
+              style={{
+                border: "1px solid #c2410c",
+                background: "#fff7ed",
+                color: "#9a3412",
+                borderRadius: 10,
+                padding: "8px 12px",
+                fontWeight: 800,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Požadavky materiálu
+            </button>
+          ) : null}
+        </div>
 
         <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
           <div>
@@ -499,7 +460,7 @@ function OperationDetailPanel({
               checked={materialReady}
               onChange={(e) => setMaterialReady(e.target.checked)}
             />
-            Material ready
+            Materiál ready (ruční přepis; primárně řídí backend z VP)
           </label>
 
           <label
@@ -554,10 +515,18 @@ function OperationDetailPanel({
   );
 }
 
-export default function PlannerPage() {
+export type PlannerPageProps = {
+  onOpenProductionOrder?: (productionOrderId: number, title?: string) => void;
+  onOpenMaterialRequirements?: () => void;
+};
+
+export default function PlannerPage({
+  onOpenProductionOrder,
+  onOpenMaterialRequirements,
+}: PlannerPageProps) {
   const today = new Date();
   const defaultFrom = formatDateInput(today);
-  const defaultTo = formatDateInput(addDays(today, 14));
+  const defaultTo = formatDateInput(addDays(today, 6));
 
   const [fromDate, setFromDate] = useState(defaultFrom);
   const [toDate, setToDate] = useState(defaultTo);
@@ -568,6 +537,8 @@ export default function PlannerPage() {
   const [machineFilter, setMachineFilter] = useState("");
   const [activeDragItem, setActiveDragItem] = useState<PlannerGanttItem | null>(null);
   const [selectedItem, setSelectedItem] = useState<PlannerGanttItem | null>(null);
+  const chartScrollRef = useRef<HTMLDivElement>(null);
+  const [dayColWidth, setDayColWidth] = useState(96);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -600,19 +571,35 @@ export default function PlannerPage() {
   }
 
   useEffect(() => {
-    loadData();
-  }, []);
+    void loadData();
+  }, [fromDate, toDate]);
 
-  const filteredMachines = useMemo(() => {
+  useLayoutEffect(() => {
+    const el = chartScrollRef.current;
+    if (!el) return;
+    const n = data?.days?.length || 7;
+    const measure = () => {
+      const inner = Math.max(0, el.clientWidth - LEFT_COL_WIDTH - 6);
+      setDayColWidth(Math.max(MIN_DAY_COL_WIDTH, Math.floor(inner / Math.max(1, n))));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [data?.days?.length]);
+
+  const orderedGanttMachines = useMemo(() => {
     if (!data) return [];
     const q = machineFilter.trim().toLowerCase();
-    if (!q) return data.machines;
-    return data.machines.filter((m) => m.machineName.toLowerCase().includes(q));
+    const base = q
+      ? data.machines.filter(
+          (m) =>
+            m.machineName.toLowerCase().includes(q) ||
+            (m.workplaceCode || "").toLowerCase().includes(q)
+        )
+      : data.machines;
+    return orderMachinesForGantt(base);
   }, [data, machineFilter]);
-
-  const visibleFrom = useMemo(() => startOfDay(fromDate), [fromDate]);
-  const visibleTo = useMemo(() => endOfDay(toDate), [toDate]);
-  const totalMinutes = useMemo(() => Math.max(1, diffMinutes(visibleFrom, visibleTo)), [visibleFrom, visibleTo]);
 
   async function handleDragEnd(event: DragEndEvent) {
     setActiveDragItem(null);
@@ -646,8 +633,8 @@ export default function PlannerPage() {
 
   return (
     <>
-      <div style={{ minHeight: "100vh", background: "#f8fafc", padding: 24, paddingRight: selectedItem ? 404 : 24 }}>
-        <div style={{ maxWidth: 1800, margin: "0 auto", display: "grid", gap: 20 }}>
+      <div style={{ minHeight: "100vh", background: "#f8fafc", padding: 16, paddingRight: selectedItem ? 404 : 16 }}>
+        <div style={{ width: "100%", maxWidth: "100%", margin: "0 auto", display: "grid", gap: 14 }}>
           <div
             style={{
               background: "#fff",
@@ -660,11 +647,11 @@ export default function PlannerPage() {
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 28, fontWeight: 900, color: "#0f172a" }}>Planner Gantt</div>
-                <div style={{ fontSize: 14, color: "#64748b", marginTop: 6 }}>
-                  Vizualni prehled planovanych operaci podle stroju.
+                <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+                  Výchozí rozsah 7 dní. Řádky pracovišť v pevném pořadí (ne podle abecedy). Blok: op / WP → VP / GPN → další WP.
                 </div>
-                <div style={{ fontSize: 12, color: "#334155", marginTop: 10, fontWeight: 700 }}>
-                  Drag & Drop: pretahni operaci mezi stroji nebo na jinou pozici ve stejnem stroji. Kliknutim na blok otevres detail.
+                <div style={{ fontSize: 11, color: "#334155", marginTop: 6, fontWeight: 700 }}>
+                  DnD mezi řádky / frontu · detail = klik · tooltip = najetí myší.
                 </div>
               </div>
 
@@ -738,7 +725,7 @@ export default function PlannerPage() {
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16, alignItems: "center" }}>
               {[
                 ["Ceka", "#94a3b8"],
                 ["Naplanovano", "#f59e0b"],
@@ -760,6 +747,19 @@ export default function PlannerPage() {
                   {label}
                 </div>
               ))}
+              <div
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "#0f172a",
+                  background: "#ffedd5",
+                  border: "1px solid #fb923c",
+                }}
+              >
+                Čeká na materiál = zlatý obrys bloku
+              </div>
             </div>
 
             {error ? (
@@ -798,47 +798,66 @@ export default function PlannerPage() {
                 boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
               }}
             >
-              <div style={{ overflow: "auto", maxHeight: "65vh" }}>
+              <div
+                ref={chartScrollRef}
+                style={{
+                  overflow: "auto",
+                  maxHeight: "calc(100vh - 200px)",
+                  scrollbarGutter: "stable",
+                }}
+              >
                 <div
                   style={{
-                    minWidth: LEFT_COL_WIDTH + ((data?.days.length || 0) * DAY_COL_WIDTH),
+                    minWidth: LEFT_COL_WIDTH + (data?.days.length || 7) * dayColWidth,
                   }}
                 >
                   <div
                     style={{
                       position: "sticky",
                       top: 0,
-                      zIndex: 10,
+                      zIndex: 20,
                       display: "flex",
-                      background: "#f1f5f9",
-                      borderBottom: "1px solid #dbe2ea",
+                      background: "#e8eef4",
+                      borderBottom: "1px solid #cbd5e1",
+                      minHeight: HEADER_HEIGHT,
                     }}
                   >
                     <div
                       style={{
                         width: LEFT_COL_WIDTH,
                         minWidth: LEFT_COL_WIDTH,
-                        padding: 14,
+                        padding: "6px 8px",
                         fontWeight: 900,
-                        borderRight: "1px solid #dbe2ea",
-                        background: "#f8fafc",
+                        fontSize: 11,
+                        borderRight: "1px solid #cbd5e1",
+                        background: "#f1f5f9",
+                        position: "sticky",
+                        left: 0,
+                        zIndex: 30,
+                        display: "flex",
+                        alignItems: "center",
+                        boxSizing: "border-box",
                       }}
                     >
-                      Stroj
+                      Pracoviště
                     </div>
 
                     {data?.days.map((day) => (
                       <div
                         key={day}
                         style={{
-                          width: DAY_COL_WIDTH,
-                          minWidth: DAY_COL_WIDTH,
-                          padding: 14,
+                          width: dayColWidth,
+                          minWidth: dayColWidth,
+                          padding: "6px 2px",
                           textAlign: "center",
                           fontWeight: 800,
-                          fontSize: 13,
+                          fontSize: 11,
                           color: "#334155",
                           borderRight: "1px solid #dbe2ea",
+                          boxSizing: "border-box",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
                         }}
                       >
                         {new Date(`${day}T00:00:00`).toLocaleDateString("cs-CZ", {
@@ -851,16 +870,21 @@ export default function PlannerPage() {
                   </div>
 
                   {!data && !loading ? (
-                    <div style={{ padding: 24, color: "#64748b" }}>Zatim nejsou nactena zadna data.</div>
+                    <div style={{ padding: 16, color: "#64748b", fontSize: 13 }}>Zatím nejsou načtena data.</div>
                   ) : null}
 
-                  {filteredMachines.map((machine) => {
-                    const width = (data?.days.length || 0) * DAY_COL_WIDTH;
-                    const rowHeight = Math.max(72, machine.items.length * ROW_STEP + 16);
+                  {orderedGanttMachines.map((machine) => {
+                    const days = data?.days ?? [];
+                    const width = days.length * dayColWidth;
+                    const byDay = groupItemsByVisibleDay(machine.items, days);
+                    const maxStack = maxDayStackCount(byDay, days);
+                    const minBlockH = LANE_HEIGHT - 2;
+                    const rowBodyHeight = stackedRowMinHeightPx(maxStack, minBlockH);
+                    const globalOrder = plannerGlobalMachineOrder(machine.items);
 
                     return (
                       <div
-                        key={machine.machineId}
+                        key={machine.workplaceId ?? machine.machineId}
                         style={{
                           display: "flex",
                           borderBottom: "1px solid #e2e8f0",
@@ -870,72 +894,61 @@ export default function PlannerPage() {
                           style={{
                             width: LEFT_COL_WIDTH,
                             minWidth: LEFT_COL_WIDTH,
-                            padding: 14,
+                            padding: "6px 8px",
                             borderRight: "1px solid #e2e8f0",
                             background: "#fff",
                             position: "sticky",
                             left: 0,
-                            zIndex: 5,
+                            zIndex: 15,
+                            boxSizing: "border-box",
+                            alignSelf: "stretch",
                           }}
                         >
-                          <div style={{ fontWeight: 900, color: "#0f172a" }}>{machine.machineName}</div>
-                          <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                            {machine.items.length} planovanych operaci
+                          <div style={{ fontWeight: 800, color: "#0f172a", fontSize: 12, lineHeight: 1.25 }}>
+                            {machine.machineName}
+                          </div>
+                          <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, fontWeight: 600 }}>
+                            {(machine.workplaceCode || "").toUpperCase() || "—"} · {machine.items.length} op.
                           </div>
                         </div>
 
                         <div
                           style={{
-                            position: "relative",
+                            display: "flex",
+                            flexDirection: "row",
+                            alignItems: "stretch",
                             width,
-                            minHeight: rowHeight,
-                            backgroundImage: "linear-gradient(to right, rgba(148,163,184,0.22) 1px, transparent 1px)",
-                            backgroundSize: `${DAY_COL_WIDTH}px 100%`,
+                            minHeight: rowBodyHeight,
+                            boxSizing: "border-box",
                           }}
                         >
                           {machine.items.length === 0 ? (
                             <EmptyMachineDrop machineId={machine.machineId} width={width} />
                           ) : (
-                            <>
-                              <DropSlot machineId={machine.machineId} queuePosition={1} top={0} width={width} />
-
-                              {machine.items.map((item, index) => (
-                                <React.Fragment key={item.operationId}>
-                                  <div
-                                    style={{
-                                      position: "absolute",
-                                      left: 0,
-                                      right: 0,
-                                      top: index * ROW_STEP,
-                                    }}
-                                  >
-                                    <DraggableGanttBar
-                                      item={item}
-                                      visibleFrom={visibleFrom}
-                                      visibleTo={visibleTo}
-                                      totalMinutes={totalMinutes}
-                                      isDragging={activeDragItem?.operationId === item.operationId}
-                                      onSelect={setSelectedItem}
-                                    />
-                                  </div>
-
-                                  <DropSlot
-                                    machineId={machine.machineId}
-                                    queuePosition={index + 2}
-                                    top={(index + 1) * ROW_STEP - 6}
-                                    width={width}
-                                  />
-                                </React.Fragment>
-                              ))}
-                            </>
+                            days.map((day) => (
+                              <PlannerGanttDayColumn
+                                key={`${machine.machineId}-${day}`}
+                                day={day}
+                                machineId={machine.machineId}
+                                dayColWidth={dayColWidth}
+                                rowMinHeight={rowBodyHeight}
+                                items={byDay.get(day) ?? []}
+                                globalOrder={globalOrder}
+                                activeDragItemId={activeDragItem?.operationId ?? null}
+                                onSelect={setSelectedItem}
+                                stackGapPx={STACK_CELL_GAP_PX}
+                                cellPadPx={STACK_CELL_PAD_PX}
+                                minBlockHeight={minBlockH}
+                              />
+                            ))
                           )}
                         </div>
                       </div>
                     );
                   })}
 
-                  {data && filteredMachines.length === 0 ? (
-                    <div style={{ padding: 24, color: "#64748b" }}>Filtru neodpovida zadny stroj.</div>
+                  {data && orderedGanttMachines.length === 0 ? (
+                    <div style={{ padding: 16, color: "#64748b", fontSize: 13 }}>Filtru neodpovídá žádné pracoviště.</div>
                   ) : null}
                 </div>
               </div>
@@ -961,7 +974,7 @@ export default function PlannerPage() {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
-                        {["VP", "GPN", "Operace", "Stroj", "Qty", "Fronta", "Status"].map((h) => (
+                        {["VP", "GPN", "Operace", "Stroj", "Materiál", "Qty", "Fronta", "Status"].map((h) => (
                           <th
                             key={h}
                             style={{
@@ -982,12 +995,21 @@ export default function PlannerPage() {
                         <tr
                           key={item.operationId}
                           onClick={() => setSelectedItem(item)}
-                          style={{ cursor: "pointer" }}
+                          style={{
+                            cursor: "pointer",
+                            background: item.materialReady ? undefined : "#fff7ed",
+                            boxShadow: item.materialReady ? undefined : "inset 3px 0 0 #ea580c",
+                          }}
                         >
                           <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.workOrderNo ?? "-"}</td>
                           <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.gpn ?? "-"}</td>
                           <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.operationName}</td>
                           <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.machineName}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>
+                            <span style={{ color: item.materialReady ? "#15803d" : "#c2410c" }}>
+                              {item.materialReady ? "Připraven" : "Čeká"}
+                            </span>
+                          </td>
                           <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.qty}</td>
                           <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.queuePosition ?? "-"}</td>
                           <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>
@@ -1024,6 +1046,8 @@ export default function PlannerPage() {
         item={selectedItem}
         onClose={() => setSelectedItem(null)}
         onSaved={loadData}
+        onOpenProductionOrder={onOpenProductionOrder}
+        onOpenMaterialRequirements={onOpenMaterialRequirements}
       />
     </>
   );

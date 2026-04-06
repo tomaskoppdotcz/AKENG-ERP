@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import DetailPageHeader from "../components/DetailPageHeader";
 import { UI } from "../styles/ui";
 import {
   createMaterialStockMovement,
@@ -176,37 +177,28 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
 
   return (
     <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" style={UI.buttons.secondary} onClick={onBack}>
-            Zpět na sklad materiálu
-          </button>
-        </div>
-
-        <div style={UI.pageHeaderRow}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 30, fontWeight: 900, color: "#0f172a", lineHeight: 1.2 }}>
-              {stockItem.material_name}
-            </h1>
-            <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0 }}>
-              {stockItem.material_code || "—"} {stockItem.material_dimension ? `| ${stockItem.material_dimension}` : ""}
-            </p>
-          </div>
-          <div style={{ ...UI.summaryTilesGrid, width: "auto", gap: 8 }}>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
-              <div style={UI.summaryTileLabel}>Aktuální stav</div>
-              <div style={UI.summaryTileValue}>
-                {stockItem.current_qty} mm
+      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 14 }}>
+        <DetailPageHeader
+          title={stockItem.material_name}
+          subtitle={`${stockItem.material_code || "—"}${stockItem.material_dimension ? ` | ${stockItem.material_dimension}` : ""}`}
+          actions={
+            <button type="button" style={UI.buttons.secondary} onClick={onBack}>
+              Zpět na sklad materiálu
+            </button>
+          }
+          summaryTiles={
+            <div style={UI.summaryTilesGrid}>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Aktuální stav</div>
+                <div style={UI.summaryTileValue}>{stockItem.current_qty} mm</div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Min. zásoba</div>
+                <div style={UI.summaryTileValue}>{stockItem.min_qty ?? "—"} mm</div>
               </div>
             </div>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
-              <div style={UI.summaryTileLabel}>Min. zásoba</div>
-              <div style={UI.summaryTileValue}>
-                {stockItem.min_qty ?? "—"} mm
-              </div>
-            </div>
-          </div>
-        </div>
+          }
+        />
 
         <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>

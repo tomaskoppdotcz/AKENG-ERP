@@ -57,6 +57,36 @@ export const UI = {
     alignItems: "center",
     justifyContent: "flex-end",
   },
+
+  /** Jednotná karta hlavičky detailu (VP, sklad, portfolio, …) */
+  detailPageHeaderCard: {
+    background: "#ffffff",
+    border: "1px solid #dbe2ea",
+    borderRadius: 14,
+    padding: 18,
+    boxSizing: "border-box" as const,
+  },
+  detailPageHeaderContext: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTop: "1px solid #e2e8f0",
+  },
+  detailPageHeaderContextGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+    gap: 12,
+    alignItems: "start",
+  },
+  detailStatusBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "5px 12px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+    letterSpacing: "0.02em",
+    width: "fit-content",
+  },
   statLabel: {
     fontSize: 13,
     color: "#64748b",
@@ -336,18 +366,27 @@ export const UI = {
       gap: 12,
       alignItems: "center",
       flexWrap: "wrap" as const,
+      justifyContent: "flex-start",
     },
     brand: {
       fontWeight: 900,
       fontSize: 18,
       marginRight: 10,
       color: "#0f172a",
+      flexShrink: 0,
     },
     items: {
       display: "flex",
       gap: 8,
       alignItems: "center",
       flexWrap: "wrap" as const,
+      flex: 1,
+      minWidth: 0,
+      justifyContent: "center",
+    },
+    rightSlot: {
+      flexShrink: 0,
+      marginLeft: "auto",
     },
     item: {
       border: "1px solid #cbd5e1",

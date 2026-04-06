@@ -1,7 +1,10 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.database import SessionLocal, engine
+from app.core.logging_config import configure_app_console_logging
 from app.models.base import Base
 
 from app.api.master_data import run_master_data_startup, router as master_data_router
@@ -9,7 +12,7 @@ from app.api.master_libraries import ensure_master_libraries_sqlite_schema, rout
 from app.api.orders import ensure_orders_sqlite_schema, router as orders_router
 from app.api.orders_overview import router as orders_overview_router
 from app.api.order_detail import router as order_detail_router
-from app.api.technology import router as technology_router
+from app.api.technology import ensure_technology_sqlite_schema, router as technology_router
 from app.api.planning import router as planning_router
 from app.api.planner_gantt import router as planner_gantt_router
 from app.api.capacity_dashboard import router as capacity_dashboard_router
@@ -58,7 +61,7 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplate,
     PortfolioTechnologyTemplateOperation,
 )
-from app.models.master_data import EmployeeSubgroup  # noqa: F401 — metadata / create_all
+from app.models.master_data import EmployeeSubgroup, Machine  # noqa: F401 — metadata / create_all
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
 from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
@@ -70,6 +73,9 @@ from app.models.material_stock import (
 )
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.storage_location import StorageLocation
+
+configure_app_console_logging(logging.INFO)
+
 app = FastAPI(title="AKENG ERP v1", version="0.1.0")
 
 app.add_middleware(
@@ -83,8 +89,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup():
+    configure_app_console_logging(logging.INFO)
     Base.metadata.create_all(bind=engine)
     ensure_master_libraries_sqlite_schema(engine)
+    ensure_technology_sqlite_schema(engine)
     ensure_orders_sqlite_schema(engine)
     ensure_customers_sqlite_schema(engine)
     ensure_material_library_sqlite_schema(engine)

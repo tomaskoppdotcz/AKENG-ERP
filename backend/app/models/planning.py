@@ -17,6 +17,7 @@ class PlanningOperation(Base):
     operation_no = Column(Integer, nullable=False)
 
     machine_id = Column(Integer, ForeignKey("machines.id"), nullable=False)
+    workplace_library_item_id = Column(Integer, ForeignKey("workplace_library_items.id"), nullable=True)
 
     qty = Column(Integer, nullable=False, default=0)
 

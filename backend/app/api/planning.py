@@ -4,7 +4,7 @@ from datetime import date
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.models.master_data import Customer, Machine
@@ -261,6 +261,7 @@ def move_gantt_operation(payload: MoveGanttOperationRequest, db: Session = Depen
         }
 
     op.machine_id = target_machine_id
+    op.workplace_library_item_id = getattr(target_machine, "workplace_library_item_id", None)
     db.flush()
 
     normalize_machine_queue(db, source_machine_id)
@@ -365,23 +366,26 @@ def cleanup_material_reservation_orphans(db: Session = Depends(get_db)):
 
 @router.post("/material-reservations/rebuild-all")
 def material_reservations_rebuild_all(db: Session = Depends(get_db)):
-    summary = rebuild_all_tp_material_reservations(db)
+    tp_summary = rebuild_all_tp_material_reservations(db)
+    consumption_summary = run_material_reservation_rebuild(db)
     db.commit()
-    return {"status": "ok", **summary}
+    return {"status": "ok", **tp_summary, "consumption_rebuild": consumption_summary}
 
 
 @router.post("/material-reservations/rebuild-for-job-item/{job_item_id}")
 def material_reservations_rebuild_for_job_item_endpoint(job_item_id: int, db: Session = Depends(get_db)):
-    summary = rebuild_tp_material_reservations_for_job_item(db, job_item_id)
+    tp_summary = rebuild_tp_material_reservations_for_job_item(db, job_item_id)
+    consumption_summary = run_material_reservation_rebuild(db, job_item_id=job_item_id)
     db.commit()
-    return {"status": "ok", **summary}
+    return {"status": "ok", **tp_summary, "consumption_rebuild": consumption_summary}
 
 
 @router.post("/material-reservations/rebuild-for-template/{template_id}")
 def material_reservations_rebuild_for_template_endpoint(template_id: int, db: Session = Depends(get_db)):
-    summary = rebuild_tp_material_reservations_for_technology_template(db, template_id)
+    tp_summary = rebuild_tp_material_reservations_for_technology_template(db, template_id)
+    consumption_summary = run_material_reservation_rebuild(db)
     db.commit()
-    return {"status": "ok", **summary}
+    return {"status": "ok", **tp_summary, "consumption_rebuild": consumption_summary}
 
 
 @router.get("/material/requirements")
@@ -406,6 +410,118 @@ class MaterialPurchaseOrderPayload(BaseModel):
     header_note: str | None = None
 
 
+MATERIAL_PURCHASE_ORDER_STATUSES = frozenset({"draft", "ordered", "confirmed", "received", "cancelled"})
+
+
+def _material_purchase_order_number(po_id: int) -> str:
+    return f"NMPO-{int(po_id):06d}"
+
+
+def _dt_iso(dt) -> str:
+    if dt is None:
+        return ""
+    s = dt.isoformat()
+    if getattr(dt, "tzinfo", None) is None:
+        return f"{s}Z"
+    return s
+
+
+@router.get("/material/purchase-orders")
+def list_material_purchase_orders(db: Session = Depends(get_db)):
+    pos = (
+        db.scalars(
+            select(MaterialPurchaseOrder)
+            .options(selectinload(MaterialPurchaseOrder.lines))
+            .order_by(MaterialPurchaseOrder.id.desc())
+        )
+        .unique()
+        .all()
+    )
+    items = []
+    for p in pos:
+        lines = list(p.lines or [])
+        items.append(
+            {
+                "id": int(p.id),
+                "order_number": _material_purchase_order_number(p.id),
+                "supplier_name": p.supplier_name_snapshot,
+                "supplier_customer_id": int(p.supplier_customer_id),
+                "created_at": _dt_iso(p.created_at),
+                "status": p.status,
+                "lines_count": len(lines),
+                "total_qty_ordered": float(sum(float(x.qty_ordered or 0) for x in lines)),
+            }
+        )
+    return {"items": items}
+
+
+@router.get("/material/purchase-orders/{po_id}")
+def get_material_purchase_order(po_id: int, db: Session = Depends(get_db)):
+    po = db.scalar(
+        select(MaterialPurchaseOrder)
+        .options(selectinload(MaterialPurchaseOrder.lines))
+        .where(MaterialPurchaseOrder.id == int(po_id))
+    )
+    if po is None:
+        raise HTTPException(status_code=404, detail="Nákupní objednávka nebyla nalezena.")
+    lines = sorted(po.lines or [], key=lambda x: int(x.id))
+    mat_ids = {int(l.material_library_item_id) for l in lines}
+    mats_by_id: dict[int, MaterialLibraryItem] = {}
+    if mat_ids:
+        mats = db.scalars(select(MaterialLibraryItem).where(MaterialLibraryItem.id.in_(mat_ids))).all()
+        mats_by_id = {int(m.id): m for m in mats}
+    out_lines = []
+    for ln in lines:
+        m = mats_by_id.get(int(ln.material_library_item_id))
+        out_lines.append(
+            {
+                "id": int(ln.id),
+                "material_library_item_id": int(ln.material_library_item_id),
+                "qty_ordered": float(ln.qty_ordered),
+                "unit": ln.unit or (m.unit if m else None),
+                "traceability_note": ln.traceability_note,
+                "material": {
+                    "code": m.code if m else None,
+                    "name": m.name if m else None,
+                    "dimension": m.dimension if m else None,
+                    "unit": m.unit if m else None,
+                },
+            }
+        )
+    return {
+        "id": int(po.id),
+        "order_number": _material_purchase_order_number(po.id),
+        "supplier_customer_id": int(po.supplier_customer_id),
+        "supplier_name": po.supplier_name_snapshot,
+        "status": po.status,
+        "created_at": _dt_iso(po.created_at),
+        "header_note": po.header_note,
+        "lines": out_lines,
+    }
+
+
+class MaterialPurchaseOrderPatchPayload(BaseModel):
+    status: str
+
+
+@router.patch("/material/purchase-orders/{po_id}")
+def patch_material_purchase_order(
+    po_id: int, body: MaterialPurchaseOrderPatchPayload, db: Session = Depends(get_db)
+):
+    st = (body.status or "").strip().lower()
+    if st not in MATERIAL_PURCHASE_ORDER_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Neplatný stav. Povolené: {', '.join(sorted(MATERIAL_PURCHASE_ORDER_STATUSES))}.",
+        )
+    po = db.get(MaterialPurchaseOrder, int(po_id))
+    if po is None:
+        raise HTTPException(status_code=404, detail="Nákupní objednávka nebyla nalezena.")
+    po.status = st
+    db.commit()
+    return {"status": "ok", "material_purchase_order_id": int(po.id)}
+
+
 @router.post("/material/purchase-orders")
 def create_material_purchase_order(body: MaterialPurchaseOrderPayload, db: Session = Depends(get_db)):
     if not body.lines:
@@ -416,7 +532,7 @@ def create_material_purchase_order(body: MaterialPurchaseOrderPayload, db: Sessi
     po = MaterialPurchaseOrder(
         supplier_customer_id=int(cust.id),
         supplier_name_snapshot=(cust.name or "").strip() or cust.code,
-        status="confirmed",
+        status="draft",
         header_note=(body.header_note.strip() if body.header_note else None) or None,
     )
     db.add(po)
@@ -424,12 +540,15 @@ def create_material_purchase_order(body: MaterialPurchaseOrderPayload, db: Sessi
     for ln in body.lines:
         if ln.qty_ordered <= 0:
             raise HTTPException(status_code=422, detail="Množství musí být kladné.")
+        lib = db.get(MaterialLibraryItem, int(ln.material_library_item_id))
+        if lib is None:
+            raise HTTPException(status_code=404, detail=f"Materiál ID {ln.material_library_item_id} neexistuje.")
         db.add(
             MaterialPurchaseOrderLine(
                 purchase_order_id=int(po.id),
                 material_library_item_id=int(ln.material_library_item_id),
                 qty_ordered=float(ln.qty_ordered),
-                unit=None,
+                unit=(lib.unit or "").strip() or None,
                 traceability_note=(ln.traceability_note.strip() if ln.traceability_note else None) or None,
             )
         )
@@ -438,6 +557,7 @@ def create_material_purchase_order(body: MaterialPurchaseOrderPayload, db: Sessi
     return {
         "status": "ok",
         "material_purchase_order_id": int(po.id),
+        "order_number": _material_purchase_order_number(po.id),
         "lines_count": len(body.lines),
         "supplier_name": po.supplier_name_snapshot,
     }

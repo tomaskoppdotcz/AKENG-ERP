@@ -18,9 +18,10 @@ type Props = {
   activeModule: string;
   onNavigate: (module: string) => void;
   navItems?: string[];
+  rightSlot?: React.ReactNode;
 };
 
-export default function TopNav({ activeModule, onNavigate, navItems }: Props) {
+export default function TopNav({ activeModule, onNavigate, navItems, rightSlot }: Props) {
   const items = navItems && navItems.length > 0 ? navItems : (DEFAULT_NAV_ITEMS as unknown as string[]);
 
   return (
@@ -41,6 +42,7 @@ export default function TopNav({ activeModule, onNavigate, navItems }: Props) {
           );
         })}
       </div>
+      {rightSlot ? <div style={UI.topNavigation.rightSlot}>{rightSlot}</div> : null}
     </div>
   );
 }

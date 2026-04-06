@@ -17,7 +17,7 @@ class MaterialPurchaseOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     supplier_customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
     supplier_name_snapshot: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(String(40), nullable=False, default="confirmed")
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="draft")
     header_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     lines: Mapped[list["MaterialPurchaseOrderLine"]] = relationship(

@@ -1,10 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.material_stock import MaterialStockItem
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder, ProductionOrderOperation
+from app.models.portfolio import PortfolioItem
+from app.models.product_stock import ProductStockItem
 
 router = APIRouter()
 
@@ -73,4 +76,48 @@ def scan_lookup(payload: ScanLookupPayload, db: Session = Depends(get_db)):
             },
         }
 
-    raise HTTPException(status_code=404, detail="Scan kód nebyl nalezen.")
+    pi = db.scalar(select(PortfolioItem).where(PortfolioItem.scan_code == code))
+    if pi is not None:
+        return {
+            "entity_type": "portfolio_item",
+            "entity_id": int(pi.id),
+            "scan_code": code,
+            "label": f"Portfolio {pi.gpn}",
+            "target_page": "portfolio",
+            "target_params": {"portfolio_item_id": int(pi.id)},
+        }
+
+    pi_gpn = db.scalar(select(PortfolioItem).where(func.lower(PortfolioItem.gpn) == code.lower()))
+    if pi_gpn is not None:
+        return {
+            "entity_type": "portfolio_item",
+            "entity_id": int(pi_gpn.id),
+            "scan_code": code,
+            "label": f"Portfolio {pi_gpn.gpn}",
+            "target_page": "portfolio",
+            "target_params": {"portfolio_item_id": int(pi_gpn.id)},
+        }
+
+    msi = db.scalar(select(MaterialStockItem).where(MaterialStockItem.scan_code == code))
+    if msi is not None:
+        return {
+            "entity_type": "material_stock_item",
+            "entity_id": int(msi.id),
+            "scan_code": code,
+            "label": f"Sklad materiálu #{msi.id}",
+            "target_page": "material_stock",
+            "target_params": {"material_stock_item_id": int(msi.id)},
+        }
+
+    psi = db.scalar(select(ProductStockItem).where(ProductStockItem.scan_code == code))
+    if psi is not None:
+        return {
+            "entity_type": "product_stock_item",
+            "entity_id": int(psi.id),
+            "scan_code": code,
+            "label": f"Sklad výrobků #{psi.id}",
+            "target_page": "product_stock",
+            "target_params": {"product_stock_item_id": int(psi.id)},
+        }
+
+    raise HTTPException(status_code=404, detail="Kód nenalezen")

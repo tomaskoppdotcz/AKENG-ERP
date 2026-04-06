@@ -13,7 +13,14 @@ class Employee(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     employee_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     card_uid: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    employee_subgroup_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employee_subgroups.id"),
+        nullable=True,
+        index=True,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import DetailPageHeader from "../components/DetailPageHeader";
 import { UI } from "../styles/ui";
-import { createMaterialReservation } from "../services/materialStockApi";
+import {
+  createMaterialReservation,
+  getMaterialIssuesForJobItem,
+  type JobItemMaterialIssueRow,
+} from "../services/materialStockApi";
+import { getMaterialRequirementsByVp, type VpRequirementRow } from "../services/materialRequirementsApi";
 import {
   getJobItemDetailContext,
   type OrderDetailItem,
@@ -30,6 +36,7 @@ type Props = {
   onOpenCustomerOrderCard?: (customerOrderId: number) => void;
   onPreviewPortfolioById?: (portfolioItemId: number) => void;
   onPreviewProductionOrderById?: (productionOrderId: number) => void;
+  onOpenMaterialRequirements?: () => void;
 };
 
 type ItemSubtab =
@@ -42,6 +49,7 @@ type ItemSubtab =
   | "Výrobní plán"
   | "Expedice"
   | "Dodací list"
+  | "Výdej materiálu"
   | "Náklady";
 
 const SUBTABS: ItemSubtab[] = [
@@ -54,6 +62,7 @@ const SUBTABS: ItemSubtab[] = [
   "Výrobní plán",
   "Expedice",
   "Dodací list",
+  "Výdej materiálu",
   "Náklady",
 ];
 
@@ -86,6 +95,19 @@ function formatMaterialNumber(value: number | null | undefined, empty = "—"): 
   if (value == null || Number.isNaN(value)) return empty;
   if (Number.isInteger(value)) return String(value);
   return value.toLocaleString("cs-CZ", { maximumFractionDigits: 6 });
+}
+
+function vpHasPendingMaterialIssue(vp: VpRequirementRow): boolean {
+  if (vp.coverage !== "covered") return false;
+  for (const m of vp.materials) {
+    const lines = m.reservation_lines;
+    if (lines && lines.length > 0) {
+      if (lines.some((l) => String(l.status || "").toLowerCase() !== "issued")) return true;
+    } else if (String(m.status || "").toLowerCase() !== "issued") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function materialRequirementStatus(
@@ -138,6 +160,7 @@ export default function OrderItemDetailPage({
   onOpenCustomerOrderCard,
   onPreviewPortfolioById,
   onPreviewProductionOrderById,
+  onOpenMaterialRequirements,
 }: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
   const [hoverTab, setHoverTab] = useState<ItemSubtab | null>(null);
@@ -153,6 +176,11 @@ export default function OrderItemDetailPage({
   const [portfolioTechError, setPortfolioTechError] = useState<string | null>(null);
   const [materialReserveError, setMaterialReserveError] = useState<string | null>(null);
   const [reservingTpMaterialId, setReservingTpMaterialId] = useState<number | null>(null);
+
+  const [materialIssueRows, setMaterialIssueRows] = useState<JobItemMaterialIssueRow[]>([]);
+  const [materialIssueLoading, setMaterialIssueLoading] = useState(false);
+  const [materialIssueError, setMaterialIssueError] = useState<string | null>(null);
+  const [vpReqForIssue, setVpReqForIssue] = useState<VpRequirementRow[] | null>(null);
 
   const reloadTechnologyMaterials = useCallback(async () => {
     const pid = matchedPortfolioItem?.id;
@@ -264,6 +292,32 @@ export default function OrderItemDetailPage({
       cancelled = true;
     };
   }, [gpnForPortfolio, detail?.item.effective_portfolio_item_id]);
+
+  useEffect(() => {
+    if (activeTab !== "Výdej materiálu") return;
+    let cancelled = false;
+    setMaterialIssueLoading(true);
+    setMaterialIssueError(null);
+    void Promise.all([getMaterialIssuesForJobItem(jobItemId), getMaterialRequirementsByVp()])
+      .then(([iss, vp]) => {
+        if (cancelled) return;
+        setMaterialIssueRows(iss.items);
+        setVpReqForIssue(vp);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setMaterialIssueError(e instanceof Error ? e.message : "Nepodařilo se načíst data výdeje.");
+          setMaterialIssueRows([]);
+          setVpReqForIssue(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMaterialIssueLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, jobItemId]);
 
   const itemOrderQuantity = useMemo(() => {
     const q = detail?.item.qty;
@@ -396,47 +450,65 @@ export default function OrderItemDetailPage({
   const portfolioPreviewId =
     matchedPortfolioItem?.id ?? item.effective_portfolio_item_id ?? item.portfolio_item_id ?? null;
 
+  const linkedPoIdsForMaterialTab = new Set(linkedProductionOrders.map((p) => p.id));
+  const materialLinkedVpsForTab =
+    vpReqForIssue?.filter(
+      (v) => v.job_item_id === jobItemId || linkedPoIdsForMaterialTab.has(v.production_order_id)
+    ) ?? [];
+  const materialTabHasLines = materialLinkedVpsForTab.some((v) => v.materials.length > 0);
+  const materialTabUncovered = materialLinkedVpsForTab.some((v) => v.coverage !== "covered");
+  const materialTabShowIssueAction = materialLinkedVpsForTab.some(vpHasPendingMaterialIssue);
+  const materialTabAnyMovements = materialIssueRows.length > 0;
+
+  const materialIssueStateBadge = (() => {
+    const base: React.CSSProperties = {
+      display: "inline-flex",
+      alignItems: "center",
+      padding: "6px 12px",
+      borderRadius: 999,
+      fontSize: 12,
+      fontWeight: 800,
+      border: "1px solid #cbd5e1",
+    };
+    if (materialIssueLoading || vpReqForIssue == null) {
+      return { label: "Načítám…", style: { ...base, background: "#f1f5f9", color: "#475569" } };
+    }
+    if (linkedProductionOrders.length === 0) {
+      return { label: "Bez výrobního příkazu", style: { ...base, background: "#f1f5f9", color: "#64748b" } };
+    }
+    if (!materialTabHasLines) {
+      return { label: "Žádné řádky k výdeji", style: { ...base, background: "#f1f5f9", color: "#64748b" } };
+    }
+    if (materialTabShowIssueAction && materialTabAnyMovements) {
+      return {
+        label: "Částečně vydáno",
+        style: { ...base, background: "#fef3c7", color: "#b45309", border: "1px solid #fcd34d" },
+      };
+    }
+    if (materialTabShowIssueAction) {
+      return {
+        label: "Nevydáno",
+        style: { ...base, background: "#fee2e2", color: "#b91c1c", border: "1px solid #fecaca" },
+      };
+    }
+    return {
+      label: "Vydáno",
+      style: { ...base, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" },
+    };
+  })();
+
   return (
     <div style={UI.container}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-          <button onClick={onBack} style={UI.buttonSecondary}>
-            {source === "orders" ? "Zpět na zakázku" : "Zpět na výkresy"}
-          </button>
-          <button
-            type="button"
-            style={UI.buttons.secondary}
-            onClick={() =>
-              window.open(buildErpUrl({ view: "orderItem", jobItemId, source }), "_blank")
-            }
-          >
-            Otevřít v novém okně
-          </button>
-        </div>
-
-        {/* Sekce 1 — hlavička */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: 24,
-            flexWrap: "wrap" as const,
-          }}
-        >
-          <div style={{ minWidth: 0, flex: "1 1 280px" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <DetailPageHeader
+          title={
             <button
               type="button"
               disabled={!onOpenPortfolioItem}
               onClick={() => void openPortfolioFromGpn()}
               title={onOpenPortfolioItem ? "Otevřít portfolio položku" : undefined}
               style={{
-                margin: 0,
-                fontSize: 30,
-                fontWeight: 900,
-                color: "#0f172a",
-                lineHeight: 1.2,
-                letterSpacing: "-0.02em",
+                ...UI.pageTitle,
                 display: "block",
                 background: "none",
                 border: "none",
@@ -445,134 +517,143 @@ export default function OrderItemDetailPage({
                 cursor: onOpenPortfolioItem ? "pointer" : "default",
                 textDecoration: onOpenPortfolioItem ? "underline" : "none",
                 textUnderlineOffset: 4,
+                maxWidth: "100%",
               }}
             >
               {item.gpn}
             </button>
-            <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0, maxWidth: 720 }}>
-              {source === "drawings" ? "Detail položky napříč zakázkami" : item.description ?? "—"}
-            </p>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap" as const,
-              gap: 8,
-              justifyContent: "flex-end",
-              alignItems: "center",
-            }}
-          >
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                flexWrap: "wrap",
-                padding: "6px 12px",
-                borderRadius: 999,
-                fontSize: 12,
-                fontWeight: 800,
-                ...(linkedProductionOrders.length > 0 || (item.vp_code && vpLabel !== "—")
-                  ? {
-                      background: "#dcfce7",
-                      color: "#15803d",
-                      border: "1px solid #86efac",
-                    }
-                  : {
-                      background: "#f1f5f9",
-                      color: "#64748b",
-                      border: "1px solid #e2e8f0",
-                    }),
-              }}
-            >
-              <span style={{ whiteSpace: "nowrap" }}>VP:</span>
-              {linkedProductionOrders.length > 0 ? (
-                linkedProductionOrders.map((po, idx) => (
-                  <span key={po.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    {idx > 0 ? <span style={{ color: "#64748b" }}>·</span> : null}
-                    <button
-                      type="button"
-                      disabled={!onOpenProductionOrderDetail}
-                      onClick={() => onOpenProductionOrderDetail?.(po.id)}
-                      style={{
-                        ...linkButtonReset,
+          }
+          subtitle={source === "drawings" ? "Detail položky napříč zakázkami" : item.description ?? "—"}
+          headerAside={
+            <>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  padding: "6px 12px",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  ...(linkedProductionOrders.length > 0 || (item.vp_code && vpLabel !== "—")
+                    ? {
+                        background: "#dcfce7",
                         color: "#15803d",
-                        fontWeight: 900,
-                        fontSize: 12,
-                      }}
-                    >
-                      {po.vp_code}
+                        border: "1px solid #86efac",
+                      }
+                    : {
+                        background: "#f1f5f9",
+                        color: "#64748b",
+                        border: "1px solid #e2e8f0",
+                      }),
+                }}
+              >
+                <span style={{ whiteSpace: "nowrap" }}>VP:</span>
+                {linkedProductionOrders.length > 0 ? (
+                  linkedProductionOrders.map((po, idx) => (
+                    <span key={po.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      {idx > 0 ? <span style={{ color: "#64748b" }}>·</span> : null}
+                      <button
+                        type="button"
+                        disabled={!onOpenProductionOrderDetail}
+                        onClick={() => onOpenProductionOrderDetail?.(po.id)}
+                        style={{
+                          ...linkButtonReset,
+                          color: "#15803d",
+                          fontWeight: 900,
+                          fontSize: 12,
+                        }}
+                      >
+                        {po.vp_code}
+                      </button>
+                    </span>
+                  ))
+                ) : item.vp_code && onOpenProductionOrderDetail ? (
+                  (() => {
+                    const po = (item.production_orders ?? []).find((p) => p.vp_code === item.vp_code);
+                    if (!po) return <span style={{ color: "#15803d" }}>{item.vp_code}</span>;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => onOpenProductionOrderDetail(po.id)}
+                        style={{
+                          ...linkButtonReset,
+                          color: "#15803d",
+                          fontWeight: 900,
+                          fontSize: 12,
+                        }}
+                      >
+                        {item.vp_code}
+                      </button>
+                    );
+                  })()
+                ) : (
+                  <span>{vpLabel}</span>
+                )}
+              </span>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "6px 12px",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  ...stavBadgeStyle,
+                }}
+              >
+                Stav: {stavLabel}
+              </span>
+            </>
+          }
+          actions={
+            <>
+              <button onClick={onBack} style={UI.buttonSecondary}>
+                {source === "orders" ? "Zpět na zakázku" : "Zpět na výkresy"}
+              </button>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={() =>
+                  window.open(buildErpUrl({ view: "orderItem", jobItemId, source }), "_blank")
+                }
+              >
+                Otevřít v novém okně
+              </button>
+            </>
+          }
+          summaryTiles={
+            <div style={UI.summaryTilesGrid}>
+              <div style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
+                <div style={UI.summaryTileLabel}>Zakázka</div>
+                <div style={UI.summaryTileValue}>
+                  {onOpenCustomerOrderCard ? (
+                    <button type="button" style={linkButtonReset} onClick={() => onOpenCustomerOrderCard(detail.customerOrderId)}>
+                      {order.job?.zakazka ?? "—"}
                     </button>
-                  </span>
-                ))
-              ) : item.vp_code && onOpenProductionOrderDetail ? (
-                (() => {
-                  const po = (item.production_orders ?? []).find((p) => p.vp_code === item.vp_code);
-                  if (!po) return <span style={{ color: "#15803d" }}>{item.vp_code}</span>;
-                  return (
-                    <button
-                      type="button"
-                      onClick={() => onOpenProductionOrderDetail(po.id)}
-                      style={{
-                        ...linkButtonReset,
-                        color: "#15803d",
-                        fontWeight: 900,
-                        fontSize: 12,
-                      }}
-                    >
-                      {item.vp_code}
-                    </button>
-                  );
-                })()
-              ) : (
-                <span>{vpLabel}</span>
-              )}
-            </span>
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                padding: "6px 12px",
-                borderRadius: 999,
-                fontSize: 12,
-                fontWeight: 800,
-                ...stavBadgeStyle,
-              }}
-            >
-              Stav: {stavLabel}
-            </span>
-          </div>
-        </div>
-
-        {/* Sekce 2 — údaje jako executive dlaždice (stejný systém jako Zakázky / karta) */}
-        <div style={UI.summaryTilesGrid}>
-          <div style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
-            <div style={UI.summaryTileLabel}>Zakázka</div>
-            <div style={UI.summaryTileValue}>
-              {onOpenCustomerOrderCard ? (
-                <button type="button" style={linkButtonReset} onClick={() => onOpenCustomerOrderCard(detail.customerOrderId)}>
-                  {order.job?.zakazka ?? "—"}
-                </button>
-              ) : (
-                order.job?.zakazka ?? "—"
-              )}
+                  ) : (
+                    order.job?.zakazka ?? "—"
+                  )}
+                </div>
+              </div>
+              {(
+                [
+                  ["Řádek", String(item.line_no)],
+                  ["Množství", `${item.qty} ks`],
+                  ["Termín", item.due_date ?? "—"],
+                  ["Materiál", item.material_default ?? "—"],
+                  ["Cena / ks", formatCenaZaKs(item.sale_price_per_piece ?? undefined)],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label} style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
+                  <div style={UI.summaryTileLabel}>{label}</div>
+                  <div style={UI.summaryTileValue}>{value}</div>
+                </div>
+              ))}
             </div>
-          </div>
-          {(
-            [
-              ["Řádek", String(item.line_no)],
-              ["Množství", `${item.qty} ks`],
-              ["Termín", item.due_date ?? "—"],
-              ["Materiál", item.material_default ?? "—"],
-              ["Cena / ks", formatCenaZaKs(item.sale_price_per_piece ?? undefined)],
-            ] as const
-          ).map(([label, value]) => (
-            <div key={label} style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
-              <div style={UI.summaryTileLabel}>{label}</div>
-              <div style={UI.summaryTileValue}>{value}</div>
-            </div>
-          ))}
-        </div>
+          }
+        />
 
         {orderKind === "customer" ? (
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
@@ -994,6 +1075,102 @@ export default function OrderItemDetailPage({
               </div>
             ) : null}
           </>
+        ) : activeTab === "Výdej materiálu" ? (
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 14 }}>
+              <span style={materialIssueStateBadge.style}>{materialIssueStateBadge.label}</span>
+              {materialTabUncovered && vpReqForIssue != null && !materialIssueLoading ? (
+                <span style={{ fontSize: 13, color: "#b45309", fontWeight: 600 }}>
+                  Část materiálu není pokryta skladem.
+                </span>
+              ) : null}
+              {materialTabShowIssueAction && onOpenMaterialRequirements ? (
+                <button type="button" style={UI.buttons.primary} onClick={onOpenMaterialRequirements}>
+                  Vydat materiál
+                </button>
+              ) : null}
+            </div>
+            {materialIssueError ? (
+              <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{materialIssueError}</div>
+            ) : null}
+            {materialIssueLoading ? (
+              <div style={{ ...UI.sectionSubtitle, fontWeight: 600 }}>Načítám výdeje…</div>
+            ) : materialIssueRows.length === 0 ? (
+              <div style={{ ...UI.sectionSubtitle, color: "#64748b", fontWeight: 600 }}>
+                Zatím žádný záznam výdeje materiálu pro tuto položku / napojené VP.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={UI.table}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      {[
+                        "Datum výdeje",
+                        "Kód materiálu",
+                        "Materiál",
+                        "Rozměr",
+                        "Vydané množství",
+                        "Tavba / šarže",
+                        "Skladová karta",
+                        "Scan kód pohybu",
+                        "VP",
+                        "Lokace",
+                        "Operátor",
+                      ].map((h) => (
+                        <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {materialIssueRows.map((row) => (
+                      <tr key={row.movement_id}>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.movement_date
+                            ? new Date(row.movement_date).toLocaleString("cs-CZ", {
+                                dateStyle: "short",
+                                timeStyle: "short",
+                              })
+                            : "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.material_code ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px" }}>{row.material_name ?? "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.material_dimension ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                          {formatMaterialNumber(row.qty, "0")}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.heat_lot ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.stock_item_id != null
+                            ? `#${row.stock_item_id}${row.stock_scan_code ? ` · ${row.stock_scan_code}` : ""}`
+                            : "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontFamily: "monospace" }}>
+                          {row.scan_code ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.vp_code ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.stock_location ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.operator ?? "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         ) : (
           <PlaceholderCard text={`Modul ${activeTab} pro tuto položku je ve vývoji.`} />
         )}

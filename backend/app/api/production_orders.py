@@ -29,6 +29,10 @@ from app.models.portfolio import (
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.services.business_workflow import WORKFLOW_STATUS_CANCELLED, workflow_active_sql, workflow_record_active
 from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
+from app.services.material_readiness import (
+    evaluate_production_order_material_covered,
+    evaluate_production_order_material_released,
+)
 from app.services.material_reservation_sync import cancel_active_reservations_for_production_order
 from app.services.material_traceability_vp import vp_material_traceability_for_input
 
@@ -271,11 +275,18 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
             )
         )
         if ex is None:
+            wname = op.workplace
+            wid = op.workplace_library_item_id
+            if wid is not None:
+                wp_lib = db.get(WorkplaceLibraryItem, int(wid))
+                if wp_lib is not None:
+                    wname = wp_lib.name
             row = ProductionOrderOperation(
                 production_order_id=int(po.id),
                 operation_no=int(op.operation_no),
                 operation_name=op.operation_name,
-                workplace_name=op.workplace,
+                workplace_name=wname,
+                workplace_library_item_id=int(wid) if wid is not None else None,
             )
             db.add(row)
             db.flush()
@@ -317,6 +328,9 @@ def list_production_orders(
 
     out: list[dict] = []
     for po in rows:
+        wf_ok = workflow_record_active(po)
+        mat_cov = evaluate_production_order_material_covered(db, po) if wf_ok else False
+        mat_rel = evaluate_production_order_material_released(db, po) if wf_ok else False
         ji = item_by_id.get(int(po.job_item_id)) if po.job_item_id is not None else None
         job = job_by_id.get(int(po.job_id)) if po.job_id is not None else None
         co = co_by_id.get(int(po.customer_order_id)) if po.customer_order_id is not None else None
@@ -344,7 +358,9 @@ def list_production_orders(
                 "customer_order_id": int(po.customer_order_id) if po.customer_order_id is not None else None,
                 "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
                 "workflow_status": getattr(po, "workflow_status", None) or "active",
-                "is_material_ready": bool(getattr(po, "is_material_ready", True)),
+                "is_material_covered": mat_cov,
+                "is_material_released_to_production": mat_rel,
+                "is_material_ready": mat_rel,
             }
         )
     return {"items": out}
@@ -525,6 +541,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
                     "id": int(op.id),
                     "operation_no": int(op.operation_no),
                     "operation_name": op_lib.name if op_lib is not None else op.operation_name,
+                    "workplace_library_item_id": op.workplace_library_item_id,
                     "workplace_name": wp_lib.name if wp_lib is not None else op.workplace,
                     "setup_time_min": float(op.setup_min or 0),
                     "run_min_per_piece": float(op.run_min_per_piece or 0),
@@ -595,6 +612,10 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
     else:
         po_status = po.status or "planned"
 
+    wf_ok_detail = workflow_record_active(po)
+    mat_cov_d = evaluate_production_order_material_covered(db, po) if wf_ok_detail else False
+    mat_rel_d = evaluate_production_order_material_released(db, po) if wf_ok_detail else False
+
     return {
         "id": int(po.id),
         "vp_code": po.vp_code,
@@ -613,7 +634,9 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         "logistic_mode": po.logistic_mode,
         "source_type": po.source_type,
         "status": po_status,
-        "is_material_ready": bool(getattr(po, "is_material_ready", True)),
+        "is_material_covered": mat_cov_d,
+        "is_material_released_to_production": mat_rel_d,
+        "is_material_ready": mat_rel_d,
         "quantity": int(po.quantity or 0),
         "technology_template": {
             "id": int(tp_template.id),
@@ -635,10 +658,14 @@ def start_production_order_operation(
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
     if not workflow_record_active(po):
         raise HTTPException(status_code=409, detail="Výrobní příkaz je stornován.")
-    if not bool(getattr(po, "is_material_ready", True)):
+    if not (
+        evaluate_production_order_material_released(db, po)
+        if workflow_record_active(po)
+        else False
+    ):
         raise HTTPException(
             status_code=409,
-            detail="Nelze zahájit operaci: materiál pro tento výrobní příkaz není připraven (nedostatečný stav skladu nebo rezervace).",
+            detail="Nelze zahájit operaci: materiál nebyl vydán na výrobu (nejprve vydání ze skladu).",
         )
     _ensure_operation_scan_rows(db, po)
     operation_nos = _operation_nos_for_po(db, po)

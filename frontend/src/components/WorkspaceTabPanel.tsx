@@ -6,6 +6,7 @@ import OrderItemDetailPage from "../pages/OrderItemDetailPage";
 import ProductStockDetailPage from "../pages/ProductStockDetailPage";
 import ProductionOrderDetailPage from "../pages/ProductionOrderDetailPage";
 import PortfolioItemDetailPage from "../pages/PortfolioItemDetailPage";
+import MaterialPurchaseOrderDetailPage from "../pages/MaterialPurchaseOrderDetailPage";
 import { getMaterialLibraryItems } from "../services/materialLibraryApi";
 import { getMaterialStockItems } from "../services/materialStockApi";
 import { getPortfolioItem, type PortfolioItem } from "../services/portfolioApi";
@@ -357,6 +358,13 @@ export default function WorkspaceTabPanel({
           onPreviewProductionOrderById={(productionOrderId) =>
             setPreviewDrawer({ kind: "productionOrder", productionOrderId })
           }
+          onOpenMaterialRequirements={() => {
+            openWorkspaceTab({
+              kind: "module",
+              moduleKey: "Požadavky materiálu",
+              title: "Požadavky materiálu",
+            });
+          }}
         />
       );
     case "productionOrder":
@@ -399,6 +407,14 @@ export default function WorkspaceTabPanel({
           initialSnapshot={tab.snapshot}
           onBack={onCloseThisTab}
           onUpdateTabTitle={updateThisTabTitle}
+        />
+      );
+    case "materialPurchaseOrder":
+      return (
+        <MaterialPurchaseOrderDetailPage
+          materialPurchaseOrderId={tab.materialPurchaseOrderId}
+          onBack={onCloseThisTab}
+          onWorkspaceTabTitle={updateThisTabTitle}
         />
       );
     default: {

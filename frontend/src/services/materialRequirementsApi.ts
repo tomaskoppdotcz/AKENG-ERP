@@ -27,7 +27,12 @@ export type MaterialRequirementRow = {
     name: string | null;
   };
   required: number;
+  /** Součet reserved_qty z aktivních rezervací (shodně s backendem). */
+  reserved?: number;
+  /** Fyzický stav skladu (součet current_qty). */
   available: number;
+  /** Volné množství po odečtu eligible rezervací (volitelné, backend ≥ tato úprava). */
+  free_for_allocation?: number;
   shortage: number;
   related_orders: MaterialRequirementRelatedOrder[];
 };
@@ -43,6 +48,7 @@ export type VpMaterialLine = {
   required_qty: number;
   reserved_qty: number;
   available: number;
+  free_for_allocation?: number;
   shortage: number;
   status: string | null;
   reservation_id: number;
@@ -70,6 +76,11 @@ export type VpRequirementRow = {
   gpn: string | null;
   due_date: string | null;
   job_item_id: number | null;
+  /** Pokrytí skladem + rezervacemi (Vydat vs Objednat). */
+  is_material_covered?: boolean;
+  /** Skutečné vydání na výrobu — shodně s plánovačem. */
+  is_material_released_to_production?: boolean;
+  /** @deprecated alias pro is_material_released_to_production */
   is_material_ready: boolean;
   coverage: "covered" | "uncovered";
   materials: VpMaterialLine[];
@@ -154,7 +165,13 @@ export async function postMaterialPurchaseOrder(payload: {
   supplier_customer_id: number;
   lines: MaterialPurchaseLinePayload[];
   header_note?: string | null;
-}): Promise<{ status: string; material_purchase_order_id: number; lines_count: number; supplier_name: string }> {
+}): Promise<{
+  status: string;
+  material_purchase_order_id: number;
+  order_number?: string;
+  lines_count: number;
+  supplier_name: string;
+}> {
   const res = await fetch(`${API_BASE}/planning/material/purchase-orders`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -185,6 +202,7 @@ export type MaterialIssuePayload = {
   reservation_id: number;
   qty: number;
   stock_item_id?: number | null;
+  heat_lot?: string | null;
   note?: string | null;
 };
 
@@ -200,6 +218,7 @@ export async function postMaterialIssue(payload: MaterialIssuePayload): Promise<
       reservation_id: payload.reservation_id,
       qty: payload.qty,
       stock_item_id: payload.stock_item_id ?? null,
+      heat_lot: payload.heat_lot?.trim() || null,
       note: payload.note?.trim() || null,
     }),
   });

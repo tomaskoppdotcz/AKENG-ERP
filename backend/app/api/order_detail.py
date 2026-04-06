@@ -24,6 +24,7 @@ def _customer_order_detail_dict(co: CustomerOrder) -> dict:
     "requested_ship_date": rs.isoformat() if rs else None,
     "note": getattr(co, "note", None),
     "order_type": str(ot).strip().lower(),
+    "workflow_status": getattr(co, "workflow_status", None),
   }
 
 
@@ -191,6 +192,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "logistic_mode": vp.logistic_mode,
         "source_type": vp.source_type,
         "status": vp.status,
+        "workflow_status": getattr(vp, "workflow_status", None),
       }
     )
 
@@ -388,6 +390,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "description": description_by_id.get(it.id) if have_description else None,
         "qty": it.qty,
         "due_date": it.due_date.isoformat() if it.due_date else None,
+        "workflow_status": getattr(it, "workflow_status", None),
         "sales_price_per_unit": price_by_id.get(it.id) if have_price_col else None,
         "sale_price_per_piece": _item_sale_price_per_piece(it.id),
         "vp_code": vp_by_item.get(it.id),

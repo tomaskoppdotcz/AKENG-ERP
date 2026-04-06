@@ -1,5 +1,5 @@
 /** Dual-screen kiosk (obrazovky bez ERP loginu): `/kiosk/admin?machine=…` a `/kiosk/production?machine=…` — vstup v `main.tsx`. */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import WorkspaceTabBar from "./components/WorkspaceTabBar.tsx";
 import WorkspaceTabPanel from "./components/WorkspaceTabPanel.tsx";
 import LoginPage from "./pages/LoginPage.tsx";
@@ -11,6 +11,9 @@ import MaterialStockPage from "./pages/MaterialStockPage";
 import ProductStockPage from "./pages/ProductStockPage";
 import ProductionOrdersPage from "./pages/ProductionOrdersPage";
 import ProductionOrderDetailPage from "./pages/ProductionOrderDetailPage";
+import MaterialRequirementsPage from "./pages/MaterialRequirementsPage";
+import MaterialPurchaseOrdersPage from "./pages/MaterialPurchaseOrdersPage";
+import PlannerPage from "./pages/PlannerPage";
 import SettingsPage from "./pages/SettingsPage";
 import GlobalShellScanLookup from "./components/GlobalShellScanLookup.tsx";
 import TopNav from "./components/TopNav.tsx";
@@ -28,6 +31,8 @@ const NAV_ITEMS = [
   "Portfolio",
   "Sklad výrobků",
   "Sklad materiálu",
+  "Požadavky materiálu",
+  "Nákup materiálu",
   "Výroba",
   "Plánování",
   "Kvalita",
@@ -79,6 +84,48 @@ export default function App() {
     });
     setActiveWorkspaceTabId(built.key);
   }, []);
+
+  const dashboardLinkProps = useMemo(
+    () => ({
+      onOpenProductionOrder: (productionOrderId: number, title?: string) => {
+        openWorkspaceTab({
+          kind: "productionOrder",
+          productionOrderId,
+          title: title ?? `VP #${productionOrderId}`,
+        });
+        setActiveModule("Výroba");
+      },
+      onOpenCustomerOrder: (customerOrderId: number, title?: string) => {
+        openWorkspaceTab({
+          kind: "orderCard",
+          customerOrderId,
+          title: title?.trim() || `Zakázka #${customerOrderId}`,
+        });
+        setActiveModule("Zakázky");
+      },
+      onOpenMaterialRequirements: () => {
+        openWorkspaceTab({
+          kind: "module",
+          moduleKey: "Požadavky materiálu",
+          title: "Požadavky materiálu",
+        });
+        setActiveModule("Požadavky materiálu");
+      },
+      onOpenMaterialPurchase: () => {
+        openWorkspaceTab({
+          kind: "module",
+          moduleKey: "Nákup materiálu",
+          title: "Nákup materiálu",
+        });
+        setActiveModule("Nákup materiálu");
+      },
+      onOpenPlanning: () => {
+        openWorkspaceTab({ kind: "module", moduleKey: "Plánování", title: "Plánování" });
+        setActiveModule("Plánování");
+      },
+    }),
+    [openWorkspaceTab]
+  );
 
   const applyScanLookupResult = useCallback(
     (res: ScanLookupResponse) => {
@@ -208,6 +255,10 @@ export default function App() {
     }
     if (tab.kind === "productStock") {
       setActiveModule("Sklad výrobků");
+      return;
+    }
+    if (tab.kind === "materialPurchaseOrder") {
+      setActiveModule("Nákup materiálu");
     }
   }, [isAuthenticated, activeWorkspaceTabId, workspaceTabs]);
 
@@ -338,7 +389,7 @@ export default function App() {
 
   function renderModuleBody(moduleKey: string): React.ReactNode {
     if (moduleKey === "Nástěnka") {
-      return <DashboardPage />;
+      return <DashboardPage {...dashboardLinkProps} />;
     }
     if (moduleKey === "Zakázky") {
       return (
@@ -510,10 +561,37 @@ export default function App() {
         />
       );
     }
+    if (moduleKey === "Požadavky materiálu") {
+      return (
+        <MaterialRequirementsPage
+          onOpenProductionOrderInWorkspaceTab={(productionOrderId, titleHint) =>
+            openWorkspaceTab({ kind: "productionOrder", productionOrderId, title: titleHint })
+          }
+          onOpenCustomerOrderInWorkspaceTab={(customerOrderId, titleHint) =>
+            openWorkspaceTab({ kind: "orderCard", customerOrderId, title: titleHint })
+          }
+          onOpenMaterialPurchaseOrderInWorkspaceTab={(materialPurchaseOrderId, titleHint) =>
+            openWorkspaceTab({ kind: "materialPurchaseOrder", materialPurchaseOrderId, title: titleHint })
+          }
+        />
+      );
+    }
+    if (moduleKey === "Nákup materiálu") {
+      return (
+        <MaterialPurchaseOrdersPage
+          onOpenPurchaseOrderInWorkspaceTab={(materialPurchaseOrderId, titleHint) =>
+            openWorkspaceTab({ kind: "materialPurchaseOrder", materialPurchaseOrderId, title: titleHint })
+          }
+        />
+      );
+    }
     if (moduleKey === "Nastavení") {
       return <SettingsPage onBackToDashboard={openHomeModuleTab} />;
     }
-    if (moduleKey === "Plánování" || moduleKey === "Kvalita") {
+    if (moduleKey === "Plánování") {
+      return <PlannerPage {...dashboardLinkProps} />;
+    }
+    if (moduleKey === "Kvalita") {
       return <ModulePlaceholderPage moduleName={moduleKey} />;
     }
     return <ModulePlaceholderPage moduleName={moduleKey} />;
@@ -546,7 +624,7 @@ export default function App() {
             renderModule={renderModuleBody}
           />
         ) : (
-          <DashboardPage />
+          <DashboardPage {...dashboardLinkProps} />
         )}
       </div>
       <ErpPreviewDrawer open={previewDrawer} onClose={() => setPreviewDrawer(null)} />

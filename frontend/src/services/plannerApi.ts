@@ -1,12 +1,19 @@
 export type PlannerGanttItem = {
   operationId: number;
   orderItemId: number | null;
+  /** VP id when work_order_no matches production_orders.vp_code */
+  productionOrderId?: number | null;
   workOrderNo: string | null;
   gpn: string | null;
   operationName: string;
   operationNo: number;
   machineId: number;
   machineName: string;
+  /** Kód pracoviště (knihovna), pro štítky v Gantt bloku */
+  workplaceCode?: string | null;
+  /** Následující pracoviště na VP (routing) */
+  nextWorkplaceCode?: string | null;
+  workplaceId?: number;
   status: string;
   plannedStart: string | null;
   plannedEnd: string | null;
@@ -23,6 +30,9 @@ export type PlannerGanttItem = {
 export type PlannerGanttMachineGroup = {
   machineId: number;
   machineName: string;
+  /** Řádek Gantt = pracoviště z knihovny (Settings → Pracoviště) */
+  workplaceId?: number;
+  workplaceCode?: string | null;
   items: PlannerGanttItem[];
 };
 

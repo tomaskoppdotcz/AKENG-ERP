@@ -1,13 +1,37 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import select
+from pydantic import BaseModel, model_validator
+from sqlalchemy import inspect as sa_inspect, select, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.technology_library import TechnologyTemplate, TechnologyTemplateOperation
 from app.models.master_data import Machine
+from app.models.technology_library import TechnologyTemplate, TechnologyTemplateOperation
+from app.services.workplace_scheduling_anchor import get_or_create_scheduling_machine_for_workplace
 
 router = APIRouter()
+
+
+def ensure_technology_sqlite_schema(engine_: Engine) -> None:
+    try:
+        url = str(engine_.url)
+    except Exception:
+        return
+    insp = sa_inspect(engine_)
+    if "technology_template_operations" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("technology_template_operations")}
+    if "workplace_library_item_id" in cols:
+        return
+    with engine_.begin() as conn:
+        if url.startswith("sqlite"):
+            conn.execute(
+                text("ALTER TABLE technology_template_operations ADD COLUMN workplace_library_item_id INTEGER")
+            )
+        else:
+            conn.execute(
+                text("ALTER TABLE technology_template_operations ADD COLUMN workplace_library_item_id INTEGER NULL")
+            )
 
 
 class TechnologyTemplateCreate(BaseModel):
@@ -21,11 +45,20 @@ class TechnologyTemplateCreate(BaseModel):
 class TechnologyTemplateOperationCreate(BaseModel):
     operation_no: int
     operation_name: str
-    machine_code: str
+    workplace_library_item_id: int | None = None
+    machine_code: str | None = None
     setup_time_min: float = 0
     labor_time_per_piece_min: float = 0
     buffer_after_min: int = 20
     note: str | None = None
+
+    @model_validator(mode="after")
+    def require_workplace_or_legacy_machine(self):
+        wid = self.workplace_library_item_id
+        mc = (self.machine_code or "").strip()
+        if wid is None and not mc:
+            raise ValueError("Zadejte workplace_library_item_id (pracoviště) nebo legacy machine_code.")
+        return self
 
 
 class TechnologyTemplateFullCreate(BaseModel):
@@ -44,6 +77,30 @@ class TechnologyTemplateUpdate(BaseModel):
     material: str | None = None
     product_group: str | None = None
     operations: list[TechnologyTemplateOperationCreate]
+
+
+def _materialize_tp_operation_row(db: Session, payload: TechnologyTemplateOperationCreate) -> dict:
+    """Vrátí dict pro TechnologyTemplateOperation: machine_code, machine_name, workplace_library_item_id."""
+    wid = payload.workplace_library_item_id
+    if wid is not None:
+        m = get_or_create_scheduling_machine_for_workplace(db, int(wid))
+        if m is None:
+            raise HTTPException(status_code=404, detail="Pracoviště (workplace_library_item_id) nebylo nalezeno.")
+        return {
+            "machine_code": m.machine_code,
+            "machine_name": m.name,
+            "workplace_library_item_id": int(wid),
+        }
+    mc = (payload.machine_code or "").strip()
+    m = db.scalar(select(Machine).where(Machine.machine_code == mc))
+    if m is None:
+        raise HTTPException(status_code=400, detail=f"Legacy stroj s kódem {mc!r} neexistuje.")
+    w = m.workplace_library_item_id
+    return {
+        "machine_code": m.machine_code,
+        "machine_name": m.name,
+        "workplace_library_item_id": int(w) if w is not None else None,
+    }
 
 
 @router.get("/templates")
@@ -90,6 +147,7 @@ def get_template_detail(template_id: int, db: Session = Depends(get_db)):
                 "id": op.id,
                 "operation_no": op.operation_no,
                 "operation_name": op.operation_name,
+                "workplace_library_item_id": getattr(op, "workplace_library_item_id", None),
                 "machine_code": op.machine_code,
                 "machine_name": op.machine_name,
                 "setup_time_min": op.setup_time_min,
@@ -123,6 +181,7 @@ def get_template_by_gpn(gpn: str, db: Session = Depends(get_db)):
                 "id": op.id,
                 "operation_no": op.operation_no,
                 "operation_name": op.operation_name,
+                "workplace_library_item_id": getattr(op, "workplace_library_item_id", None),
                 "machine_code": op.machine_code,
                 "machine_name": op.machine_name,
                 "setup_time_min": op.setup_time_min,
@@ -174,17 +233,15 @@ def add_template_operation(
     if not template:
         raise HTTPException(status_code=404, detail="Technology template not found")
 
-    machine = db.scalar(
-        select(Machine).where(Machine.machine_code == payload.machine_code)
-    )
-    machine_name = machine.name if machine else None
+    res = _materialize_tp_operation_row(db, payload)
 
     row = TechnologyTemplateOperation(
         template_id=template_id,
         operation_no=payload.operation_no,
         operation_name=payload.operation_name,
-        machine_code=payload.machine_code,
-        machine_name=machine_name,
+        workplace_library_item_id=res["workplace_library_item_id"],
+        machine_code=res["machine_code"],
+        machine_name=res["machine_name"],
         setup_time_min=payload.setup_time_min,
         labor_time_per_piece_min=payload.labor_time_per_piece_min,
         buffer_after_min=payload.buffer_after_min,
@@ -223,17 +280,15 @@ def create_full_template(payload: TechnologyTemplateFullCreate, db: Session = De
     created_ops = []
 
     for op in payload.operations:
-        machine = db.scalar(
-            select(Machine).where(Machine.machine_code == op.machine_code)
-        )
-        machine_name = machine.name if machine else None
+        res = _materialize_tp_operation_row(db, op)
 
         row = TechnologyTemplateOperation(
             template_id=template.id,
             operation_no=op.operation_no,
             operation_name=op.operation_name,
-            machine_code=op.machine_code,
-            machine_name=machine_name,
+            workplace_library_item_id=res["workplace_library_item_id"],
+            machine_code=res["machine_code"],
+            machine_name=res["machine_name"],
             setup_time_min=op.setup_time_min,
             labor_time_per_piece_min=op.labor_time_per_piece_min,
             buffer_after_min=op.buffer_after_min,
@@ -244,7 +299,8 @@ def create_full_template(payload: TechnologyTemplateFullCreate, db: Session = De
             {
                 "operation_no": op.operation_no,
                 "operation_name": op.operation_name,
-                "machine_code": op.machine_code,
+                "machine_code": res["machine_code"],
+                "workplace_library_item_id": res["workplace_library_item_id"],
             }
         )
 
@@ -289,17 +345,15 @@ def update_template(template_id: int, payload: TechnologyTemplateUpdate, db: Ses
     created_ops = []
 
     for op in payload.operations:
-        machine = db.scalar(
-            select(Machine).where(Machine.machine_code == op.machine_code)
-        )
-        machine_name = machine.name if machine else None
+        res = _materialize_tp_operation_row(db, op)
 
         row = TechnologyTemplateOperation(
             template_id=template.id,
             operation_no=op.operation_no,
             operation_name=op.operation_name,
-            machine_code=op.machine_code,
-            machine_name=machine_name,
+            workplace_library_item_id=res["workplace_library_item_id"],
+            machine_code=res["machine_code"],
+            machine_name=res["machine_name"],
             setup_time_min=op.setup_time_min,
             labor_time_per_piece_min=op.labor_time_per_piece_min,
             buffer_after_min=op.buffer_after_min,
@@ -310,7 +364,8 @@ def update_template(template_id: int, payload: TechnologyTemplateUpdate, db: Ses
             {
                 "operation_no": op.operation_no,
                 "operation_name": op.operation_name,
-                "machine_code": op.machine_code,
+                "machine_code": res["machine_code"],
+                "workplace_library_item_id": res["workplace_library_item_id"],
             }
         )
 
@@ -389,12 +444,18 @@ def seed_sample_templates(db: Session = Depends(get_db)):
         for op in sample["operations"]:
             machine = db.scalar(select(Machine).where(Machine.machine_code == op["machine_code"]))
             machine_name = machine.name if machine else None
+            wp_id = (
+                int(machine.workplace_library_item_id)
+                if machine is not None and machine.workplace_library_item_id is not None
+                else None
+            )
 
             db.add(
                 TechnologyTemplateOperation(
                     template_id=template.id,
                     operation_no=op["operation_no"],
                     operation_name=op["operation_name"],
+                    workplace_library_item_id=wp_id,
                     machine_code=op["machine_code"],
                     machine_name=machine_name,
                     setup_time_min=op["setup_time_min"],

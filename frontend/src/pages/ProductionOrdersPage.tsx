@@ -106,15 +106,26 @@ export default function ProductionOrdersPage({
 
   return (
     <div style={{ paddingTop: 10 }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div>
           <div style={UI.pageTitle}>Výrobní příkazy</div>
           <div style={UI.sectionSubtitle}>Přehled všech VP napříč zákaznickými i interními zakázkami</div>
         </div>
 
-        <div style={{ ...UI.card, borderRadius: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 13, fontWeight: 800, color: "#475569" }}>Zobrazit:</span>
+        <div
+          style={{
+            ...UI.card,
+            borderRadius: 12,
+            padding: "8px 12px",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 8,
+            rowGap: 8,
+          }}
+        >
+          <span style={{ fontSize: 12, fontWeight: 800, color: "#475569", flexShrink: 0 }}>Zobrazit:</span>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
             {WORKFLOW_LIST_OPTIONS.map(({ id, label }) => {
               const active = workflowListFilter === id;
               return (
@@ -134,14 +145,19 @@ export default function ProductionOrdersPage({
               );
             })}
           </div>
-          <div style={UI.ordersFilterSearchWrap}>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Hledat VP, GPN, název, zakázku…"
-              style={UI.inputs.base}
-            />
-          </div>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Hledat VP, GPN, název, zakázku…"
+            style={{
+              ...UI.inputs.base,
+              flex: "1 1 200px",
+              minWidth: 160,
+              maxWidth: 420,
+              padding: "6px 10px",
+              fontSize: 13,
+            }}
+          />
         </div>
 
         <div style={{ ...UI.card, borderRadius: 14, padding: 0, overflow: "hidden" }}>
@@ -236,34 +252,16 @@ export default function ProductionOrdersPage({
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.status ?? "—"}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-                          {row.order_type === "internal" ? (
-                            <span
-                              style={{
-                                fontSize: 10,
-                                fontWeight: 900,
-                                textTransform: "uppercase",
-                                letterSpacing: "0.04em",
-                                color: "#475569",
-                                background: "#f1f5f9",
-                                border: "1px solid #e2e8f0",
-                                borderRadius: 6,
-                                padding: "2px 6px",
-                              }}
-                            >
-                              Interní
-                            </span>
-                          ) : null}
-                          {row.customer_order_id != null && onOpenCustomerOrderCard && row.zakazka ? (
+                          <span style={{ fontWeight: 800 }}>{row.zakazka ?? "—"}</span>
+                          {row.customer_order_id != null && onOpenCustomerOrderCard ? (
                             <button
                               type="button"
-                              style={linkButtonReset}
+                              style={{ ...UI.buttons.secondary, padding: "2px 8px", fontSize: 11 }}
                               onClick={() => onOpenCustomerOrderCard(row.customer_order_id!)}
                             >
-                              {row.zakazka}
+                              Náhled
                             </button>
-                          ) : (
-                            row.zakazka ?? "—"
-                          )}
+                          ) : null}
                         </div>
                       </td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.line_no ?? "—"}</td>

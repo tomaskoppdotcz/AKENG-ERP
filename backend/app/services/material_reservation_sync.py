@@ -9,18 +9,150 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.material_stock import MaterialReservation
+from app.models.material_stock import MaterialReservation, MaterialStockItem
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
 from app.models.portfolio import PortfolioTechnologyTemplate
-from app.services.business_workflow import workflow_record_active
+from app.services.business_workflow import workflow_active_sql, workflow_record_active
 
 logger = logging.getLogger(__name__)
 
 # "Active" for availability + material requirements (not the literal DB value "active")
 MATERIAL_RESERVATION_ACTIVE_STATUSES: frozenset[str] = frozenset({"planned", "reserved"})
+
+
+def sum_eligible_reserved_qty_for_material(
+    db: Session,
+    material_library_item_id: int,
+    *,
+    exclude_reservation_id: int | None = None,
+) -> float:
+    """
+    Součet reserved_qty jen u rezervací, které vstupují do požadavků (aktivní VP, položka, zakázka).
+    Shodné filtry jako material_requirements_query — bez „mrtvých“ řádků blokujících sklad.
+    """
+    mr = MaterialReservation
+    stmt = (
+        select(func.coalesce(func.sum(mr.reserved_qty), 0.0))
+        .select_from(mr)
+        .join(ProductionOrder, ProductionOrder.id == mr.production_order_id)
+        .join(
+            JobItem,
+            and_(
+                JobItem.id == mr.job_item_id,
+                JobItem.id == ProductionOrder.job_item_id,
+            ),
+        )
+        .join(Job, Job.id == JobItem.job_id)
+        .outerjoin(CustomerOrder, CustomerOrder.id == Job.customer_order_id)
+        .where(
+            mr.material_library_item_id == int(material_library_item_id),
+            mr.status.in_(tuple(MATERIAL_RESERVATION_ACTIVE_STATUSES)),
+            mr.is_active.is_(True),
+            workflow_active_sql(ProductionOrder.workflow_status),
+            workflow_active_sql(JobItem.workflow_status),
+            or_(
+                Job.customer_order_id.is_(None),
+                and_(CustomerOrder.id.isnot(None), workflow_active_sql(CustomerOrder.workflow_status)),
+            ),
+        )
+    )
+    if exclude_reservation_id is not None:
+        stmt = stmt.where(mr.id != int(exclude_reservation_id))
+    return float(db.scalar(stmt) or 0.0)
+
+
+def enforce_material_reservation_stock_ceiling(db: Session) -> dict[str, Any]:
+    """
+    Po přepočtech: součet eligible reserved_qty na materiál nesmí překročit skutečný stav skladu.
+    Převis se odebírá od nejnovějších rezervací (vyšší id).
+    """
+    mr = MaterialReservation
+    rows = db.scalars(
+        select(mr)
+        .join(ProductionOrder, ProductionOrder.id == mr.production_order_id)
+        .join(
+            JobItem,
+            and_(
+                JobItem.id == mr.job_item_id,
+                JobItem.id == ProductionOrder.job_item_id,
+            ),
+        )
+        .join(Job, Job.id == JobItem.job_id)
+        .outerjoin(CustomerOrder, CustomerOrder.id == Job.customer_order_id)
+        .where(
+            mr.status.in_(tuple(MATERIAL_RESERVATION_ACTIVE_STATUSES)),
+            mr.is_active.is_(True),
+            workflow_active_sql(ProductionOrder.workflow_status),
+            workflow_active_sql(JobItem.workflow_status),
+            or_(
+                Job.customer_order_id.is_(None),
+                and_(CustomerOrder.id.isnot(None), workflow_active_sql(CustomerOrder.workflow_status)),
+            ),
+        )
+        .order_by(mr.material_library_item_id.asc(), mr.id.asc())
+    ).all()
+    by_mid: dict[int, list[MaterialReservation]] = {}
+    for r in rows:
+        mid = int(r.material_library_item_id)
+        by_mid.setdefault(mid, []).append(r)
+
+    materials_capped = 0
+    rows_adjusted = 0
+    po_ids: set[int] = set()
+    for mid, lst in by_mid.items():
+        stock = float(
+            db.scalar(
+                select(func.coalesce(func.sum(MaterialStockItem.current_qty), 0.0)).where(
+                    MaterialStockItem.material_library_item_id == mid
+                )
+            )
+            or 0.0
+        )
+        total_r = sum(float(x.reserved_qty or 0.0) for x in lst)
+        if total_r <= stock + 1e-6:
+            continue
+        materials_capped += 1
+        excess = total_r - stock
+        logger.warning(
+            "[material_reservation] stock_ceiling material_library_item_id=%s stock=%s reserved_total=%s excess=%s",
+            mid,
+            stock,
+            total_r,
+            excess,
+        )
+        for r in reversed(lst):
+            if excess <= 1e-9:
+                break
+            rq = float(r.reserved_qty or 0.0)
+            if rq <= 1e-9:
+                continue
+            cut = min(rq, excess)
+            r.reserved_qty = rq - cut
+            excess -= cut
+            rows_adjusted += 1
+            po_ids.add(int(r.production_order_id))
+            if r.reserved_qty <= 1e-9:
+                r.reserved_qty = 0.0
+                r.status = "planned"
+            else:
+                r.status = "reserved"
+            db.flush()
+
+    if po_ids:
+        from app.services.material_readiness import refresh_material_readiness_for_production_order_ids
+
+        refresh_material_readiness_for_production_order_ids(db, po_ids)
+
+    out = {
+        "materials_capped": materials_capped,
+        "rows_adjusted": rows_adjusted,
+    }
+    if materials_capped:
+        logger.info("[material_reservation_sync] enforce_stock_ceiling %s", out)
+    return out
 
 
 def tp_auto_note_matches_vp(note: str | None, vp_code: str) -> bool:

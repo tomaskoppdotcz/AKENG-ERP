@@ -142,3 +142,29 @@ export async function deleteProductStockMovement(movementId: number): Promise<{ 
   if (!res.ok) throw new Error(await readErrorMessage(res, "Nepodařilo se smazat pohyb."));
   return res.json();
 }
+
+const ORDERS_API = `${API_BASE}/production-orders`;
+
+export async function issueProductFromStock(payload: {
+  product_stock_item_id: number;
+  qty: number;
+  job_item_id?: number | null;
+  customer_order_id?: number | null;
+  note?: string | null;
+}): Promise<{ status: string; issue_id: number; qty: number }> {
+  const res = await fetch(`${ORDERS_API}/product/issue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      product_stock_item_id: payload.product_stock_item_id,
+      qty: Math.floor(payload.qty),
+      job_item_id: payload.job_item_id ?? null,
+      customer_order_id: payload.customer_order_id ?? null,
+      note: payload.note?.trim() || null,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Výdej výrobku se nepodařil."));
+  }
+  return res.json();
+}

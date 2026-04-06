@@ -14,7 +14,13 @@ import {
 
 type Props = {
   onBackToDashboard?: () => void;
+  /** Klasický fullscreen detail (záložka má přednost při kliknutí na řádek). */
   onOpenItemDetail?: (item: PortfolioItem) => void;
+  /** Klik na řádek otevře položku v pracovní záložce. */
+  onOpenItemInWorkspaceTab?: (item: PortfolioItem) => void;
+  /** Po načtení vyplní vyhledávání (např. z odkazu GPN z jiného modulu). */
+  initialSearchQuery?: string | null;
+  onConsumedInitialSearch?: () => void;
 };
 
 function searchValue(v: string) {
@@ -39,7 +45,12 @@ function formatCzk(value: number | null | undefined): string {
   return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
 }
 
-export default function PortfolioPage({ onOpenItemDetail }: Props) {
+export default function PortfolioPage({
+  onOpenItemDetail,
+  onOpenItemInWorkspaceTab,
+  initialSearchQuery,
+  onConsumedInitialSearch,
+}: Props) {
   const [items, setItems] = useState<PortfolioItem[]>([]);
   const [loading, setLoading] = useState(true);
   /** Master zákazníci pro dropdown (musí být deklaráno před jakýmkoli useMemo/JSX, které je používá). */
@@ -92,6 +103,13 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const q = initialSearchQuery?.trim();
+    if (!q) return;
+    setQuery(q);
+    onConsumedInitialSearch?.();
+  }, [initialSearchQuery, onConsumedInitialSearch]);
 
   useEffect(() => {
     let cancelled = false;
@@ -558,7 +576,10 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                   {filtered.map((item) => (
                     <tr
                       key={item.id}
-                      onClick={() => onOpenItemDetail?.(item)}
+                      onClick={() => {
+                        if (onOpenItemInWorkspaceTab) onOpenItemInWorkspaceTab(item);
+                        else onOpenItemDetail?.(item);
+                      }}
                       onMouseEnter={() => setHoveredId(item.id)}
                       onMouseLeave={() => setHoveredId((id) => (id === item.id ? null : id))}
                       style={{ cursor: "pointer", background: hoveredId === item.id ? "#eff6ff" : "#fff" }}
@@ -584,7 +605,7 @@ export default function PortfolioPage({ onOpenItemDetail }: Props) {
                       >
                         {item.active_template_id != null ? "ANO" : "NE"}
                       </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6 }}>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button
                           type="button"
                           style={UI.buttons.secondary}

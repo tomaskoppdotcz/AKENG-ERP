@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import SimpleModal from "../components/SimpleModal";
 import { UI } from "../styles/ui";
 import { getPortfolioItems, type PortfolioItem } from "../services/portfolioApi";
 import { getStorageLocations, type StorageLocation } from "../services/storageLocationApi";
@@ -6,12 +7,14 @@ import {
   createProductStockItem,
   deleteProductStockItem,
   getProductStockItems,
+  issueProductFromStock,
   updateProductStockItem,
   type ProductStockItem,
 } from "../services/productStockApi";
 
 type Props = {
-  onOpenDetail?: (item: ProductStockItem) => void;
+  /** Klik na řádek — otevře detail v pracovní záložce. */
+  onOpenStockInWorkspaceTab: (item: ProductStockItem) => void;
 };
 
 function norm(value: string): string {
@@ -23,7 +26,7 @@ function dashScan(v: string | null | undefined): string {
   return t ? t : "—";
 }
 
-export default function ProductStockPage({ onOpenDetail }: Props) {
+export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
   const [rows, setRows] = useState<ProductStockItem[]>([]);
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
   const [locations, setLocations] = useState<StorageLocation[]>([]);
@@ -43,6 +46,13 @@ export default function ProductStockPage({ onOpenDetail }: Props) {
   const [unit, setUnit] = useState("ks");
   const [note, setNote] = useState("");
   const [isActive, setIsActive] = useState(true);
+
+  const [issueRow, setIssueRow] = useState<ProductStockItem | null>(null);
+  const [issueQty, setIssueQty] = useState("");
+  const [issueJobItemId, setIssueJobItemId] = useState("");
+  const [issueCustomerOrderId, setIssueCustomerOrderId] = useState("");
+  const [issueBusy, setIssueBusy] = useState(false);
+  const [issueError, setIssueError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -69,6 +79,47 @@ export default function ProductStockPage({ onOpenDetail }: Props) {
   useEffect(() => {
     loadData().catch(() => {});
   }, [loadData]);
+
+  async function submitIssue() {
+    if (!issueRow) return;
+    const q = Number(String(issueQty).replace(",", "."));
+    if (!Number.isFinite(q) || q <= 0) {
+      setIssueError("Zadejte platné množství větší než 0.");
+      return;
+    }
+    if (q > issueRow.current_qty + 1e-9) {
+      setIssueError("Množství je větší než stav na skladě.");
+      return;
+    }
+    const ji = issueJobItemId.trim();
+    const co = issueCustomerOrderId.trim();
+    const jobItemId = ji === "" ? null : Number(ji);
+    const customerOrderId = co === "" ? null : Number(co);
+    if (ji !== "" && !Number.isFinite(jobItemId)) {
+      setIssueError("ID položky zakázky musí být číslo.");
+      return;
+    }
+    if (co !== "" && !Number.isFinite(customerOrderId)) {
+      setIssueError("ID zakázky musí být číslo.");
+      return;
+    }
+    setIssueBusy(true);
+    setIssueError(null);
+    try {
+      await issueProductFromStock({
+        product_stock_item_id: issueRow.id,
+        qty: q,
+        job_item_id: jobItemId,
+        customer_order_id: customerOrderId,
+      });
+      setIssueRow(null);
+      await loadData();
+    } catch (e: unknown) {
+      setIssueError(e instanceof Error ? e.message : "Výdej se nepodařil.");
+    } finally {
+      setIssueBusy(false);
+    }
+  }
 
   const customerOptions = useMemo(() => {
     const names = new Set<string>();
@@ -346,7 +397,7 @@ export default function ProductStockPage({ onOpenDetail }: Props) {
                   {filtered.map((row) => (
                     <tr
                       key={row.id}
-                      onClick={() => onOpenDetail?.(row)}
+                      onClick={() => onOpenStockInWorkspaceTab(row)}
                       onMouseEnter={() => setHoverId(row.id)}
                       onMouseLeave={() => setHoverId((id) => (id === row.id ? null : id))}
                       style={{ cursor: "pointer", background: hoverId === row.id ? "#eff6ff" : "#fff" }}
@@ -369,7 +420,21 @@ export default function ProductStockPage({ onOpenDetail }: Props) {
                         {row.min_qty == null ? "—" : `${row.min_qty} ${row.unit || unitLabel}`}
                       </td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.unit?.trim() ? row.unit : "—"}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6 }}>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          style={UI.buttons.primary}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIssueRow(row);
+                            setIssueQty(row.current_qty > 0 ? String(row.current_qty) : "1");
+                            setIssueJobItemId("");
+                            setIssueCustomerOrderId("");
+                            setIssueError(null);
+                          }}
+                        >
+                          Vydat výrobek
+                        </button>
                         <button
                           type="button"
                           style={UI.buttons.secondary}
@@ -406,6 +471,63 @@ export default function ProductStockPage({ onOpenDetail }: Props) {
           ) : null}
         </div>
       </div>
+
+      <SimpleModal
+        title="Vydat výrobek"
+        open={issueRow != null}
+        onClose={() => !issueBusy && setIssueRow(null)}
+        footer={
+          <>
+            <button type="button" style={UI.buttons.secondary} disabled={issueBusy} onClick={() => setIssueRow(null)}>
+              Zrušit
+            </button>
+            <button type="button" style={UI.buttons.primary} disabled={issueBusy} onClick={() => void submitIssue()}>
+              {issueBusy ? "Ukládám…" : "Potvrdit výdej"}
+            </button>
+          </>
+        }
+      >
+        {issueRow ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ fontSize: 13, color: "#64748b" }}>
+              {issueRow.portfolio_gpn} — {issueRow.portfolio_name} (stav {issueRow.current_qty} {issueRow.unit || "ks"})
+            </div>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontWeight: 800 }}>Množství</span>
+              <input
+                style={UI.inputs.base}
+                type="text"
+                inputMode="decimal"
+                value={issueQty}
+                onChange={(e) => setIssueQty(e.target.value)}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontWeight: 800 }}>ID položky zakázky (volitelné)</span>
+              <input
+                style={UI.inputs.base}
+                type="text"
+                inputMode="numeric"
+                value={issueJobItemId}
+                onChange={(e) => setIssueJobItemId(e.target.value)}
+                placeholder="job_item_id"
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontWeight: 800 }}>ID zakázky zákazníka (volitelné)</span>
+              <input
+                style={UI.inputs.base}
+                type="text"
+                inputMode="numeric"
+                value={issueCustomerOrderId}
+                onChange={(e) => setIssueCustomerOrderId(e.target.value)}
+                placeholder="customer_order_id"
+              />
+            </label>
+            {issueError ? <div style={{ color: "#b91c1c", fontWeight: 700 }}>{issueError}</div> : null}
+          </div>
+        ) : null}
+      </SimpleModal>
     </div>
   );
 }

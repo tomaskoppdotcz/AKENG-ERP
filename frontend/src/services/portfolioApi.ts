@@ -232,6 +232,14 @@ export async function getPortfolioItems(): Promise<PortfolioItem[]> {
   return res.json();
 }
 
+export async function getPortfolioItem(id: number): Promise<PortfolioItem> {
+  const res = await fetch(`${API_BASE}/portfolio/items/${id}`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se načíst položku portfolia."));
+  }
+  return res.json();
+}
+
 export async function createPortfolioItem(payload: PortfolioItemCreatePayload): Promise<PortfolioItem> {
   const res = await fetch(`${API_BASE}/portfolio/items`, {
     method: "POST",

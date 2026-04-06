@@ -517,21 +517,59 @@ def _load_material_traceability(db, po: ProductionOrder, portfolio: PortfolioIte
             out["weight_per_piece_kg"] = f"{computed:.3f}"
 
     cert_row: tuple[str, str] | None = None
+    stock_location_row: str | None = None
     if mat_lib_id is not None:
         vp_tr = vp_material_traceability_for_input(db, po, mat_lib_id)
-        hl = vp_tr.get("heat_lot")
-        if hl:
-            out["heat_lot"] = _first_non_empty(str(hl).strip(), out["heat_lot"]) or "—"
-        cn = vp_tr.get("certificate_no")
-        if cn and str(cn).strip():
-            cert_row = ("Číslo atestu", str(cn).strip())
+        if vp_tr.get("has_issued_movement"):
+            mc = vp_tr.get("material_code")
+            mn = vp_tr.get("material_name")
+            md = vp_tr.get("material_dimension")
+            if mc:
+                out["material_code"] = _first_non_empty(str(mc).strip(), out["material_code"]) or "—"
+            if mn:
+                out["material_name"] = _first_non_empty(str(mn).strip(), out["material_name"]) or "—"
+            if md:
+                out["material_dimension"] = _first_non_empty(str(md).strip(), out["material_dimension"]) or "—"
+            hl = vp_tr.get("heat_lot")
+            if hl and str(hl).strip():
+                out["heat_lot"] = _first_non_empty(str(hl).strip(), out["heat_lot"]) or "—"
+            msc = vp_tr.get("movement_scan_code")
+            if msc and str(msc).strip():
+                out["material_move_scan_code"] = str(msc).strip()
+            lp = vp_tr.get("length_per_piece_mm")
+            if lp is not None:
+                try:
+                    out["length_per_piece_mm"] = f"{float(lp):g}"
+                except (TypeError, ValueError):
+                    pass
+            wp = vp_tr.get("weight_per_piece_kg")
+            if wp is not None:
+                try:
+                    out["weight_per_piece_kg"] = f"{float(wp):g}"
+                except (TypeError, ValueError):
+                    pass
+            loc = vp_tr.get("stock_location")
+            if loc and str(loc).strip():
+                stock_location_row = str(loc).strip()
+            cn = vp_tr.get("certificate_no")
+            if cn and str(cn).strip():
+                cert_row = ("Číslo atestu", str(cn).strip())
+        else:
+            hl = vp_tr.get("heat_lot")
+            if hl and str(hl).strip():
+                out["heat_lot"] = _first_non_empty(str(hl).strip(), out["heat_lot"]) or "—"
+            cn = vp_tr.get("certificate_no")
+            if cn and str(cn).strip():
+                cert_row = ("Číslo atestu", str(cn).strip())
 
     rows_out: list[tuple[str, str]] = [
         ("Kód materiálu", out["material_code"]),
         ("Materiál", out["material_name"]),
         ("Rozměr", out["material_dimension"]),
-        ("Tavba / šarže", out["heat_lot"]),
     ]
+    if stock_location_row:
+        rows_out.append(("Lokace skladové karty", stock_location_row))
+    rows_out.append(("Tavba / šarže", out["heat_lot"]))
     if cert_row is not None:
         rows_out.append(cert_row)
     rows_out.extend(
@@ -756,7 +794,7 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         _draw_barcode(c, po.scan_code or "", barcode_x + 1.2 * mm, barcode_y + 0.8 * mm, width=barcode_w_main - 2.4 * mm, height=barcode_h_main - 1.6 * mm)
 
         y = header_top - block_h - 8 * mm
-        trace_h = 40 * mm
+        trace_h = 46 * mm
         c.setFillColor(colors.HexColor(AKENG_TRACE_FILL))
         c.setStrokeColor(colors.HexColor(AKENG_BORDER_SOFT))
         c.roundRect(margin_x, y - trace_h, w - 2 * margin_x, trace_h, 3, fill=1, stroke=1)

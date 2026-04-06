@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import SimpleModal from "../components/SimpleModal";
 import { UI } from "../styles/ui";
-import { getMaterialStockItems, type MaterialStockItem } from "../services/materialStockApi";
+import {
+  getMaterialIssueProposal,
+  getMaterialStockItems,
+  type MaterialIssueProposalResponse,
+  type MaterialStockItem,
+} from "../services/materialStockApi";
 import {
   getMaterialRequirements,
   getMaterialRequirementsByVp,
@@ -20,6 +25,7 @@ import {
 type Props = {
   onOpenProductionOrderInWorkspaceTab?: (productionOrderId: number, titleHint?: string) => void;
   onOpenCustomerOrderInWorkspaceTab?: (customerOrderId: number, titleHint?: string) => void;
+  onOpenMaterialPurchaseOrderInWorkspaceTab?: (materialPurchaseOrderId: number, titleHint?: string) => void;
 };
 
 type ViewMode = "by_vp" | "by_material";
@@ -199,6 +205,7 @@ function buildPurchaseDraftForVp(vp: VpRequirementRow): PurchaseDraftLine[] {
 export default function MaterialRequirementsPage({
   onOpenProductionOrderInWorkspaceTab,
   onOpenCustomerOrderInWorkspaceTab,
+  onOpenMaterialPurchaseOrderInWorkspaceTab,
 }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>("by_vp");
   const [rows, setRows] = useState<MaterialRequirementRow[]>([]);
@@ -215,7 +222,11 @@ export default function MaterialRequirementsPage({
   const [issueReservationId, setIssueReservationId] = useState<number | "">("");
   const [issueQty, setIssueQty] = useState("");
   const [issueStockItemId, setIssueStockItemId] = useState<number | "">("");
+  const [issueHeatLot, setIssueHeatLot] = useState("");
   const [stockOptions, setStockOptions] = useState<MaterialStockItem[]>([]);
+  const [issueProposalLoading, setIssueProposalLoading] = useState(false);
+  const [issueProposalError, setIssueProposalError] = useState<string | null>(null);
+  const [issueProposalPayload, setIssueProposalPayload] = useState<MaterialIssueProposalResponse | null>(null);
   const [issueBusy, setIssueBusy] = useState(false);
   const [issueError, setIssueError] = useState<string | null>(null);
 
@@ -277,9 +288,12 @@ export default function MaterialRequirementsPage({
   }, [purchaseOpen]);
 
   useEffect(() => {
-    if (!issueRow) return;
+    if (!issueRow || issueReservationId === "") return;
     let cancelled = false;
-    void getMaterialStockItems()
+    const flat = flatPendingReservations(issueRow);
+    const sel = flat.find((x) => x.reservation_id === Number(issueReservationId));
+    const jId = sel?.rel.job_item_id;
+    void getMaterialStockItems(jId != null ? { forJobItemId: jId } : undefined)
       .then((items) => {
         if (cancelled) return;
         setStockOptions(items.filter((s) => s.material_library_item_id === issueRow.material_library_item_id));
@@ -290,7 +304,44 @@ export default function MaterialRequirementsPage({
     return () => {
       cancelled = true;
     };
-  }, [issueRow]);
+  }, [issueRow, issueReservationId]);
+
+  useEffect(() => {
+    if (!issueRow || issueReservationId === "") return;
+    let cancelled = false;
+    setIssueProposalLoading(true);
+    setIssueProposalError(null);
+    setIssueProposalPayload(null);
+    void getMaterialIssueProposal(Number(issueReservationId))
+      .then((data) => {
+        if (cancelled) return;
+        setIssueProposalPayload(data);
+        const p = data.proposal;
+        if (p) {
+          setIssueStockItemId(p.stock_item_id);
+          const sq = p.suggested_issue_qty;
+          setIssueQty(sq > 0 ? String(sq) : "1");
+          setIssueHeatLot(p.heat_lot ?? "");
+        } else {
+          setIssueStockItemId("");
+          setIssueHeatLot("");
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setIssueProposalError(e instanceof Error ? e.message : "Návrh se nepodařilo načíst.");
+          setIssueProposalPayload(null);
+          setIssueStockItemId("");
+          setIssueHeatLot("");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIssueProposalLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [issueRow, issueReservationId]);
 
   const filteredMaterial = useMemo(() => {
     const codeQ = norm(materialCodeFilter);
@@ -341,6 +392,9 @@ export default function MaterialRequirementsPage({
     const defQty = first.reserved_qty > 0 ? first.reserved_qty : first.required_qty;
     setIssueQty(defQty > 0 ? String(defQty) : "1");
     setIssueStockItemId("");
+    setIssueHeatLot("");
+    setIssueProposalPayload(null);
+    setIssueProposalError(null);
     setIssueError(null);
   }
 
@@ -353,6 +407,9 @@ export default function MaterialRequirementsPage({
     const defQty = first.reserved_qty > 0 ? first.reserved_qty : first.required_qty;
     setIssueQty(defQty > 0 ? String(defQty) : "1");
     setIssueStockItemId("");
+    setIssueHeatLot("");
+    setIssueProposalPayload(null);
+    setIssueProposalError(null);
     setIssueError(null);
   }
 
@@ -367,11 +424,31 @@ export default function MaterialRequirementsPage({
     setPurchaseOpen(true);
   }
 
+  function closeIssueModal() {
+    if (issueBusy) return;
+    setIssueRow(null);
+    setIssueProposalPayload(null);
+    setIssueProposalError(null);
+    setIssueHeatLot("");
+  }
+
   async function submitIssue() {
     if (issueRow == null || issueReservationId === "") return;
     const q = Number(String(issueQty).replace(",", "."));
     if (!Number.isFinite(q) || q <= 0) {
       setIssueError("Zadejte platné množství větší než 0.");
+      return;
+    }
+    if (issueStockItemId !== "") {
+      const si = stockOptions.find((s) => s.id === Number(issueStockItemId));
+      if (si && q > si.available_qty + 1e-6) {
+        setIssueError(`Na vybrané kartě je k dispozici nejvýše ${formatQty(si.available_qty)}.`);
+        return;
+      }
+    } else if (issueProposalPayload?.proposal && q > issueProposalPayload.proposal.available_qty + 1e-6) {
+      setIssueError(
+        `Návrh FIFO má k dispozici nejvýše ${formatQty(issueProposalPayload.proposal.available_qty)}. Zadejte menší množství nebo jinou kartu.`
+      );
       return;
     }
     setIssueBusy(true);
@@ -381,8 +458,12 @@ export default function MaterialRequirementsPage({
         reservation_id: Number(issueReservationId),
         qty: q,
         stock_item_id: issueStockItemId === "" ? null : Number(issueStockItemId),
+        heat_lot: issueHeatLot.trim() || null,
       });
       setIssueRow(null);
+      setIssueProposalPayload(null);
+      setIssueProposalError(null);
+      setIssueHeatLot("");
       await loadData();
     } catch (e: unknown) {
       setIssueError(e instanceof Error ? e.message : "Vydání se nepodařilo.");
@@ -401,13 +482,19 @@ export default function MaterialRequirementsPage({
         qty_ordered: l.qty,
         traceability_note: l.traceability_note,
       }));
-      await postMaterialPurchaseOrder({
+      const created = await postMaterialPurchaseOrder({
         supplier_customer_id: Number(supplierId),
         lines,
         header_note: purchaseHeaderNote || null,
       });
       setPurchaseOpen(false);
       setPurchaseVp(null);
+      const poId = created.material_purchase_order_id;
+      const title =
+        created.order_number && created.supplier_name
+          ? `${created.order_number} · ${created.supplier_name}`
+          : undefined;
+      onOpenMaterialPurchaseOrderInWorkspaceTab?.(poId, title);
     } catch (e: unknown) {
       setPurchaseError(e instanceof Error ? e.message : "Uložení se nepodařilo.");
     } finally {
@@ -501,7 +588,7 @@ export default function MaterialRequirementsPage({
                   <th style={UI.th}>Typ</th>
                   <th style={UI.th}>Materiál VP</th>
                   <th style={UI.th}>Pokrytí</th>
-                  <th style={UI.th}>Materiál připraven</th>
+                  <th style={UI.th}>Vydáno na výrobu</th>
                   <th style={UI.th}>Akce</th>
                 </tr>
               </thead>
@@ -582,7 +669,9 @@ export default function MaterialRequirementsPage({
                             {cov ? "Pokryto" : "Nepokryto"}
                           </span>
                         </td>
-                        <td style={UI.td}>{vp.is_material_ready ? "Ano" : "Ne"}</td>
+                        <td style={UI.td}>
+                          {vp.is_material_released_to_production ?? vp.is_material_ready ? "Ano" : "Ne"}
+                        </td>
                         <td style={UI.td}>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                             {cov ? (
@@ -789,13 +878,18 @@ export default function MaterialRequirementsPage({
       <SimpleModal
         title="Vydat materiál"
         open={issueRow != null}
-        onClose={() => !issueBusy && setIssueRow(null)}
+        onClose={closeIssueModal}
         footer={
           <>
-            <button type="button" style={UI.buttons.secondary} disabled={issueBusy} onClick={() => setIssueRow(null)}>
+            <button type="button" style={UI.buttons.secondary} disabled={issueBusy} onClick={closeIssueModal}>
               Zrušit
             </button>
-            <button type="button" style={UI.buttons.primary} disabled={issueBusy} onClick={() => void submitIssue()}>
+            <button
+              type="button"
+              style={UI.buttons.primary}
+              disabled={issueBusy || issueProposalLoading}
+              onClick={() => void submitIssue()}
+            >
               {issueBusy ? "Ukládám…" : "Potvrdit výdej"}
             </button>
           </>
@@ -806,6 +900,74 @@ export default function MaterialRequirementsPage({
             <div style={{ fontSize: 13, color: "#64748b" }}>
               {issueRow.material.code} — {issueRow.material.name}
             </div>
+            {issueProposalLoading ? (
+              <div style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>Načítám návrh výdeje…</div>
+            ) : null}
+            {issueProposalError ? (
+              <div style={{ fontSize: 13, color: "#b45309", fontWeight: 700 }}>{issueProposalError}</div>
+            ) : null}
+            {!issueProposalLoading && issueProposalPayload && issueProposalPayload.proposal ? (
+              <div
+                style={{
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: "#f1f5f9",
+                  border: "1px solid #e2e8f0",
+                  color: "#334155",
+                }}
+              >
+                <span style={{ fontWeight: 800 }}>
+                  {issueProposalPayload.proposal.strategy === "stock_card_no_receipt"
+                    ? "Návrh výdeje (karta bez příjmu)"
+                    : "Návrh výdeje (FIFO z příjmu)"}
+                </span>
+                {" · "}
+                karta #{issueProposalPayload.proposal.stock_item_id}
+                {issueProposalPayload.proposal.location
+                  ? ` · ${issueProposalPayload.proposal.location}`
+                  : ""}
+                {" · "}
+                stav {formatQty(issueProposalPayload.proposal.current_qty)} · k disp. pro výdej{" "}
+                {formatQty(issueProposalPayload.proposal.available_qty)}
+                {issueProposalPayload.proposal.heat_lot
+                  ? ` · tavba / šarže ${issueProposalPayload.proposal.heat_lot}`
+                  : ""}
+                {issueProposalPayload.proposal.scan_code
+                  ? ` · sken ${issueProposalPayload.proposal.scan_code}`
+                  : ""}
+              </div>
+            ) : null}
+            {!issueProposalLoading && issueProposalPayload && issueProposalPayload.proposal?.heat_lot_must_be_manual ? (
+              <div
+                style={{
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: "#fffbeb",
+                  border: "1px solid #fde68a",
+                  color: "#92400e",
+                  fontWeight: 600,
+                }}
+              >
+                Skladová karta nemá z příjmu doplněnou tavbu ani šarži — vyplňte ji ručně (nebo upravte příjem).
+              </div>
+            ) : null}
+            {!issueProposalLoading && issueProposalPayload && !issueProposalPayload.proposal ? (
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 700,
+                  color: stockOptions.some((s) => s.available_qty > 1e-9) ? "#b45309" : "#b91c1c",
+                }}
+              >
+                {stockOptions.some((s) => s.available_qty > 1e-9)
+                  ? "Automatický návrh nebyl sestaven — vyberte skladovou kartu ručně (množství „k disp.“ je po odečtu rezervací ostatních zakázek)."
+                  : "Pro tento materiál nebyla nalezena skladová karta s dostatečným množstvím po odečtu cizích rezervací. Doplňte sklad nebo uvolněte rezervace."}
+              </div>
+            ) : null}
             {issueRow && flatPendingReservations(issueRow).length > 1 ? (
               <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <span style={{ fontWeight: 800 }}>Rezervace (VP)</span>
@@ -842,17 +1004,36 @@ export default function MaterialRequirementsPage({
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontWeight: 800 }}>Tavba / šarže</span>
+              <input
+                style={UI.inputs.base}
+                type="text"
+                value={issueHeatLot}
+                onChange={(e) => setIssueHeatLot(e.target.value)}
+                placeholder={
+                  issueProposalPayload?.proposal?.heat_lot_must_be_manual
+                    ? "Doplňte ručně (u karty chybí tavba z příjmu)"
+                    : "Volitelné — výchozí z nejstaršího příjmu vybrané karty"
+                }
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span style={{ fontWeight: 800 }}>Skladová karta (volitelné)</span>
               <select
                 style={UI.inputs.base}
                 value={issueStockItemId === "" ? "" : String(issueStockItemId)}
-                onChange={(e) => setIssueStockItemId(e.target.value === "" ? "" : Number(e.target.value))}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setIssueStockItemId(raw === "" ? "" : Number(raw));
+                  setIssueHeatLot("");
+                }}
               >
-                <option value="">Automaticky (nejvyšší dostupné množství)</option>
+                <option value="">Automaticky (dle návrhu / FIFO)</option>
                 {stockOptions.map((s) => (
                   <option key={s.id} value={String(s.id)}>
                     {s.location ? `${s.location} · ` : ""}
-                    {formatQty(s.available_qty)} k disp. (ks {s.id})
+                    k disp. {formatQty(s.available_qty)}
+                    {s.current_qty != null ? ` · stav ${formatQty(s.current_qty)}` : ""} (#{s.id})
                   </option>
                 ))}
               </select>

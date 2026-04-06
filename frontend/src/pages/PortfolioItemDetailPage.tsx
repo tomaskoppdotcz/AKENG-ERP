@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import DetailPageHeader from "../components/DetailPageHeader";
 import { UI } from "../styles/ui";
 import { getMaterialLibraryItems, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import {
@@ -23,6 +24,7 @@ import {
   type PortfolioTechnologyMaterial,
   type PortfolioTechnologyOperation,
 } from "../services/portfolioApi";
+import { buildErpUrl } from "../utils/erpDeepLink";
 
 type Props = {
   item?: PortfolioItem | null;
@@ -517,83 +519,103 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
 
   return (
     <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 14 }}>
         {!detail ? (
-          <div
-            style={{
-              ...UI.card,
-              borderRadius: 14,
-              padding: 20,
-              border: "1px solid #e2e8f0",
-              background: "#f8fafc",
-              color: "#64748b",
-              fontWeight: 700,
-            }}
-          >
-            Portfolio položka nebyla nalezena nebo nebyla načtena z backendu.
-          </div>
+          <>
+            <div
+              style={{
+                ...UI.card,
+                borderRadius: 14,
+                padding: 20,
+                border: "1px solid #e2e8f0",
+                background: "#f8fafc",
+                color: "#64748b",
+                fontWeight: 700,
+              }}
+            >
+              Portfolio položka nebyla nalezena nebo nebyla načtena z backendu.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 8 }}>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={() => window.open(buildErpUrl({ view: "portfolio", portfolioItemId: item.id }), "_blank")}
+              >
+                Otevřít v novém okně
+              </button>
+              <button type="button" style={UI.buttons.secondary} onClick={onBack}>
+                {backLabel ?? "Zpět na portfolio"}
+              </button>
+            </div>
+          </>
         ) : null}
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" style={UI.buttons.secondary} onClick={onBack}>
-            {backLabel ?? "Zpět na portfolio"}
-          </button>
-        </div>
         {!detail ? null : (
           <>
 
-        <div style={UI.pageHeaderRow}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 30, fontWeight: 900, color: "#0f172a", lineHeight: 1.2 }}>{detail.gpn}</h1>
-            <p style={{ ...UI.headerSubtitle, marginTop: 8, marginBottom: 0 }}>{detail.name}</p>
-          </div>
-          <div style={{ ...UI.summaryTilesGrid, width: "auto", gap: 8 }}>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
-              <div style={UI.summaryTileLabel}>Zákazník</div>
-              <div style={UI.summaryTileValue}>
-                {detail.customer_name?.trim() ? detail.customer_name : "—"}
+        <DetailPageHeader
+          title={detail.gpn}
+          subtitle={detail.name}
+          actions={
+            <>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={() => window.open(buildErpUrl({ view: "portfolio", portfolioItemId: item.id }), "_blank")}
+              >
+                Otevřít v novém okně
+              </button>
+              <button type="button" style={UI.buttons.secondary} onClick={onBack}>
+                {backLabel ?? "Zpět na portfolio"}
+              </button>
+            </>
+          }
+          summaryTiles={
+            <div style={UI.summaryTilesGrid}>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Zákazník</div>
+                <div style={UI.summaryTileValue}>
+                  {detail.customer_name?.trim() ? detail.customer_name : "—"}
+                </div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Skupina</div>
+                <div style={UI.summaryTileValue}>
+                  {detail.group_name?.trim() ? detail.group_name : "—"}
+                </div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Technologie</div>
+                <div style={{ ...UI.summaryTileValue, color: detail.active_template_id ? "#15803d" : "#dc2626" }}>
+                  {detail.active_template_id ? "ANO" : "NE"}
+                </div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Scan kód</div>
+                <div style={UI.summaryTileValue}>{detail.scan_code?.trim() ? detail.scan_code : "—"}</div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Výkres</div>
+                <div style={UI.summaryTileValue}>{detail.drawing_no ?? "—"}</div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Revize</div>
+                <div style={UI.summaryTileValue}>{detail.revision ?? "—"}</div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Materiál</div>
+                <div style={UI.summaryTileValue}>{detail.material_default ?? "—"}</div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Logistický režim</div>
+                <div style={UI.summaryTileValue}>{logisticLabel(detail.logistic_mode ?? "vyroba_zakaznik")}</div>
+              </div>
+              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
+                <div style={UI.summaryTileLabel}>Prodejní cena / ks (bez DPH)</div>
+                <div style={UI.summaryTileValue}>{formatSalePriceCzk(detail.sale_price_per_piece)}</div>
               </div>
             </div>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
-              <div style={UI.summaryTileLabel}>Skupina</div>
-              <div style={UI.summaryTileValue}>
-                {detail.group_name?.trim() ? detail.group_name : "—"}
-              </div>
-            </div>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
-              <div style={UI.summaryTileLabel}>Technologie</div>
-              <div style={{ ...UI.summaryTileValue, color: detail.active_template_id ? "#15803d" : "#dc2626" }}>
-                {detail.active_template_id ? "ANO" : "NE"}
-              </div>
-            </div>
-            <div style={{ ...UI.summaryTile, minHeight: 88, minWidth: 180 }}>
-              <div style={UI.summaryTileLabel}>Scan kód</div>
-              <div style={UI.summaryTileValue}>{detail.scan_code?.trim() ? detail.scan_code : "—"}</div>
-            </div>
-          </div>
-        </div>
-
-        <div style={UI.summaryTilesGrid}>
-          <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-            <div style={UI.summaryTileLabel}>Výkres</div>
-            <div style={UI.summaryTileValue}>{detail.drawing_no ?? "—"}</div>
-          </div>
-          <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-            <div style={UI.summaryTileLabel}>Revize</div>
-            <div style={UI.summaryTileValue}>{detail.revision ?? "—"}</div>
-          </div>
-          <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-            <div style={UI.summaryTileLabel}>Materiál</div>
-            <div style={UI.summaryTileValue}>{detail.material_default ?? "—"}</div>
-          </div>
-          <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-            <div style={UI.summaryTileLabel}>Logistický režim</div>
-            <div style={UI.summaryTileValue}>{logisticLabel(detail.logistic_mode ?? "vyroba_zakaznik")}</div>
-          </div>
-          <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-            <div style={UI.summaryTileLabel}>Prodejní cena / ks (bez DPH)</div>
-            <div style={UI.summaryTileValue}>{formatSalePriceCzk(detail.sale_price_per_piece)}</div>
-          </div>
-        </div>
+          }
+        />
 
         <div style={{ width: "100%", overflowX: "auto", overflowY: "hidden", marginBottom: 4 }}>
           <div

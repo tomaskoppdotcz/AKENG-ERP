@@ -15,14 +15,15 @@ type MaterialStockRow = MaterialStockItem & {
 };
 
 type Props = {
-  onOpenDetail?: (item: MaterialStockRow) => void;
+  /** Klik na řádek — otevře detail v pracovní záložce. */
+  onOpenStockInWorkspaceTab: (item: MaterialStockRow) => void;
 };
 
 function norm(value: string): string {
   return value.trim().toLowerCase();
 }
 
-export default function MaterialStockPage({ onOpenDetail }: Props) {
+export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) {
   const [rows, setRows] = useState<MaterialStockRow[]>([]);
   const [libraryItems, setLibraryItems] = useState<MaterialLibraryItem[]>([]);
   const [groups, setGroups] = useState<MaterialGroup[]>([]);
@@ -355,7 +356,7 @@ export default function MaterialStockPage({ onOpenDetail }: Props) {
                   {filtered.map((row) => (
                     <tr
                       key={row.id}
-                      onClick={() => onOpenDetail?.(row)}
+                      onClick={() => onOpenStockInWorkspaceTab(row)}
                       onMouseEnter={() => setHoverId(row.id)}
                       onMouseLeave={() => setHoverId((id) => (id === row.id ? null : id))}
                       style={{ cursor: "pointer", background: hoverId === row.id ? "#eff6ff" : "#fff" }}

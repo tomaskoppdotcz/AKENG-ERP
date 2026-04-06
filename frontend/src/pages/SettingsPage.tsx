@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { UI } from "../styles/ui";
 import CustomerLibraryPage from "./CustomerLibraryPage";
+import EmployeeGroupLibraryPage from "./EmployeeGroupLibraryPage";
+import EmployeeLibraryPage from "./EmployeeLibraryPage";
 import MaterialGroupLibraryPage from "./MaterialGroupLibraryPage";
 import MaterialLibraryPage from "./MaterialLibraryPage";
 import OperationLibraryPage from "./OperationLibraryPage";
@@ -8,13 +10,14 @@ import PortfolioGroupLibraryPage from "./PortfolioGroupLibraryPage";
 import StorageLocationPage from "./StorageLocationPage";
 import WorkplaceLibraryPage from "./WorkplaceLibraryPage";
 
-const SECTIONS = ["Obchod", "Výroba", "Sklad"] as const;
+const SECTIONS = ["Obchod", "Výroba", "Sklad", "Lidé"] as const;
 type Section = (typeof SECTIONS)[number];
 
 const SUBTABS_BY_SECTION: Record<Section, readonly string[]> = {
   Obchod: ["Zákazníci", "Portfolio skupiny"],
   Výroba: ["Operace", "Pracoviště"],
   Sklad: ["Materiály", "Skupiny materiálů", "Umístění"],
+  Lidé: ["Role zaměstnanců", "Zaměstnanci"],
 };
 
 type Props = {
@@ -45,6 +48,10 @@ export default function SettingsPage({ onBackToDashboard }: Props) {
       if (activeSubtab === "Materiály") return <MaterialLibraryPage />;
       if (activeSubtab === "Skupiny materiálů") return <MaterialGroupLibraryPage />;
       if (activeSubtab === "Umístění") return <StorageLocationPage />;
+    }
+    if (activeSection === "Lidé") {
+      if (activeSubtab === "Role zaměstnanců") return <EmployeeGroupLibraryPage />;
+      if (activeSubtab === "Zaměstnanci") return <EmployeeLibraryPage />;
     }
     return null;
   }

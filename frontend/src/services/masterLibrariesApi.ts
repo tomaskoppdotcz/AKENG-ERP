@@ -17,6 +17,8 @@ export type WorkplaceLibraryItem = {
   hourly_rate: number | null;
   daily_capacity_hours: number | null;
   is_active: boolean;
+  /** Zobrazení řádku v Planner Gantt */
+  is_plannable?: boolean;
 };
 
 export type OperationLibraryPayload = {
@@ -33,6 +35,7 @@ export type WorkplaceLibraryPayload = {
   hourly_rate: number | null;
   daily_capacity_hours: number | null;
   is_active: boolean;
+  is_plannable: boolean;
 };
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
@@ -205,6 +208,112 @@ export async function deleteCustomer(id: number): Promise<{ status: string }> {
   const res = await fetch(`${API_BASE}/customers/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se smazat zákazníka."));
+  }
+  return res.json();
+}
+
+// --- Zaměstnanci (master-data) — kiosk login ---------------------------------
+
+export type EmployeeSubgroupRow = {
+  id: number;
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+};
+
+export type EmployeeSubgroupPayload = {
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+};
+
+export async function getEmployeeSubgroups(): Promise<EmployeeSubgroupRow[]> {
+  const res = await fetch(`${API_BASE}/master-data/employee-subgroups`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se načíst role zaměstnanců."));
+  }
+  return res.json();
+}
+
+export async function createEmployeeSubgroup(payload: EmployeeSubgroupPayload): Promise<EmployeeSubgroupRow> {
+  const res = await fetch(`${API_BASE}/master-data/employee-subgroups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se vytvořit roli."));
+  }
+  return res.json();
+}
+
+export async function updateEmployeeSubgroup(
+  id: number,
+  payload: EmployeeSubgroupPayload
+): Promise<EmployeeSubgroupRow> {
+  const res = await fetch(`${API_BASE}/master-data/employee-subgroups/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se upravit roli."));
+  }
+  return res.json();
+}
+
+export type EmployeeMasterRow = {
+  id: number;
+  first_name: string | null;
+  last_name: string | null;
+  name: string;
+  employee_code: string;
+  card_uid: string;
+  employee_subgroup_id: number | null;
+  subgroup_name: string | null;
+  is_active: boolean;
+};
+
+export type EmployeeMasterPayload = {
+  first_name: string;
+  last_name: string;
+  employee_code: string;
+  card_uid: string;
+  employee_subgroup_id: number | null;
+  is_active: boolean;
+};
+
+export async function getEmployeesMaster(): Promise<EmployeeMasterRow[]> {
+  const res = await fetch(`${API_BASE}/master-data/employees`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se načíst zaměstnance."));
+  }
+  return res.json();
+}
+
+export async function createEmployeeMaster(payload: EmployeeMasterPayload): Promise<EmployeeMasterRow> {
+  const res = await fetch(`${API_BASE}/master-data/employees`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se vytvořit zaměstnance."));
+  }
+  return res.json();
+}
+
+export async function updateEmployeeMaster(
+  id: number,
+  payload: EmployeeMasterPayload
+): Promise<EmployeeMasterRow> {
+  const res = await fetch(`${API_BASE}/master-data/employees/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se upravit zaměstnance."));
   }
   return res.json();
 }
