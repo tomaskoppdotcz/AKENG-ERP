@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.master_data import Machine
 from app.models.kiosk import OperationEvent
@@ -156,7 +157,11 @@ def get_machine_operations(machine_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/start")
-def start_operation(payload: StartOperationRequest, db: Session = Depends(get_db)):
+def start_operation(
+    payload: StartOperationRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.execute")),
+):
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
@@ -198,7 +203,11 @@ def start_operation(payload: StartOperationRequest, db: Session = Depends(get_db
 
 
 @router.post("/stop")
-def stop_operation(payload: StopOperationRequest, db: Session = Depends(get_db)):
+def stop_operation(
+    payload: StopOperationRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.execute")),
+):
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
@@ -230,7 +239,11 @@ def stop_operation(payload: StopOperationRequest, db: Session = Depends(get_db))
 
 
 @router.post("/finish")
-def finish_operation(payload: FinishOperationRequest, db: Session = Depends(get_db)):
+def finish_operation(
+    payload: FinishOperationRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.execute")),
+):
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")

@@ -16,6 +16,7 @@ import {
   type OrderDetailResponse,
 } from "../services/ordersApi";
 import { buildErpUrl } from "../utils/erpDeepLink";
+import { canPerformAction, readStoredErpRole } from "../auth/rbac";
 
 type Props = {
   customerOrderId: number;
@@ -148,6 +149,10 @@ export default function OrderCardPage({
   const [savingEditItem, setSavingEditItem] = useState(false);
   const [editItemError, setEditItemError] = useState<string | null>(null);
   const editInitialGpnRef = useRef("");
+
+  const erpRole = useMemo(() => readStoredErpRole(), []);
+  const canOrdersWrite = canPerformAction(erpRole, "orders.write");
+  const canOrdersStorno = canPerformAction(erpRole, "orders.storno");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -558,21 +563,36 @@ export default function OrderCardPage({
               >
                 Otevřít v novém okně
               </button>
-              <button type="button" style={UI.buttons.secondary} onClick={() => openHeaderEdit(data)} disabled={!orderWorkflowActive}>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={() => openHeaderEdit(data)}
+                disabled={!orderWorkflowActive || !canOrdersWrite}
+              >
                 Upravit zakázku
               </button>
-              <button type="button" style={UI.buttons.secondary} onClick={handleStornoOrder} disabled={!orderWorkflowActive}>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={handleStornoOrder}
+                disabled={!orderWorkflowActive || !canOrdersStorno}
+              >
                 Stornovat zakázku
               </button>
               {orderKind !== "internal" ? (
-                <button type="button" style={UI.buttons.secondary} onClick={handleCreateVp} disabled={creatingVp || !orderWorkflowActive}>
+                <button
+                  type="button"
+                  style={UI.buttons.secondary}
+                  onClick={handleCreateVp}
+                  disabled={creatingVp || !orderWorkflowActive || !canOrdersWrite}
+                >
                   {creatingVp ? "Vytvářím VP..." : "Vytvořit VP"}
                 </button>
               ) : null}
               <button
                 type="button"
                 style={UI.buttons.primary}
-                disabled={!orderWorkflowActive}
+                disabled={!orderWorkflowActive || !canOrdersWrite}
                 onClick={() => {
                   setShowAddItemForm((v) => {
                     if (v) return false;
@@ -690,7 +710,12 @@ export default function OrderCardPage({
             </div>
             {headerError ? <div style={{ color: "#b91c1c", fontWeight: 700, marginTop: 8 }}>{headerError}</div> : null}
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <button type="button" style={UI.buttons.primary} onClick={handleSaveHeader} disabled={savingHeader}>
+              <button
+                type="button"
+                style={UI.buttons.primary}
+                onClick={handleSaveHeader}
+                disabled={savingHeader || !canOrdersWrite}
+              >
                 {savingHeader ? "Ukládám…" : "Uložit hlavičku"}
               </button>
               <button type="button" style={UI.buttons.secondary} onClick={() => setShowEditHeader(false)} disabled={savingHeader}>
@@ -809,7 +834,12 @@ export default function OrderCardPage({
                 </div>
                 {editItemError ? <div style={{ color: "#b91c1c", fontWeight: 700, marginTop: 8 }}>{editItemError}</div> : null}
                 <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                  <button type="button" style={UI.buttons.primary} onClick={handleSaveEditItem} disabled={savingEditItem}>
+                  <button
+                    type="button"
+                    style={UI.buttons.primary}
+                    onClick={handleSaveEditItem}
+                    disabled={savingEditItem || !canOrdersWrite}
+                  >
                     {savingEditItem ? "Ukládám…" : "Uložit změny"}
                   </button>
                   <button type="button" style={UI.buttons.secondary} onClick={cancelItemEdit} disabled={savingEditItem}>
@@ -883,7 +913,12 @@ export default function OrderCardPage({
                 </div>
                 {itemError ? <div style={{ color: "#b91c1c", fontWeight: 700, marginTop: 8 }}>{itemError}</div> : null}
                 <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                  <button type="button" style={UI.buttons.primary} onClick={handleCreateItem} disabled={savingItem}>
+                  <button
+                    type="button"
+                    style={UI.buttons.primary}
+                    onClick={handleCreateItem}
+                    disabled={savingItem || !canOrdersWrite}
+                  >
                     {savingItem ? "Ukládám..." : "Uložit položku"}
                   </button>
                   <button type="button" style={UI.buttons.secondary} onClick={() => setShowAddItemForm(false)} disabled={savingItem}>
@@ -1027,7 +1062,11 @@ export default function OrderCardPage({
                               <button
                                 type="button"
                                 style={UI.buttons.secondary}
-                                disabled={!orderWorkflowActive || !isBusinessWorkflowActive(item.workflow_status)}
+                                disabled={
+                                  !orderWorkflowActive ||
+                                  !isBusinessWorkflowActive(item.workflow_status) ||
+                                  !canOrdersWrite
+                                }
                                 onClick={() => openItemEdit(item)}
                               >
                                 Upravit
@@ -1035,7 +1074,11 @@ export default function OrderCardPage({
                               <button
                                 type="button"
                                 style={UI.buttons.secondary}
-                                disabled={!orderWorkflowActive || !isBusinessWorkflowActive(item.workflow_status)}
+                                disabled={
+                                  !orderWorkflowActive ||
+                                  !isBusinessWorkflowActive(item.workflow_status) ||
+                                  !canOrdersStorno
+                                }
                                 onClick={() => handleStornoItem(item.job_item_id)}
                               >
                                 Zrušit

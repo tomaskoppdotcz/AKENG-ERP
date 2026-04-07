@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
+import PageContainer from "../components/layout/PageContainer";
 import { UI } from "../styles/ui";
 import { getMaterialLibraryItems, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import {
@@ -518,8 +519,8 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   }
 
   return (
-    <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 14 }}>
+    <PageContainer style={{ paddingTop: 10 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "100%", minWidth: 0 }}>
         {!detail ? (
           <>
             <div
@@ -648,7 +649,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
         </div>
 
         {activeTab === "Přehled" ? (
-          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 12 }}>Souhrn portfolio položky</div>
             <div style={{ display: "grid", gap: 8 }}>
               <div><strong>GPN:</strong> {detail.gpn}</div>
@@ -670,7 +671,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
           </div>
         ) : activeTab === "Technologický postup" ? (
           <>
-          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
               <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>Technologický postup</div>
               <button
@@ -862,7 +863,16 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
               </div>
             )}
           </div>
-          <div style={{ ...UI.card, borderRadius: 14, padding: 16, marginTop: 12 }}>
+          <div
+            style={{
+              ...UI.card,
+              borderRadius: 14,
+              padding: 16,
+              marginTop: 12,
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
               <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>Vstupy pro technologický postup</div>
               {!showAddMaterialForm ? (
@@ -1058,13 +1068,13 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
           </div>
           </>
         ) : activeTab === "Dokumenty" ? (
-          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>
               Modul Dokumenty pro tuto portfolio položku je ve vývoji.
             </div>
           </div>
         ) : (
-          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>
               Modul Historie pro tuto portfolio položku je ve vývoji.
             </div>
@@ -1073,7 +1083,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
           </>
         )}
       </div>
-    </div>
+    </PageContainer>
   );
 }
 

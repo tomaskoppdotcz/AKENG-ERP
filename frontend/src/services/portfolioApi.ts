@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -185,7 +187,7 @@ export async function getPortfolioGroups(customerId?: number | null): Promise<Po
   if (customerId != null && Number.isFinite(customerId) && customerId > 0) {
     url.searchParams.set("customer_id", String(customerId));
   }
-  const res = await fetch(url.toString());
+  const res = await akengFetch(url.toString());
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst skupiny portfolia.");
   }
@@ -193,7 +195,7 @@ export async function getPortfolioGroups(customerId?: number | null): Promise<Po
 }
 
 export async function createPortfolioGroup(payload: PortfolioGroupCreatePayload): Promise<PortfolioGroup> {
-  const res = await fetch(`${API_BASE}/portfolio/groups`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/groups`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -205,7 +207,7 @@ export async function createPortfolioGroup(payload: PortfolioGroupCreatePayload)
 }
 
 export async function updatePortfolioGroup(id: number, payload: PortfolioGroupUpdatePayload): Promise<PortfolioGroup> {
-  const res = await fetch(`${API_BASE}/portfolio/groups/${id}`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/groups/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -217,7 +219,7 @@ export async function updatePortfolioGroup(id: number, payload: PortfolioGroupUp
 }
 
 export async function deletePortfolioGroup(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/portfolio/groups/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/portfolio/groups/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se smazat skupinu portfolia."));
   }
@@ -225,7 +227,7 @@ export async function deletePortfolioGroup(id: number): Promise<{ status: string
 }
 
 export async function getPortfolioItems(): Promise<PortfolioItem[]> {
-  const res = await fetch(`${API_BASE}/portfolio/items`);
+  const res = await akengFetch(`${API_BASE}/portfolio/items`);
   if (!res.ok) {
     throw new Error("Nepodarilo se nacist portfolio polozky.");
   }
@@ -233,7 +235,7 @@ export async function getPortfolioItems(): Promise<PortfolioItem[]> {
 }
 
 export async function getPortfolioItem(id: number): Promise<PortfolioItem> {
-  const res = await fetch(`${API_BASE}/portfolio/items/${id}`);
+  const res = await akengFetch(`${API_BASE}/portfolio/items/${id}`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst položku portfolia."));
   }
@@ -241,7 +243,7 @@ export async function getPortfolioItem(id: number): Promise<PortfolioItem> {
 }
 
 export async function createPortfolioItem(payload: PortfolioItemCreatePayload): Promise<PortfolioItem> {
-  const res = await fetch(`${API_BASE}/portfolio/items`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -253,7 +255,7 @@ export async function createPortfolioItem(payload: PortfolioItemCreatePayload): 
 }
 
 export async function updatePortfolioItem(id: number, payload: PortfolioItemUpdatePayload): Promise<PortfolioItem> {
-  const res = await fetch(`${API_BASE}/portfolio/items/${id}`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/items/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -265,7 +267,7 @@ export async function updatePortfolioItem(id: number, payload: PortfolioItemUpda
 }
 
 export async function deletePortfolioItem(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/portfolio/items/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/portfolio/items/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error("Nepodarilo se smazat portfolio položku.");
   }
@@ -273,7 +275,7 @@ export async function deletePortfolioItem(id: number): Promise<{ status: string 
 }
 
 export async function copyPortfolioItem(id: number, payload: PortfolioItemCreatePayload): Promise<PortfolioItem> {
-  const res = await fetch(`${API_BASE}/portfolio/items/${id}/copy`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/items/${id}/copy`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -296,7 +298,7 @@ export async function findPortfolioItemByGpn(gpn: string): Promise<PortfolioItem
 export async function getPortfolioItemTechnology(
   itemId: number
 ): Promise<PortfolioItemTechnologyResponse> {
-  const res = await fetch(`${API_BASE}/portfolio/items/${itemId}/technology`);
+  const res = await akengFetch(`${API_BASE}/portfolio/items/${itemId}/technology`);
   if (!res.ok) {
     throw new Error("Nepodarilo se nacist technologicky postup.");
   }
@@ -307,7 +309,7 @@ export async function reorderPortfolioTechnologyOperations(
   templateId: number,
   orderedOperationIds: number[]
 ): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/portfolio/templates/${templateId}/operations/reorder`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/templates/${templateId}/operations/reorder`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ordered_operation_ids: orderedOperationIds }),
@@ -322,7 +324,7 @@ export async function createPortfolioTechnologyOperation(
   templateId: number,
   payload: PortfolioTechnologyOperationCreatePayload
 ): Promise<PortfolioTechnologyOperation> {
-  const res = await fetch(`${API_BASE}/portfolio/templates/${templateId}/operations`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/templates/${templateId}/operations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -337,7 +339,7 @@ export async function updatePortfolioTechnologyOperation(
   operationId: number,
   payload: PortfolioTechnologyOperationUpdatePayload
 ): Promise<PortfolioTechnologyOperation> {
-  const res = await fetch(`${API_BASE}/portfolio/template-operations/${operationId}`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/template-operations/${operationId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -351,7 +353,7 @@ export async function updatePortfolioTechnologyOperation(
 export async function deletePortfolioTechnologyOperation(
   operationId: number
 ): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/portfolio/template-operations/${operationId}`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/template-operations/${operationId}`, {
     method: "DELETE",
   });
   if (!res.ok) {
@@ -363,7 +365,7 @@ export async function deletePortfolioTechnologyOperation(
 export async function createPortfolioTechnologyTemplate(
   itemId: number
 ): Promise<CreatePortfolioTechnologyTemplateResponse> {
-  const res = await fetch(`${API_BASE}/portfolio/items/${itemId}/technology-template`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/items/${itemId}/technology-template`, {
     method: "POST",
   });
   if (!res.ok) {
@@ -375,7 +377,7 @@ export async function createPortfolioTechnologyTemplate(
 export async function getPortfolioTechnologyMaterials(
   itemId: number
 ): Promise<PortfolioItemTechnologyMaterialsResponse> {
-  const res = await fetch(`${API_BASE}/portfolio/items/${itemId}/technology-material`);
+  const res = await akengFetch(`${API_BASE}/portfolio/items/${itemId}/technology-material`);
   if (!res.ok) {
     throw new Error("Nepodarilo se nacist material technologickeho postupu.");
   }
@@ -386,7 +388,7 @@ export async function createPortfolioTechnologyMaterial(
   templateId: number,
   payload: PortfolioTechnologyMaterialCreatePayload
 ): Promise<PortfolioTechnologyMaterial> {
-  const res = await fetch(`${API_BASE}/portfolio/templates/${templateId}/technology-material`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/templates/${templateId}/technology-material`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -401,7 +403,7 @@ export async function updatePortfolioTechnologyMaterial(
   id: number,
   payload: PortfolioTechnologyMaterialUpdatePayload
 ): Promise<PortfolioTechnologyMaterial> {
-  const res = await fetch(`${API_BASE}/portfolio/technology-material/${id}`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/technology-material/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -413,7 +415,7 @@ export async function updatePortfolioTechnologyMaterial(
 }
 
 export async function deletePortfolioTechnologyMaterial(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/portfolio/technology-material/${id}`, {
+  const res = await akengFetch(`${API_BASE}/portfolio/technology-material/${id}`, {
     method: "DELETE",
   });
   if (!res.ok) {

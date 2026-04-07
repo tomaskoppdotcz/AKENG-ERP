@@ -6,6 +6,7 @@ from sqlalchemy import inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.storage_location import StorageLocation
 
@@ -111,7 +112,11 @@ def list_storage_locations(db: Session = Depends(get_db)):
 
 
 @router.post("")
-def create_storage_location(payload: StorageLocationCreatePayload, db: Session = Depends(get_db)):
+def create_storage_location(
+    payload: StorageLocationCreatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     dup = db.scalar(select(StorageLocation.id).where(StorageLocation.code == payload.code))
     if dup is not None:
         raise HTTPException(status_code=409, detail="Umístění s tímto kódem již existuje.")
@@ -128,7 +133,12 @@ def create_storage_location(payload: StorageLocationCreatePayload, db: Session =
 
 
 @router.put("/{location_id}")
-def update_storage_location(location_id: int, payload: StorageLocationUpdatePayload, db: Session = Depends(get_db)):
+def update_storage_location(
+    location_id: int,
+    payload: StorageLocationUpdatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(StorageLocation).where(StorageLocation.id == location_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Umístění nebylo nalezeno.")
@@ -151,7 +161,11 @@ def update_storage_location(location_id: int, payload: StorageLocationUpdatePayl
 
 
 @router.delete("/{location_id}")
-def delete_storage_location(location_id: int, db: Session = Depends(get_db)):
+def delete_storage_location(
+    location_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(StorageLocation).where(StorageLocation.id == location_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Umístění nebylo nalezeno.")

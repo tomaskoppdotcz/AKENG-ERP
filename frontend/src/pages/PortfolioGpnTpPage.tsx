@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { buildErpUrl } from "../utils/erpDeepLink";
+import { akengFetch } from "../services/akengFetch";
 
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -252,7 +253,7 @@ export default function PortfolioGpnTpPage() {
 
   async function loadWorkplaces() {
     try {
-      const res = await fetch(`${API_BASE}/libraries/workplaces`);
+      const res = await akengFetch(`${API_BASE}/libraries/workplaces`);
       const data = await res.json();
       const rows = Array.isArray(data) ? data : [];
       setWorkplaces(
@@ -272,7 +273,7 @@ export default function PortfolioGpnTpPage() {
   async function loadTemplates() {
     setLoadingList(true);
     try {
-      const res = await fetch(`${API_BASE}/technology/templates`);
+      const res = await akengFetch(`${API_BASE}/technology/templates`);
       const data = await res.json();
       const rows = Array.isArray(data) ? data : [];
       setTemplates(rows);
@@ -293,7 +294,7 @@ export default function PortfolioGpnTpPage() {
   async function loadTemplateDetail(templateId: number) {
     setLoadingDetail(true);
     try {
-      const res = await fetch(`${API_BASE}/technology/templates/${templateId}`);
+      const res = await akengFetch(`${API_BASE}/technology/templates/${templateId}`);
       const data = await res.json();
       setSelectedTemplate(data);
       setEditTemplate({
@@ -326,7 +327,7 @@ export default function PortfolioGpnTpPage() {
   async function seedSampleTemplates() {
     setSeeding(true);
     try {
-      await fetch(`${API_BASE}/technology/templates/seed-sample`, {
+      await akengFetch(`${API_BASE}/technology/templates/seed-sample`, {
         method: "POST",
       });
       await loadTemplates();
@@ -422,7 +423,7 @@ export default function PortfolioGpnTpPage() {
 
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/technology/templates/full`, {
+      const res = await akengFetch(`${API_BASE}/technology/templates/full`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -587,7 +588,7 @@ export default function PortfolioGpnTpPage() {
 
     setEditSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/technology/templates/${selectedTemplateId}`, {
+      const res = await akengFetch(`${API_BASE}/technology/templates/${selectedTemplateId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

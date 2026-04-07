@@ -15,6 +15,7 @@ from sqlalchemy import func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, joinedload
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.core.scan_code import material_stock_movement_scan_code_for_id, material_stock_scan_code_for_id
 from app.models.material_library import MaterialLibraryItem
@@ -460,7 +461,11 @@ def list_stock_items(
 
 
 @router.post("/items")
-def create_stock_item(payload: StockItemCreate, db: Session = Depends(get_db)):
+def create_stock_item(
+    payload: StockItemCreate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     material = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == payload.material_library_item_id))
     if not material:
         raise HTTPException(status_code=404, detail="Material library item not found")
@@ -504,7 +509,12 @@ def create_stock_item(payload: StockItemCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/items/{item_id}")
-def update_stock_item(item_id: int, payload: StockItemUpdate, db: Session = Depends(get_db)):
+def update_stock_item(
+    item_id: int,
+    payload: StockItemUpdate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(
         select(MaterialStockItem)
         .where(MaterialStockItem.id == item_id)
@@ -536,7 +546,11 @@ def update_stock_item(item_id: int, payload: StockItemUpdate, db: Session = Depe
 
 
 @router.delete("/items/{item_id}")
-def delete_stock_item(item_id: int, db: Session = Depends(get_db)):
+def delete_stock_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(MaterialStockItem).where(MaterialStockItem.id == item_id))
     if not row:
         raise HTTPException(status_code=404, detail="Stock item not found")
@@ -582,7 +596,11 @@ def list_stock_reservations(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/reservations")
-def create_reservation(payload: ReservationCreate, db: Session = Depends(get_db)):
+def create_reservation(
+    payload: ReservationCreate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     stock = db.scalar(select(MaterialStockItem).where(MaterialStockItem.id == payload.stock_item_id))
     if not stock:
         raise HTTPException(status_code=404, detail="Stock item not found")
@@ -605,7 +623,11 @@ def create_reservation(payload: ReservationCreate, db: Session = Depends(get_db)
 
 
 @router.delete("/reservations/{reservation_id}")
-def delete_reservation(reservation_id: int, db: Session = Depends(get_db)):
+def delete_reservation(
+    reservation_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(MaterialStockReservation).where(MaterialStockReservation.id == reservation_id))
     if not row:
         raise HTTPException(status_code=404, detail="Reservation not found")
@@ -615,7 +637,12 @@ def delete_reservation(reservation_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/items/{item_id}/movements")
-def create_movement(item_id: int, payload: MovementCreate, db: Session = Depends(get_db)):
+def create_movement(
+    item_id: int,
+    payload: MovementCreate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     stock = db.scalar(select(MaterialStockItem).where(MaterialStockItem.id == item_id))
     if not stock:
         raise HTTPException(status_code=404, detail="Stock item not found")
@@ -659,7 +686,12 @@ def create_movement(item_id: int, payload: MovementCreate, db: Session = Depends
 
 
 @router.put("/movements/{movement_id}")
-def update_movement(movement_id: int, payload: MovementUpdate, db: Session = Depends(get_db)):
+def update_movement(
+    movement_id: int,
+    payload: MovementUpdate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     movement = db.scalar(select(MaterialStockMovement).where(MaterialStockMovement.id == movement_id))
     if not movement:
         raise HTTPException(status_code=404, detail="Movement not found")
@@ -706,7 +738,11 @@ def update_movement(movement_id: int, payload: MovementUpdate, db: Session = Dep
 
 
 @router.delete("/movements/{movement_id}")
-def delete_movement(movement_id: int, db: Session = Depends(get_db)):
+def delete_movement(
+    movement_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     movement = db.scalar(select(MaterialStockMovement).where(MaterialStockMovement.id == movement_id))
     if not movement:
         raise HTTPException(status_code=404, detail="Movement not found")
@@ -735,6 +771,7 @@ async def upload_movement_attachments(
     movement_id: int,
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
 ):
     if not files:
         raise HTTPException(status_code=422, detail="Nahrajte alespoň jeden soubor (PDF, JPG, PNG).")
@@ -832,7 +869,11 @@ def get_material_issue_proposal(reservation_id: int = Query(..., ge=1), db: Sess
 
 @router.post("/issue")
 @router.post("/material/issue")
-def issue_material(payload: MaterialIssuePayload, db: Session = Depends(get_db)):
+def issue_material(
+    payload: MaterialIssuePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     reservation: MaterialReservation | None = None
     if payload.reservation_id is not None:
         reservation = db.get(MaterialReservation, int(payload.reservation_id))

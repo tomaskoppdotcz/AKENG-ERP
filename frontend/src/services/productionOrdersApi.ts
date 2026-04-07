@@ -1,4 +1,5 @@
 import type { ErpWorkflowListFilter } from "./ordersApi";
+import { akengFetch } from "./akengFetch";
 
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -127,7 +128,7 @@ export async function getProductionOrdersOverview(
   workflowFilter: ErpWorkflowListFilter = "active"
 ): Promise<ProductionOrderOverviewRow[]> {
   const q = new URLSearchParams({ workflow_filter: workflowFilter });
-  const res = await fetch(`${API_BASE}/production-orders?${q.toString()}`);
+  const res = await akengFetch(`${API_BASE}/production-orders?${q.toString()}`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst výrobní příkazy.");
   }
@@ -136,7 +137,7 @@ export async function getProductionOrdersOverview(
 }
 
 export async function getProductionOrderDetail(productionOrderId: number): Promise<ProductionOrderDetail> {
-  const res = await fetch(`${API_BASE}/production-orders/${productionOrderId}`);
+  const res = await akengFetch(`${API_BASE}/production-orders/${productionOrderId}`);
   if (res.status === 404) {
     throw new Error("Výrobní příkaz nebyl nalezen.");
   }
@@ -147,7 +148,7 @@ export async function getProductionOrderDetail(productionOrderId: number): Promi
 }
 
 export async function stornoProductionOrder(productionOrderId: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/production-orders/${productionOrderId}/storno`, { method: "POST" });
+  const res = await akengFetch(`${API_BASE}/production-orders/${productionOrderId}/storno`, { method: "POST" });
   if (!res.ok) {
     let message = "Storno výrobního příkazu se nepodařilo.";
     try {
@@ -168,7 +169,7 @@ export type ProductionOperationReportPayload = {
 };
 
 export async function startProductionOrderOperation(productionOrderId: number, operationNo: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/production-orders/${productionOrderId}/operations/${operationNo}/start`, {
+  const res = await akengFetch(`${API_BASE}/production-orders/${productionOrderId}/operations/${operationNo}/start`, {
     method: "POST",
   });
   if (!res.ok) {
@@ -181,7 +182,7 @@ export async function reportProductionOrderOperation(
   operationNo: number,
   payload: ProductionOperationReportPayload
 ): Promise<{ status: string; po_status?: string }> {
-  const res = await fetch(`${API_BASE}/production-orders/${productionOrderId}/operations/${operationNo}/report`, {
+  const res = await akengFetch(`${API_BASE}/production-orders/${productionOrderId}/operations/${operationNo}/report`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -196,7 +197,7 @@ export async function receiveFinishedGoodsToStock(
   productionOrderId: number,
   payload: { qty: number; location: string | null }
 ): Promise<{ status: string; product_stock_item_id: number; qty_received: number; current_qty: number }> {
-  const res = await fetch(`${API_BASE}/production-orders/${productionOrderId}/receive-to-stock`, {
+  const res = await akengFetch(`${API_BASE}/production-orders/${productionOrderId}/receive-to-stock`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

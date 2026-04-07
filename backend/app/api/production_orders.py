@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import not_, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
@@ -367,7 +368,11 @@ def list_production_orders(
 
 
 @router.post("/{production_order_id}/storno")
-def storno_production_order(production_order_id: int, db: Session = Depends(get_db)):
+def storno_production_order(
+    production_order_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.storno")),
+):
     po = db.get(ProductionOrder, production_order_id)
     if po is None:
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
@@ -405,6 +410,7 @@ def receive_finished_goods_to_stock(
     production_order_id: int,
     payload: ReceiveToStockPayload,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
 ):
     """Ruční příjem hotového výrobku na sklad výrobků (pohyb příjem + zápis příjemky)."""
     po = db.get(ProductionOrder, production_order_id)
@@ -651,7 +657,10 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
 
 @router.post("/{production_order_id}/operations/{operation_no}/start")
 def start_production_order_operation(
-    production_order_id: int, operation_no: int, db: Session = Depends(get_db)
+    production_order_id: int,
+    operation_no: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.execute")),
 ):
     po = db.get(ProductionOrder, production_order_id)
     if po is None:
@@ -692,6 +701,7 @@ def report_production_order_operation(
     operation_no: int,
     payload: OperationReportPayload,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.execute")),
 ):
     po = db.get(ProductionOrder, production_order_id)
     if po is None:
@@ -724,7 +734,11 @@ def report_production_order_operation(
 
 
 @router.post("/product/issue")
-def issue_product_from_stock(payload: ProductIssuePayload, db: Session = Depends(get_db)):
+def issue_product_from_stock(
+    payload: ProductIssuePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     stock = db.get(ProductStockItem, int(payload.product_stock_item_id))
     if stock is None:
         raise HTTPException(status_code=404, detail="Skladová karta výrobku nebyla nalezena.")

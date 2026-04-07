@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
 import { UI } from "../styles/ui";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
 import {
@@ -342,14 +345,12 @@ export default function PortfolioPage({
   }
 
   return (
-    <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={UI.pageHeaderRow}>
-          <div>
-            <div style={UI.sectionTitle}>Portfolio</div>
-            <div style={UI.sectionSubtitle}>Přehled portfolia výrobků</div>
-          </div>
-          <div style={UI.pageHeaderActions}>
+    <PageContainer style={{ paddingTop: 10 }}>
+      <PageHeader
+        title="Portfolio"
+        subtitle="Přehled portfolia výrobků"
+        actions={
+          <>
             <button
               type="button"
               style={UI.buttons.primary}
@@ -361,21 +362,30 @@ export default function PortfolioPage({
             <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
               Import
             </button>
-          </div>
-        </div>
+          </>
+        }
+      />
 
-        <div style={UI.summaryTilesGridOuter}>
-          <div style={{ ...UI.summaryTilesGridSix, gridTemplateColumns: "repeat(5, minmax(0, 1fr))", minWidth: 820 }}>
-            {kpi.map((tile) => (
-              <div key={tile.label} style={UI.summaryTile}>
-                <div style={UI.summaryTileLabel}>{tile.label}</div>
-                <div style={UI.summaryTileValue}>{tile.value}</div>
-              </div>
-            ))}
-          </div>
+      <div style={UI.summaryTilesGridOuter}>
+        <div
+          style={{
+            ...UI.summaryTilesGridSix,
+            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+            minWidth: 0,
+            width: "100%",
+          }}
+        >
+          {kpi.map((tile) => (
+            <div key={tile.label} style={UI.summaryTile}>
+              <div style={UI.summaryTileLabel}>{tile.label}</div>
+              <div style={UI.summaryTileValue}>{tile.value}</div>
+            </div>
+          ))}
         </div>
+      </div>
 
-        <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+      <PageSection>
+        <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
           {showForm ? (
             <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
               <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: copySourceId != null ? 6 : 10 }}>
@@ -651,8 +661,8 @@ export default function PortfolioPage({
             </div>
           ) : null}
         </div>
-      </div>
-    </div>
+      </PageSection>
+    </PageContainer>
   );
 }
 

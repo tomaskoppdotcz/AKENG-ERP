@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { akengFetch } from "../services/akengFetch";
 
 const API_BASE = "http://127.0.0.1:8001";
 const KIOSK_CODE = "KIOSK_CTX_BETA_800";
@@ -31,7 +32,7 @@ export default function KioskPage() {
   const [note, setNote] = useState("");
 
   async function refreshQueue() {
-    const res = await fetch(
+    const res = await akengFetch(
       `${API_BASE}/kiosk/machine-queue?kiosk_code=${encodeURIComponent(KIOSK_CODE)}`
     );
     const data: QueueResponse = await res.json();
@@ -41,7 +42,7 @@ export default function KioskPage() {
   }
 
   async function loginCard(cardUid: string) {
-    const res = await fetch(`${API_BASE}/kiosk/login-card`, {
+    const res = await akengFetch(`${API_BASE}/kiosk/login-card`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kiosk_code: KIOSK_CODE, card_uid: cardUid }),
@@ -64,7 +65,7 @@ export default function KioskPage() {
 
     const first = queue[0];
 
-    const res = await fetch(`${API_BASE}/kiosk/start-operation`, {
+    const res = await akengFetch(`${API_BASE}/kiosk/start-operation`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -84,7 +85,7 @@ export default function KioskPage() {
   async function finishOperation() {
     if (!runningOp) return;
 
-    const res = await fetch(`${API_BASE}/kiosk/finish-operation`, {
+    const res = await akengFetch(`${API_BASE}/kiosk/finish-operation`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

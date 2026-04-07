@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
 import { UI } from "../styles/ui";
 import { getMaterialGroups, getMaterialLibraryItems, type MaterialGroup, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import { getStorageLocations, type StorageLocation } from "../services/storageLocationApi";
@@ -197,31 +200,29 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
   }, [rows]);
 
   return (
-    <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={UI.pageHeaderRow}>
-          <div>
-            <div style={UI.sectionTitle}>Sklad materiálu</div>
-            <div style={UI.sectionSubtitle}>Přehled stavu materiálu</div>
-          </div>
-          <div style={UI.pageHeaderActions}>
-            <button
-              type="button"
-              style={UI.buttons.primary}
-              onClick={() => {
-                if (showCreateForm) {
-                  resetForm();
-                } else {
-                  setShowCreateForm(true);
-                }
-              }}
-            >
-              Nová skladová karta
-            </button>
-          </div>
-        </div>
+    <PageContainer style={{ paddingTop: 10 }}>
+      <PageHeader
+        title="Sklad materiálu"
+        subtitle="Přehled stavu materiálu"
+        actions={
+          <button
+            type="button"
+            style={UI.buttons.primary}
+            onClick={() => {
+              if (showCreateForm) {
+                resetForm();
+              } else {
+                setShowCreateForm(true);
+              }
+            }}
+          >
+            Nová skladová karta
+          </button>
+        }
+      />
 
-        <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+      <PageSection>
+        <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
             <input
               value={query}
@@ -419,7 +420,7 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
             </div>
           ) : null}
         </div>
-      </div>
-    </div>
+      </PageSection>
+    </PageContainer>
   );
 }

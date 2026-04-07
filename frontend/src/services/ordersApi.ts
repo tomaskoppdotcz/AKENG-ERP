@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -132,6 +134,8 @@ export type JobItemRow = {
   due_date: string | null;
   workflow_status?: string | null;
   order_workflow_status?: string | null;
+  /** customer | internal — z vazby na zakázku (GET /job-items). */
+  order_type?: string | null;
   description?: string | null;
   portfolio_item_id?: number | null;
 };
@@ -201,7 +205,7 @@ export async function getOrdersOverview(
   workflowFilter: ErpWorkflowListFilter = "active"
 ): Promise<OrdersOverviewRow[]> {
   const q = new URLSearchParams({ order_type: orderType, workflow_filter: workflowFilter });
-  const res = await fetch(`${API_BASE}/orders-overview/list?${q.toString()}`);
+  const res = await akengFetch(`${API_BASE}/orders-overview/list?${q.toString()}`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst přehled zakázek."));
   }
@@ -210,7 +214,7 @@ export async function getOrdersOverview(
 }
 
 export async function getOrderDetail(customerOrderId: number): Promise<OrderDetailResponse> {
-  const res = await fetch(`${API_BASE}/order-detail/${customerOrderId}`);
+  const res = await akengFetch(`${API_BASE}/order-detail/${customerOrderId}`);
   if (res.status === 404) {
     throw new Error("Objednávka nebyla nalezena.");
   }
@@ -290,7 +294,7 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
 export async function createCustomerOrder(
   payload: CustomerOrderCreatePayload
 ): Promise<CustomerOrderCreateResponse> {
-  const res = await fetch(`${API_BASE}/orders/customer-orders`, {
+  const res = await akengFetch(`${API_BASE}/orders/customer-orders`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -303,7 +307,7 @@ export async function createCustomerOrder(
 
 export async function getJobItems(workflowFilter: ErpWorkflowListFilter = "active"): Promise<JobItemRow[]> {
   const q = new URLSearchParams({ workflow_filter: workflowFilter });
-  const res = await fetch(`${API_BASE}/orders/job-items?${q.toString()}`);
+  const res = await akengFetch(`${API_BASE}/orders/job-items?${q.toString()}`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst položky zakázek.");
   }
@@ -311,7 +315,7 @@ export async function getJobItems(workflowFilter: ErpWorkflowListFilter = "activ
 }
 
 export async function createJobItem(payload: JobItemCreatePayload): Promise<JobItemRow> {
-  const res = await fetch(`${API_BASE}/orders/job-items`, {
+  const res = await akengFetch(`${API_BASE}/orders/job-items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -323,7 +327,7 @@ export async function createJobItem(payload: JobItemCreatePayload): Promise<JobI
 }
 
 export async function updateJobItem(itemId: number, payload: JobItemUpdatePayload): Promise<JobItemRow> {
-  const res = await fetch(`${API_BASE}/orders/job-items/${itemId}`, {
+  const res = await akengFetch(`${API_BASE}/orders/job-items/${itemId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -335,7 +339,7 @@ export async function updateJobItem(itemId: number, payload: JobItemUpdatePayloa
 }
 
 export async function stornoJobItem(itemId: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/orders/job-items/${itemId}/storno`, { method: "POST" });
+  const res = await akengFetch(`${API_BASE}/orders/job-items/${itemId}/storno`, { method: "POST" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se stornovat položku zakázky."));
   }
@@ -345,7 +349,7 @@ export async function updateCustomerOrder(
   customerOrderId: number,
   payload: CustomerOrderUpdatePayload
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/orders/customer-orders/${customerOrderId}`, {
+  const res = await akengFetch(`${API_BASE}/orders/customer-orders/${customerOrderId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -356,14 +360,14 @@ export async function updateCustomerOrder(
 }
 
 export async function stornoCustomerOrder(customerOrderId: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/orders/customer-orders/${customerOrderId}/storno`, { method: "POST" });
+  const res = await akengFetch(`${API_BASE}/orders/customer-orders/${customerOrderId}/storno`, { method: "POST" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se stornovat zakázku."));
   }
 }
 
 export async function getJobs(): Promise<JobRow[]> {
-  const res = await fetch(`${API_BASE}/orders/jobs`);
+  const res = await akengFetch(`${API_BASE}/orders/jobs`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst zakázky (jobs).");
   }
@@ -372,7 +376,7 @@ export async function getJobs(): Promise<JobRow[]> {
 
 export async function getProductionOrders(workflowFilter: ErpWorkflowListFilter = "active"): Promise<ProductionOrderRow[]> {
   const q = new URLSearchParams({ workflow_filter: workflowFilter });
-  const res = await fetch(`${API_BASE}/orders/production-orders?${q.toString()}`);
+  const res = await akengFetch(`${API_BASE}/orders/production-orders?${q.toString()}`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst výrobní příkazy.");
   }
@@ -382,7 +386,7 @@ export async function getProductionOrders(workflowFilter: ErpWorkflowListFilter 
 export async function createProductionOrdersFromAllocation(
   customerOrderId: number
 ): Promise<CreateProductionOrdersResponse> {
-  const res = await fetch(`${API_BASE}/orders/${customerOrderId}/create-production-orders`, {
+  const res = await akengFetch(`${API_BASE}/orders/${customerOrderId}/create-production-orders`, {
     method: "POST",
   });
   if (!res.ok) {

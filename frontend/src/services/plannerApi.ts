@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 export type PlannerGanttItem = {
   operationId: number;
   orderItemId: number | null;
@@ -123,12 +125,9 @@ export type KioskOperationsResponse = {
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-    },
-    ...init,
-  });
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const res = await akengFetch(url, { ...init, headers });
 
   if (!res.ok) {
     let message = "API chyba.";

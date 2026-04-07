@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -107,7 +109,7 @@ export async function getMaterialStockItems(opts?: { forJobItemId?: number }): P
     q.set("for_job_item_id", String(Math.floor(opts.forJobItemId)));
   }
   const suffix = q.toString() ? `?${q.toString()}` : "";
-  const res = await fetch(`${API_BASE}/material-stock/items${suffix}`);
+  const res = await akengFetch(`${API_BASE}/material-stock/items${suffix}`);
   if (!res.ok) throw new Error("Nepodařilo se načíst sklad materiálu.");
   return res.json();
 }
@@ -137,7 +139,7 @@ export type MaterialIssueProposalResponse = {
 };
 
 export async function getMaterialIssueProposal(reservationId: number): Promise<MaterialIssueProposalResponse> {
-  const res = await fetch(
+  const res = await akengFetch(
     `${API_BASE}/material-stock/issue-proposal?reservation_id=${encodeURIComponent(String(reservationId))}`
   );
   if (!res.ok) {
@@ -174,7 +176,7 @@ export type JobItemMaterialIssueRow = {
 };
 
 export async function getMaterialIssuesForJobItem(jobItemId: number): Promise<{ items: JobItemMaterialIssueRow[] }> {
-  const res = await fetch(`${API_BASE}/material-stock/job-items/${encodeURIComponent(String(jobItemId))}/material-issues`);
+  const res = await akengFetch(`${API_BASE}/material-stock/job-items/${encodeURIComponent(String(jobItemId))}/material-issues`);
   if (!res.ok) {
     let message = "Nepodařilo se načíst výdeje materiálu.";
     try {
@@ -192,7 +194,7 @@ export async function getMaterialIssuesForJobItem(jobItemId: number): Promise<{ 
 export async function createMaterialStockItem(
   payload: MaterialStockItemCreatePayload
 ): Promise<MaterialStockItem> {
-  const res = await fetch(`${API_BASE}/material-stock/items`, {
+  const res = await akengFetch(`${API_BASE}/material-stock/items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -214,7 +216,7 @@ export async function updateMaterialStockItem(
   id: number,
   payload: MaterialStockItemUpdatePayload
 ): Promise<MaterialStockItem> {
-  const res = await fetch(`${API_BASE}/material-stock/items/${id}`, {
+  const res = await akengFetch(`${API_BASE}/material-stock/items/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -224,19 +226,19 @@ export async function updateMaterialStockItem(
 }
 
 export async function deleteMaterialStockItem(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/material-stock/items/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/material-stock/items/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Nepodařilo se smazat skladovou kartu.");
   return res.json();
 }
 
 export async function getMaterialStockMovements(stockItemId: number): Promise<MaterialStockMovement[]> {
-  const res = await fetch(`${API_BASE}/material-stock/items/${stockItemId}/movements`);
+  const res = await akengFetch(`${API_BASE}/material-stock/items/${stockItemId}/movements`);
   if (!res.ok) throw new Error("Nepodařilo se načíst pohyby materiálu.");
   return res.json();
 }
 
 export async function getMaterialStockReservations(stockItemId: number): Promise<MaterialStockReservation[]> {
-  const res = await fetch(`${API_BASE}/material-stock/items/${stockItemId}/reservations`);
+  const res = await akengFetch(`${API_BASE}/material-stock/items/${stockItemId}/reservations`);
   if (!res.ok) throw new Error("Nepodařilo se načíst rezervace materiálu.");
   return res.json();
 }
@@ -244,7 +246,7 @@ export async function getMaterialStockReservations(stockItemId: number): Promise
 export async function createMaterialReservation(
   payload: MaterialStockReservationCreatePayload
 ): Promise<MaterialStockReservation> {
-  const res = await fetch(`${API_BASE}/material-stock/reservations`, {
+  const res = await akengFetch(`${API_BASE}/material-stock/reservations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -263,7 +265,7 @@ export async function createMaterialReservation(
 }
 
 export async function deleteMaterialReservation(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/material-stock/reservations/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/material-stock/reservations/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Nepodařilo se zrušit rezervaci.");
   return res.json();
 }
@@ -272,7 +274,7 @@ export async function createMaterialStockMovement(
   stockItemId: number,
   payload: MaterialStockMovementCreatePayload
 ): Promise<MaterialStockMovement> {
-  const res = await fetch(`${API_BASE}/material-stock/items/${stockItemId}/movements`, {
+  const res = await akengFetch(`${API_BASE}/material-stock/items/${stockItemId}/movements`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -302,7 +304,7 @@ export async function uploadMaterialMovementAttachments(
   for (const f of files) {
     fd.append("files", f);
   }
-  const res = await fetch(`${API_BASE}/material-stock/movements/${movementId}/attachments`, {
+  const res = await akengFetch(`${API_BASE}/material-stock/movements/${movementId}/attachments`, {
     method: "POST",
     body: fd,
   });
@@ -323,7 +325,7 @@ export async function updateMaterialStockMovement(
   movementId: number,
   payload: MaterialStockMovementUpdatePayload
 ): Promise<MaterialStockMovement> {
-  const res = await fetch(`${API_BASE}/material-stock/movements/${movementId}`, {
+  const res = await akengFetch(`${API_BASE}/material-stock/movements/${movementId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -342,7 +344,7 @@ export async function updateMaterialStockMovement(
 }
 
 export async function deleteMaterialStockMovement(movementId: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/material-stock/movements/${movementId}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/material-stock/movements/${movementId}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Nepodařilo se smazat pohyb.");
   return res.json();
 }

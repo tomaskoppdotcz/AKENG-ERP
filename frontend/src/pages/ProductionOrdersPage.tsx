@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
+import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilterRow";
+import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
 import { UI } from "../styles/ui";
-import type { ErpWorkflowListFilter } from "../services/ordersApi";
+import type { ErpWorkflowListFilter, OrdersOverviewOrderTypeFilter } from "../services/ordersApi";
 import { getProductionOrdersOverview, type ProductionOrderOverviewRow } from "../services/productionOrdersApi";
 import { findPortfolioItemByGpn } from "../services/portfolioApi";
 
@@ -43,11 +48,26 @@ function labelSourceType(v: string | null | undefined): string {
   return v;
 }
 
-const WORKFLOW_LIST_OPTIONS: { id: ErpWorkflowListFilter; label: string }[] = [
-  { id: "active", label: "Aktivní" },
-  { id: "cancelled", label: "Stornované" },
-  { id: "all", label: "Vše" },
-];
+/** Stejné popisky jako u ostatních přehledů; u VP zatím nefiltrují Dodací list / Fakturováno. */
+const VP_QUICK_FILTER_LABELS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
+
+type ProductionQuickFilter = "Po termínu" | "Dokončená";
+
+function isVpQuickFilterDisabledLabel(label: (typeof VP_QUICK_FILTER_LABELS)[number]): label is "Dodací list" | "Fakturováno" {
+  return label === "Dodací list" || label === "Fakturováno";
+}
+
+function isVpRowOverdue(row: ProductionOrderOverviewRow, todayIso: string): boolean {
+  return (
+    row.due_date != null &&
+    String(row.due_date).trim() !== "" &&
+    String(row.due_date).slice(0, 10) < todayIso
+  );
+}
+
+function isVpRowDone(row: ProductionOrderOverviewRow): boolean {
+  return String(row.status ?? "").trim().toLowerCase() === "done";
+}
 
 export default function ProductionOrdersPage({
   onOpenDetail,
@@ -60,9 +80,10 @@ export default function ProductionOrdersPage({
   const [rows, setRows] = useState<ProductionOrderOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [workflowListFilter, setWorkflowListFilter] = useState<ErpWorkflowListFilter>("active");
+  const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("all");
+  const [activeQuickFilters, setActiveQuickFilters] = useState<ProductionQuickFilter[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,84 +104,99 @@ export default function ProductionOrdersPage({
     };
   }, [workflowListFilter]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      [
-        r.vp_code,
-        r.gpn ?? "",
-        r.description ?? "",
-        r.zakazka ?? "",
-        r.source_type ?? "",
-        r.logistic_mode ?? "",
-        r.status ?? "",
-        r.order_type ?? "",
-        r.order_type === "internal" ? "interní internal" : "",
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
+  const rowsByOrderType = useMemo(() => {
+    if (overviewOrderType === "all") return rows;
+    return rows.filter((r) => {
+      const ot = String(r.order_type ?? "customer").trim().toLowerCase();
+      const normalized = ot === "internal" ? "internal" : "customer";
+      if (overviewOrderType === "customer") return normalized === "customer";
+      if (overviewOrderType === "internal") return normalized === "internal";
+      return true;
+    });
+  }, [rows, overviewOrderType]);
+
+  const displayRows = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return rowsByOrderType.filter((row) =>
+      activeQuickFilters.every((f) => {
+        if (f === "Po termínu") return isVpRowOverdue(row, today);
+        if (f === "Dokončená") return isVpRowDone(row);
+        return true;
+      })
     );
-  }, [rows, query]);
+  }, [rowsByOrderType, activeQuickFilters]);
 
   return (
-    <div style={{ paddingTop: 10 }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div>
-          <div style={UI.pageTitle}>Výrobní příkazy</div>
-          <div style={UI.sectionSubtitle}>Přehled všech VP napříč zákaznickými i interními zakázkami</div>
-        </div>
+    <PageContainer style={{ paddingTop: 10 }}>
+      <PageHeader
+        title="Výrobní příkazy"
+        subtitle="Přehled všech VP napříč zákaznickými i interními zakázkami"
+      />
 
+      <PageSection gapTop={16}>
         <div
           style={{
             ...UI.card,
-            borderRadius: 12,
-            padding: "8px 12px",
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            gap: 8,
-            rowGap: 8,
+            borderRadius: 14,
+            padding: 0,
+            overflow: "hidden",
+            width: "100%",
+            boxSizing: "border-box",
           }}
         >
-          <span style={{ fontSize: 12, fontWeight: 800, color: "#475569", flexShrink: 0 }}>Zobrazit:</span>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-            {WORKFLOW_LIST_OPTIONS.map(({ id, label }) => {
-              const active = workflowListFilter === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setWorkflowListFilter(id)}
-                  disabled={loading}
-                  style={{
-                    ...UI.ordersFilterChip,
-                    ...(active ? UI.ordersFilterChipActive : {}),
-                    ...(loading ? { opacity: 0.6, cursor: "wait" } : {}),
-                  }}
-                >
-                  {label}
-                </button>
-              );
-            })}
+          <div style={{ padding: 16, paddingBottom: 14, borderBottom: "1px solid #e2e8f0" }}>
+            <OverviewPrimaryFilterRow
+              loading={loading}
+              typPrehleduOptions={OVERVIEW_ORDER_TYPE_OPTIONS}
+              typPrehleduActiveId={overviewOrderType}
+              onTypPrehledu={(id) => setOverviewOrderType(id as OrdersOverviewOrderTypeFilter)}
+              stavZakazkyOptions={OVERVIEW_WORKFLOW_OPTIONS}
+              stavZakazkyActiveId={workflowListFilter}
+              onStavZakazky={(id) => setWorkflowListFilter(id as ErpWorkflowListFilter)}
+              rowStyle={{ marginBottom: 0 }}
+              trailing={
+                <>
+                  {VP_QUICK_FILTER_LABELS.map((filter) => {
+                    if (isVpQuickFilterDisabledLabel(filter)) {
+                      return (
+                        <button
+                          key={filter}
+                          type="button"
+                          disabled
+                          title="Tento filtr zatím není napojen na data v přehledu VP."
+                          style={{
+                            ...UI.ordersFilterChip,
+                            opacity: 0.5,
+                            cursor: "not-allowed",
+                          }}
+                        >
+                          {filter}
+                        </button>
+                      );
+                    }
+                    const active = activeQuickFilters.includes(filter);
+                    return (
+                      <button
+                        key={filter}
+                        type="button"
+                        onClick={() =>
+                          setActiveQuickFilters((prev) =>
+                            prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
+                          )
+                        }
+                        style={{
+                          ...UI.ordersFilterChip,
+                          ...(active ? UI.ordersFilterChipActive : {}),
+                        }}
+                      >
+                        {filter}
+                      </button>
+                    );
+                  })}
+                </>
+              }
+            />
           </div>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Hledat VP, GPN, název, zakázku…"
-            style={{
-              ...UI.inputs.base,
-              flex: "1 1 200px",
-              minWidth: 160,
-              maxWidth: 420,
-              padding: "6px 10px",
-              fontSize: 13,
-            }}
-          />
-        </div>
-
-        <div style={{ ...UI.card, borderRadius: 14, padding: 0, overflow: "hidden" }}>
           {loading ? (
             <div style={{ padding: 16, color: "#64748b", fontWeight: 600 }}>Načítám výrobní příkazy…</div>
           ) : error ? (
@@ -176,7 +212,7 @@ export default function ProductionOrdersPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((row) => (
+                  {displayRows.map((row) => (
                     <tr
                       key={row.id}
                       onClick={() => {
@@ -268,10 +304,16 @@ export default function ProductionOrdersPage({
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.due_date ?? "—"}</td>
                     </tr>
                   ))}
-                  {filtered.length === 0 ? (
+                  {rows.length === 0 ? (
                     <tr>
                       <td colSpan={10} style={{ ...UI.td, textAlign: "center", color: "#64748b" }}>
                         Žádné výrobní příkazy.
+                      </td>
+                    </tr>
+                  ) : displayRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} style={{ ...UI.td, textAlign: "center", color: "#64748b" }}>
+                        Žádné výsledky.
                       </td>
                     </tr>
                   ) : null}
@@ -280,7 +322,7 @@ export default function ProductionOrdersPage({
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </PageSection>
+    </PageContainer>
   );
 }

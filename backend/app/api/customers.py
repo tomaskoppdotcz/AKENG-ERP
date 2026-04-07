@@ -8,6 +8,7 @@ from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.master_data import Customer
 from app.models.portfolio import PortfolioGroup, PortfolioItem
@@ -117,7 +118,11 @@ def list_customers(db: Session = Depends(get_db)):
 
 
 @router.post("")
-def create_customer(payload: CustomerCreatePayload, db: Session = Depends(get_db)):
+def create_customer(
+    payload: CustomerCreatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("purchase.write")),
+):
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="Název je povinný.")
@@ -142,7 +147,12 @@ def create_customer(payload: CustomerCreatePayload, db: Session = Depends(get_db
 
 
 @router.put("/{customer_id}")
-def update_customer(customer_id: int, payload: CustomerUpdatePayload, db: Session = Depends(get_db)):
+def update_customer(
+    customer_id: int,
+    payload: CustomerUpdatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("purchase.write")),
+):
     row = db.scalar(select(Customer).where(Customer.id == customer_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Zákazník nebyl nalezen.")
@@ -172,7 +182,11 @@ def update_customer(customer_id: int, payload: CustomerUpdatePayload, db: Sessio
 
 
 @router.delete("/{customer_id}")
-def delete_customer(customer_id: int, db: Session = Depends(get_db)):
+def delete_customer(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("purchase.write")),
+):
     row = db.scalar(select(Customer).where(Customer.id == customer_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Zákazník nebyl nalezen.")

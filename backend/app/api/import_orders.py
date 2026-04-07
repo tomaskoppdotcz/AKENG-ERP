@@ -5,6 +5,7 @@ import pdfplumber
 import datetime
 import re
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
 from app.services.business_numbering import next_vp_code, next_zak_code
@@ -51,7 +52,11 @@ def _job_items_have_price_column(db: Session) -> bool:
 
 
 @router.post("/customer-order-pdf")
-async def import_customer_order_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_customer_order_pdf(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("orders.write")),
+):
     text = ""
 
     with pdfplumber.open(file.file) as pdf:

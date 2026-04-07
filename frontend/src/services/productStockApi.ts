@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -71,13 +73,13 @@ export type ProductStockMovementCreatePayload = {
 export type ProductStockMovementUpdatePayload = Partial<ProductStockMovementCreatePayload>;
 
 export async function getProductStockItems(): Promise<ProductStockItem[]> {
-  const res = await fetch(`${BASE}/items`);
+  const res = await akengFetch(`${BASE}/items`);
   if (!res.ok) throw new Error(await readErrorMessage(res, "Nepodařilo se načíst sklad výrobků."));
   return res.json();
 }
 
 export async function createProductStockItem(payload: ProductStockItemCreatePayload): Promise<ProductStockItem> {
-  const res = await fetch(`${BASE}/items`, {
+  const res = await akengFetch(`${BASE}/items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -90,7 +92,7 @@ export async function updateProductStockItem(
   id: number,
   payload: ProductStockItemUpdatePayload
 ): Promise<ProductStockItem> {
-  const res = await fetch(`${BASE}/items/${id}`, {
+  const res = await akengFetch(`${BASE}/items/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -100,13 +102,13 @@ export async function updateProductStockItem(
 }
 
 export async function deleteProductStockItem(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${BASE}/items/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${BASE}/items/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await readErrorMessage(res, "Nepodařilo se smazat skladovou kartu."));
   return res.json();
 }
 
 export async function getProductStockMovements(stockItemId: number): Promise<ProductStockMovement[]> {
-  const res = await fetch(`${BASE}/items/${stockItemId}/movements`);
+  const res = await akengFetch(`${BASE}/items/${stockItemId}/movements`);
   if (!res.ok) throw new Error(await readErrorMessage(res, "Nepodařilo se načíst pohyby."));
   return res.json();
 }
@@ -115,7 +117,7 @@ export async function createProductStockMovement(
   stockItemId: number,
   payload: ProductStockMovementCreatePayload
 ): Promise<ProductStockMovement> {
-  const res = await fetch(`${BASE}/items/${stockItemId}/movements`, {
+  const res = await akengFetch(`${BASE}/items/${stockItemId}/movements`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -128,7 +130,7 @@ export async function updateProductStockMovement(
   movementId: number,
   payload: ProductStockMovementUpdatePayload
 ): Promise<ProductStockMovement> {
-  const res = await fetch(`${BASE}/movements/${movementId}`, {
+  const res = await akengFetch(`${BASE}/movements/${movementId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -138,7 +140,7 @@ export async function updateProductStockMovement(
 }
 
 export async function deleteProductStockMovement(movementId: number): Promise<{ status: string }> {
-  const res = await fetch(`${BASE}/movements/${movementId}`, { method: "DELETE" });
+  const res = await akengFetch(`${BASE}/movements/${movementId}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await readErrorMessage(res, "Nepodařilo se smazat pohyb."));
   return res.json();
 }
@@ -152,7 +154,7 @@ export async function issueProductFromStock(payload: {
   customer_order_id?: number | null;
   note?: string | null;
 }): Promise<{ status: string; issue_id: number; qty: number }> {
-  const res = await fetch(`${ORDERS_API}/product/issue`, {
+  const res = await akengFetch(`${ORDERS_API}/product/issue`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

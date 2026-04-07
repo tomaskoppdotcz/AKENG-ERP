@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import SimpleModal from "../components/SimpleModal";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
 import { UI } from "../styles/ui";
 import {
   getMaterialIssueProposal,
@@ -513,62 +516,72 @@ export default function MaterialRequirementsPage({
   }
 
   return (
-    <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={UI.pageHeaderRow}>
-          <div>
-            <div style={UI.sectionTitle}>Požadavky materiálu</div>
-            <div style={UI.sectionSubtitle}>
-              Provozní přehled podle zakázek a VP; souhrn podle materiálu pro nákupní pool.
-            </div>
-          </div>
-          <div style={UI.pageHeaderActions}>
+    <>
+      <PageContainer style={{ paddingTop: 10 }}>
+        <PageHeader
+          title="Požadavky materiálu"
+          subtitle="Provozní přehled podle zakázek a VP; souhrn podle materiálu pro nákupní pool."
+          actions={
             <button type="button" style={UI.buttons.secondary} onClick={() => void refreshWithRebuild()}>
               Obnovit
             </button>
+          }
+        />
+
+        <PageSection>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", width: "100%" }}>
+            {(
+              [
+                { id: "by_vp" as const, label: "Podle zakázek / VP" },
+                { id: "by_material" as const, label: "Souhrn podle materiálu" },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setViewMode(t.id)}
+                style={{
+                  ...UI.ordersFilterChip,
+                  ...(viewMode === t.id ? UI.ordersFilterChipActive : {}),
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
           </div>
-        </div>
+        </PageSection>
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-          {(
-            [
-              { id: "by_vp" as const, label: "Podle zakázek / VP" },
-              { id: "by_material" as const, label: "Souhrn podle materiálu" },
-            ] as const
-          ).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setViewMode(t.id)}
-              style={{
-                ...UI.ordersFilterChip,
-                ...(viewMode === t.id ? UI.ordersFilterChipActive : {}),
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <PageSection>
+          <div
+            style={{
+              ...UI.card,
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(180px, 1fr))",
+              gap: 10,
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          >
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+              <input type="checkbox" checked={onlyShortages} onChange={(e) => setOnlyShortages(e.target.checked)} />
+              Jen nepokryté / shortage
+            </label>
+            <input
+              style={UI.inputs.base}
+              placeholder="Filtr kódu materiálu…"
+              value={materialCodeFilter}
+              onChange={(e) => setMaterialCodeFilter(e.target.value)}
+            />
+            <input
+              style={UI.inputs.base}
+              placeholder="Filtr zakázka / VP / GPN…"
+              value={orderVpFilter}
+              onChange={(e) => setOrderVpFilter(e.target.value)}
+            />
+          </div>
+        </PageSection>
 
-        <div style={{ ...UI.card, display: "grid", gridTemplateColumns: "repeat(3, minmax(180px, 1fr))", gap: 10 }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-            <input type="checkbox" checked={onlyShortages} onChange={(e) => setOnlyShortages(e.target.checked)} />
-            Jen nepokryté / shortage
-          </label>
-          <input
-            style={UI.inputs.base}
-            placeholder="Filtr kódu materiálu…"
-            value={materialCodeFilter}
-            onChange={(e) => setMaterialCodeFilter(e.target.value)}
-          />
-          <input
-            style={UI.inputs.base}
-            placeholder="Filtr zakázka / VP / GPN…"
-            value={orderVpFilter}
-            onChange={(e) => setOrderVpFilter(e.target.value)}
-          />
-        </div>
-
+        <PageSection>
         {loading ? (
           <div style={UI.card}>Načítám požadavky materiálu…</div>
         ) : error ? (
@@ -576,7 +589,7 @@ export default function MaterialRequirementsPage({
             {error}
           </div>
         ) : viewMode === "by_vp" ? (
-          <div style={{ ...UI.card, overflowX: "auto" }}>
+          <div style={{ ...UI.card, overflowX: "auto", width: "100%", boxSizing: "border-box" }}>
             <table style={UI.table}>
               <thead>
                 <tr>
@@ -754,7 +767,7 @@ export default function MaterialRequirementsPage({
             {!filteredVp.length ? <div style={{ marginTop: 12, color: "#64748b" }}>Žádné VP pro zadané filtry.</div> : null}
           </div>
         ) : (
-          <div style={{ ...UI.card, overflowX: "auto" }}>
+          <div style={{ ...UI.card, overflowX: "auto", width: "100%", boxSizing: "border-box" }}>
             <table style={UI.table}>
               <thead>
                 <tr>
@@ -873,7 +886,8 @@ export default function MaterialRequirementsPage({
             ) : null}
           </div>
         )}
-      </div>
+        </PageSection>
+      </PageContainer>
 
       <SimpleModal
         title="Vydat materiál"
@@ -1125,6 +1139,6 @@ export default function MaterialRequirementsPage({
           {purchaseError ? <div style={{ color: "#b91c1c", fontWeight: 700 }}>{purchaseError}</div> : null}
         </div>
       </SimpleModal>
-    </div>
+    </>
   );
 }

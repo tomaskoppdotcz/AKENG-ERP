@@ -42,6 +42,7 @@ from app.api.portfolio import (
     router as portfolio_router,
 )
 from app.api.customers import ensure_customers_sqlite_schema, router as customers_router
+from app.api.ui_settings import router as ui_settings_router
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
 from app.models.kiosk import Employee, Kiosk, KioskActivityLog, KioskSession, OperationEvent
@@ -73,6 +74,8 @@ from app.models.material_stock import (
 )
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.storage_location import StorageLocation
+from app.models.erp_user import ErpUser  # noqa: F401 — metadata / create_all
+from app.models.app_setting import AppSetting  # noqa: F401 — metadata / create_all
 
 configure_app_console_logging(logging.INFO)
 
@@ -136,6 +139,7 @@ app.include_router(dev_tools_router, prefix="/dev", tags=["dev"])
 app.include_router(generate_operations_router, prefix="/generate", tags=["generate"])
 app.include_router(portfolio_router, prefix="/portfolio", tags=["portfolio"])
 app.include_router(customers_router)
+app.include_router(ui_settings_router, prefix="/ui", tags=["ui-settings"])
 
 
 @app.get("/")

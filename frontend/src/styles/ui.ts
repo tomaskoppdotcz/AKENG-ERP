@@ -2,18 +2,41 @@ export const UI = {
   // Global visual system
   appBackground: "#f1f5f9",
 
-  // Main layout container (new skeleton)
-  mainContainer: {
-    maxWidth: 1400,
-    margin: "0 auto",
-    padding: 20,
+  /** Celá šířka workspace — bez max-width / centrování (obsah řídí ErpAppShell padding). */
+  pageContainer: {
+    width: "100%",
+    maxWidth: "none",
+    margin: 0,
+    padding: 0,
+    boxSizing: "border-box" as const,
+    minWidth: 0,
   },
 
-  // Backwards-compatible alias (legacy pages still use UI.container)
+  // Main layout container (legacy — prefer `pageContainer`)
+  mainContainer: {
+    width: "100%",
+    maxWidth: "none",
+    margin: 0,
+    padding: 0,
+    boxSizing: "border-box" as const,
+    minWidth: 0,
+  },
+
+  // Backwards-compatible alias — nyní také plná šířka; stránky si přidávají karty / sekce
   container: {
-    maxWidth: 1400,
-    margin: "0 auto",
-    padding: "20px",
+    width: "100%",
+    maxWidth: "none",
+    margin: 0,
+    padding: 0,
+    boxSizing: "border-box" as const,
+    minWidth: 0,
+  },
+
+  /** Mezery mezi hlavními bloky stránky (pod hlavičkou, mezi kartami). */
+  pageSection: {
+    marginTop: 16,
+    width: "100%",
+    minWidth: 0,
   },
 
   card: {
@@ -60,6 +83,7 @@ export const UI = {
 
   /** Jednotná karta hlavičky detailu (VP, sklad, portfolio, …) */
   detailPageHeaderCard: {
+    width: "100%",
     background: "#ffffff",
     border: "1px solid #dbe2ea",
     borderRadius: 14,
@@ -352,6 +376,25 @@ export const UI = {
     border: "1px solid #2563eb",
     background: "#dbeafe",
     color: "#1d4ed8",
+  },
+
+  /**
+   * Globální ERP shell (SAP B1 inspirovaný, hutný) — pouze layout, ne obsah stránek.
+   */
+  erpShell: {
+    sidebarWidth: 220,
+    background: "#e8ebef",
+    sidebarBg: "#2f3d4c",
+    sidebarBorder: "1px solid #1f2937",
+    sidebarTextMuted: "rgba(255,255,255,0.55)",
+    sidebarText: "rgba(255,255,255,0.92)",
+    sidebarGroupHeader: "rgba(255,255,255,0.45)",
+    itemHover: "rgba(255,255,255,0.08)",
+    itemActive: "rgba(0,112,242,0.35)",
+    itemActiveBar: "#0070f2",
+    topBarBg: "#ffffff",
+    topBarBorder: "1px solid #c8cdd4",
+    topBarHeight: 40,
   },
 
   topNavigation: {

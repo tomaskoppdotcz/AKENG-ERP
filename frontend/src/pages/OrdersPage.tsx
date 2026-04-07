@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
 import { UI } from "../styles/ui";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
 import {
@@ -8,6 +11,8 @@ import {
   type OrdersOverviewOrderTypeFilter,
   type OrdersOverviewRow,
 } from "../services/ordersApi";
+import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilterRow";
+import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
 
 const orderCodeLink: React.CSSProperties = {
   background: "none",
@@ -43,18 +48,6 @@ const TABLE_COLUMNS = [
 
 const ORDER_FILTERS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
 type OrderFilter = (typeof ORDER_FILTERS)[number];
-
-const OVERVIEW_ORDER_TYPE_OPTIONS: { id: OrdersOverviewOrderTypeFilter; label: string }[] = [
-  { id: "customer", label: "Zákaznické" },
-  { id: "internal", label: "Interní" },
-  { id: "all", label: "Vše" },
-];
-
-const OVERVIEW_WORKFLOW_OPTIONS: { id: ErpWorkflowListFilter; label: string }[] = [
-  { id: "active", label: "Aktivní" },
-  { id: "cancelled", label: "Stornované" },
-  { id: "all", label: "Vše" },
-];
 
 function formatSearchValue(v: string) {
   return v.trim().toLowerCase();
@@ -257,30 +250,29 @@ export default function OrdersPage(_props: Props) {
   }
 
   return (
-    <div style={{ paddingTop: 10 }}>
-      <div style={UI.pageHeaderRow}>
-        <div>
-          <div style={UI.sectionTitle}>Zakázky</div>
-          <div style={UI.sectionSubtitle}>Přehled zakázek</div>
-        </div>
-
-        <div style={UI.pageHeaderActions}>
-          <button type="button" style={UI.buttons.secondary} onClick={() => _props.onBackToDashboard?.()}>
-            Zpět na nástěnku
-          </button>
-          <button
-            type="button"
-            style={UI.buttons.primary}
-            onClick={openCreateForm}
-            disabled={customersLoading || customers.length === 0}
-          >
-            Nová zakázka
-          </button>
-          <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
-            Import objednávky
-          </button>
-        </div>
-      </div>
+    <PageContainer style={{ paddingTop: 10 }}>
+      <PageHeader
+        title="Zakázky"
+        subtitle="Přehled zakázek"
+        actions={
+          <>
+            <button type="button" style={UI.buttons.secondary} onClick={() => _props.onBackToDashboard?.()}>
+              Zpět na nástěnku
+            </button>
+            <button
+              type="button"
+              style={UI.buttons.primary}
+              onClick={openCreateForm}
+              disabled={customersLoading || customers.length === 0}
+            >
+              Nová zakázka
+            </button>
+            <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
+              Import objednávky
+            </button>
+          </>
+        }
+      />
 
       <div style={UI.summaryTilesGridOuter}>
         <div style={UI.summaryTilesGridSix}>
@@ -315,9 +307,9 @@ export default function OrdersPage(_props: Props) {
         })}
       </div>
 
-      <div style={{ marginTop: 16, ...UI.card, padding: 16, borderRadius: 14 }}>
-        {showCreateForm ? (
-          <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+      {showCreateForm ? (
+        <PageSection gapTop={16}>
+          <div style={{ ...UI.card, padding: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Nová zakázka</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
               <div>
@@ -363,76 +355,61 @@ export default function OrdersPage(_props: Props) {
               </button>
             </div>
           </div>
-        ) : null}
+        </PageSection>
+      ) : null}
 
-        {activeSubtab === "prehled" ? (
-          <>
-            {loadError ? (
-              <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 12 }}>{loadError}</div>
-            ) : null}
-            {loading ? <div style={{ ...UI.sectionSubtitle, marginBottom: 12 }}>Načítám zakázky…</div> : null}
-
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 12 }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#475569" }}>Typ přehledu:</span>
-              {OVERVIEW_ORDER_TYPE_OPTIONS.map(({ id, label }) => {
-                const active = overviewOrderType === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setOverviewOrderType(id)}
-                    disabled={loading}
-                    style={{
-                      ...UI.ordersFilterChip,
-                      ...(active ? UI.ordersFilterChipActive : {}),
-                      ...(loading ? { opacity: 0.6, cursor: "wait" } : {}),
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#475569", marginLeft: 8 }}>Stav zakázky:</span>
-              {OVERVIEW_WORKFLOW_OPTIONS.map(({ id, label }) => {
-                const active = overviewWorkflowFilter === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setOverviewWorkflowFilter(id)}
-                    disabled={loading}
-                    style={{
-                      ...UI.ordersFilterChip,
-                      ...(active ? UI.ordersFilterChipActive : {}),
-                      ...(loading ? { opacity: 0.6, cursor: "wait" } : {}),
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {!loading && !loadError && rows.length === 0 ? (
-              <div
-                style={{
-                  textAlign: "center",
-                  color: "#64748b",
-                  fontWeight: 700,
-                  padding: "28px 12px",
-                  background: "#f8fafc",
-                  borderRadius: 12,
-                  border: "1px solid #e2e8f0",
-                }}
-              >
-                Žádné zakázky k zobrazení. Po načtení reálných dat z backendu se zde objeví přehled.
-              </div>
-            ) : null}
-
-            {!loading && rows.length > 0 ? (
-              <>
-                <div style={UI.ordersFilterBar}>
-                  <div style={UI.ordersFilterSearchWrap}>
+      {activeSubtab === "prehled" ? (
+        <PageSection gapTop={16}>
+          <div
+            style={{
+              ...UI.card,
+              padding: 0,
+              borderRadius: 14,
+              width: "100%",
+              boxSizing: "border-box",
+              overflow: "hidden",
+            }}
+          >
+            <div style={{ padding: 16, paddingBottom: 14, borderBottom: "1px solid #e2e8f0" }}>
+              <OverviewPrimaryFilterRow
+                loading={loading}
+                typPrehleduOptions={OVERVIEW_ORDER_TYPE_OPTIONS}
+                typPrehleduActiveId={overviewOrderType}
+                onTypPrehledu={(id) => setOverviewOrderType(id as OrdersOverviewOrderTypeFilter)}
+                stavZakazkyOptions={OVERVIEW_WORKFLOW_OPTIONS}
+                stavZakazkyActiveId={overviewWorkflowFilter}
+                onStavZakazky={(id) => setOverviewWorkflowFilter(id as ErpWorkflowListFilter)}
+                rowStyle={{ marginBottom: !loading && rows.length > 0 ? 12 : 0 }}
+                trailing={
+                  !loading && rows.length > 0 ? (
+                    <>
+                      {ORDER_FILTERS.map((filter) => {
+                        const active = activeFilters.includes(filter);
+                        return (
+                          <button
+                            key={filter}
+                            type="button"
+                            onClick={() =>
+                              setActiveFilters((prev) =>
+                                prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
+                              )
+                            }
+                            style={{
+                              ...UI.ordersFilterChip,
+                              ...(active ? UI.ordersFilterChipActive : {}),
+                            }}
+                          >
+                            {filter}
+                          </button>
+                        );
+                      })}
+                    </>
+                  ) : null
+                }
+              />
+              {!loading && rows.length > 0 ? (
+                <div style={{ ...UI.ordersFilterBar, marginBottom: 0 }}>
+                  <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 280px", minWidth: 200 }}>
                     <input
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
@@ -440,30 +417,33 @@ export default function OrdersPage(_props: Props) {
                       style={UI.inputs.base}
                     />
                   </div>
-                  <div style={UI.ordersFilterChips}>
-                    {ORDER_FILTERS.map((filter) => {
-                      const active = activeFilters.includes(filter);
-                      return (
-                        <button
-                          key={filter}
-                          type="button"
-                          onClick={() =>
-                            setActiveFilters((prev) =>
-                              prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
-                            )
-                          }
-                          style={{
-                            ...UI.ordersFilterChip,
-                            ...(active ? UI.ordersFilterChipActive : {}),
-                          }}
-                        >
-                          {filter}
-                        </button>
-                      );
-                    })}
-                  </div>
                 </div>
+              ) : null}
+            </div>
 
+            <div style={{ padding: 16 }}>
+              {loadError ? (
+                <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 12 }}>{loadError}</div>
+              ) : null}
+              {loading ? <div style={{ ...UI.sectionSubtitle, marginBottom: 12 }}>Načítám zakázky…</div> : null}
+
+              {!loading && !loadError && rows.length === 0 ? (
+                <div
+                  style={{
+                    textAlign: "center",
+                    color: "#64748b",
+                    fontWeight: 700,
+                    padding: "28px 12px",
+                    background: "#f8fafc",
+                    borderRadius: 12,
+                    border: "1px solid #e2e8f0",
+                  }}
+                >
+                  Žádné zakázky k zobrazení. Po načtení reálných dat z backendu se zde objeví přehled.
+                </div>
+              ) : null}
+
+              {!loading && rows.length > 0 ? (
                 <div style={{ overflowX: "auto" }}>
                   <table style={UI.table}>
                     <thead>
@@ -548,15 +528,27 @@ export default function OrdersPage(_props: Props) {
                     </tbody>
                   </table>
                 </div>
-              </>
-            ) : null}
-          </>
-        ) : (
-          <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0, fontWeight: 900 }}>
-            {`Modul ${activeSubtabLabel} pro zakázky je ve vývoji.`}
+              ) : null}
+            </div>
           </div>
-        )}
-      </div>
-    </div>
+        </PageSection>
+      ) : (
+        <PageSection gapTop={16}>
+          <div
+            style={{
+              ...UI.card,
+              padding: 16,
+              borderRadius: 14,
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          >
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0, fontWeight: 900 }}>
+              {`Modul ${activeSubtabLabel} pro zakázky je ve vývoji.`}
+            </div>
+          </div>
+        </PageSection>
+      )}
+    </PageContainer>
   );
 }

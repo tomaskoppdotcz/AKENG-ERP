@@ -14,30 +14,37 @@ import ProductionOrderDetailPage from "./pages/ProductionOrderDetailPage";
 import MaterialRequirementsPage from "./pages/MaterialRequirementsPage";
 import MaterialPurchaseOrdersPage from "./pages/MaterialPurchaseOrdersPage";
 import PlannerPage from "./pages/PlannerPage";
-import SettingsPage from "./pages/SettingsPage";
+import ShopfloorKioskPage from "./pages/ShopfloorKioskPage";
+import MachinePlanningPage from "./pages/MachinePlanningPage";
+import CustomerLibraryPage from "./pages/CustomerLibraryPage";
+import WorkplaceLibraryPage from "./pages/WorkplaceLibraryPage";
+import OperationLibraryPage from "./pages/OperationLibraryPage";
+import PortfolioGroupLibraryPage from "./pages/PortfolioGroupLibraryPage";
+import SkladCiselnikyPage from "./pages/SkladCiselnikyPage";
+import MaterialLibraryPage from "./pages/MaterialLibraryPage";
+import MaterialGroupLibraryPage from "./pages/MaterialGroupLibraryPage";
+import ZamestnanciHubPage from "./pages/ZamestnanciHubPage";
+import CapacityDashboardPage from "./pages/CapacityDashboardPage";
+import PortfolioGpnTpPage from "./pages/PortfolioGpnTpPage";
+import StorageLocationPage from "./pages/StorageLocationPage";
+import ErpAppShell from "./components/ErpAppShell.tsx";
 import GlobalShellScanLookup from "./components/GlobalShellScanLookup.tsx";
-import TopNav from "./components/TopNav.tsx";
 import ErpPreviewDrawer, { type ErpPreviewDrawerState } from "./components/ErpPreviewDrawer";
 import { UI } from "./styles/ui";
 import { getPortfolioItem } from "./services/portfolioApi";
 import { parseErpDeepLink } from "./utils/erpDeepLink";
 import type { ScanLookupResponse } from "./services/scanLookupApi";
 import { tabFromInput, type OpenWorkspaceInput, type WorkspaceTab } from "./workspace/workspaceTabTypes";
-
-const NAV_ITEMS = [
-  "Nástěnka",
-  "Zakázky",
-  "Výkresy",
-  "Portfolio",
-  "Sklad výrobků",
-  "Sklad materiálu",
-  "Požadavky materiálu",
-  "Nákup materiálu",
-  "Výroba",
-  "Plánování",
-  "Kvalita",
-  "Nastavení",
-] as const;
+import { ERP_NAV_GROUPS } from "./navigation/erpNavConfig";
+import { applyNavOrder } from "./navigation/applyNavOrder";
+import { getNavSidebarOrder } from "./services/navSidebarOrderApi";
+import NavSidebarOrderPage from "./pages/NavSidebarOrderPage";
+import {
+  filterNavGroupsByRole,
+  readStoredErpRole,
+  writeStoredErpRole,
+  type ErpRole,
+} from "./auth/rbac";
 
 function ModulePlaceholderPage({ moduleName }: { moduleName: string }) {
   return (
@@ -48,8 +55,18 @@ function ModulePlaceholderPage({ moduleName }: { moduleName: string }) {
   );
 }
 
+function SystemSettingsPlaceholder({ title }: { title: string }) {
+  return (
+    <div style={{ paddingTop: 18 }}>
+      <div style={UI.sectionTitle}>{title}</div>
+      <div style={UI.sectionSubtitle}>Systémové nastavení — ve vývoji</div>
+    </div>
+  );
+}
+
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [erpRole, setErpRole] = useState<ErpRole | null>(() => readStoredErpRole());
   const [activeModule, setActiveModule] = useState<string>("Nástěnka");
 
   const [selectedProductionOrderId, setSelectedProductionOrderId] = useState<number | null>(null);
@@ -61,8 +78,23 @@ export default function App() {
   );
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState<string | null>(null);
+  const [navSidebarOrder, setNavSidebarOrder] = useState<Record<string, string[]> | null>(null);
 
   const clearPortfolioInitialSearch = useCallback(() => setPortfolioInitialSearch(null), []);
+
+  const loadNavSidebarOrder = useCallback(async () => {
+    try {
+      const o = await getNavSidebarOrder();
+      setNavSidebarOrder(o);
+    } catch {
+      setNavSidebarOrder({});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void loadNavSidebarOrder();
+  }, [isAuthenticated, loadNavSidebarOrder]);
 
   const openWorkspaceTab = useCallback((input: OpenWorkspaceInput) => {
     const built = tabFromInput(input);
@@ -309,7 +341,7 @@ export default function App() {
       void getPortfolioItem(link.portfolioItemId)
         .then((item) => {
           resetDetailStack();
-          openWorkspaceTab({ kind: "module", moduleKey: "Portfolio", title: "Portfolio" });
+          openWorkspaceTab({ kind: "module", moduleKey: "Portfolio", title: "Portfolio výrobků" });
           openWorkspaceTab({
             kind: "portfolio",
             portfolioItemId: item.id,
@@ -340,7 +372,7 @@ export default function App() {
       return;
     }
     if (link.view === "productionOrder") {
-      openWorkspaceTab({ kind: "module", moduleKey: "Výroba", title: "Výroba" });
+      openWorkspaceTab({ kind: "module", moduleKey: "Výroba", title: "Výrobní příkazy" });
       openWorkspaceTab({ kind: "productionOrder", productionOrderId: link.productionOrderId });
       setActiveModule("Výroba");
       stripQuery();
@@ -348,14 +380,23 @@ export default function App() {
     }
     if (link.view === "portfolioSearch") {
       setPortfolioInitialSearch(link.gpn);
-      openWorkspaceTab({ kind: "module", moduleKey: "Portfolio", title: "Portfolio" });
+      openWorkspaceTab({ kind: "module", moduleKey: "Portfolio", title: "Portfolio výrobků" });
       setActiveModule("Portfolio");
       stripQuery();
       return;
     }
   }, [isAuthenticated, openWorkspaceTab]);
 
-  function handleLogin() {
+  const baseNavGroups = useMemo(() => filterNavGroupsByRole(erpRole, ERP_NAV_GROUPS), [erpRole]);
+
+  const sidebarNavGroups = useMemo(() => {
+    if (navSidebarOrder === null) return baseNavGroups;
+    return applyNavOrder(baseNavGroups, navSidebarOrder);
+  }, [baseNavGroups, navSidebarOrder]);
+
+  function handleLogin(role: ErpRole | null) {
+    writeStoredErpRole(role);
+    setErpRole(role);
     setIsAuthenticated(true);
     const home = tabFromInput({ kind: "module", moduleKey: "Nástěnka", title: "Nástěnka" });
     setWorkspaceTabs([home]);
@@ -363,13 +404,14 @@ export default function App() {
     setActiveModule("Nástěnka");
   }
 
-  function handleTopNavNavigate(module: string) {
+  function handleTopNavNavigate(moduleKey: string, tabTitle?: string) {
     setPreviewDrawer(null);
     setPortfolioInitialSearch(null);
     setSelectedProductionOrderId(null);
     setOrdersInitialCustomerOrderId(null);
-    openWorkspaceTab({ kind: "module", moduleKey: module, title: module });
-    setActiveModule(module);
+    const title = (tabTitle?.trim() || moduleKey).trim();
+    openWorkspaceTab({ kind: "module", moduleKey, title });
+    setActiveModule(moduleKey);
   }
 
   function openHomeModuleTab() {
@@ -378,7 +420,7 @@ export default function App() {
 
   if (!isAuthenticated) {
     return (
-      <div style={{ minHeight: "100vh", background: UI.appBackground, fontFamily: "Arial, sans-serif" }}>
+      <div style={{ minHeight: "100vh", background: UI.erpShell.background, fontFamily: "Arial, Helvetica, sans-serif" }}>
         <LoginPage onLogin={handleLogin} />
       </div>
     );
@@ -386,12 +428,13 @@ export default function App() {
 
   const activeWorkspaceTab =
     activeWorkspaceTabId === null ? undefined : workspaceTabs.find((t) => t.key === activeWorkspaceTabId);
+  const topBarContextLine = activeWorkspaceTab?.title?.trim() || null;
 
   function renderModuleBody(moduleKey: string): React.ReactNode {
     if (moduleKey === "Nástěnka") {
       return <DashboardPage {...dashboardLinkProps} />;
     }
-    if (moduleKey === "Zakázky") {
+    if (moduleKey === "Zakázky" || moduleKey === "Obchod karty zakázek") {
       return (
         <OrdersPage
           onBackToDashboard={openHomeModuleTab}
@@ -409,7 +452,7 @@ export default function App() {
           onOpenPortfolioSearch={(gpn) => {
             resetDetailStack();
             setPortfolioInitialSearch(gpn);
-            openWorkspaceTab({ kind: "module", moduleKey: "Portfolio", title: "Portfolio" });
+            openWorkspaceTab({ kind: "module", moduleKey: "Portfolio", title: "Portfolio výrobků" });
           }}
           onOpenPortfolioItemId={openPortfolioByItemId}
           onOpenPortfolioInWorkspaceTab={(portfolioItemId) =>
@@ -417,7 +460,7 @@ export default function App() {
           }
           onOpenProductionOrderDetail={(productionOrderId) => {
             setSelectedProductionOrderId(productionOrderId);
-            openWorkspaceTab({ kind: "module", moduleKey: "Výroba", title: "Výroba" });
+            openWorkspaceTab({ kind: "module", moduleKey: "Výroba", title: "Výrobní příkazy" });
           }}
           onOpenProductionOrderInWorkspaceTab={(productionOrderId, vpCode) =>
             openWorkspaceTab({ kind: "productionOrder", productionOrderId, title: vpCode })
@@ -437,7 +480,7 @@ export default function App() {
         />
       );
     }
-    if (moduleKey === "Portfolio") {
+    if (moduleKey === "Portfolio" || moduleKey === "Technologie postupy") {
       return (
         <PortfolioPage
           initialSearchQuery={portfolioInitialSearch}
@@ -452,6 +495,9 @@ export default function App() {
           }
         />
       );
+    }
+    if (moduleKey === "Technologie šablony TP") {
+      return <PortfolioGpnTpPage />;
     }
     if (moduleKey === "Sklad výrobků") {
       return (
@@ -481,7 +527,10 @@ export default function App() {
         />
       );
     }
-    if (moduleKey === "Výroba") {
+    if (moduleKey === "Zakázky nabídky") {
+      return <ModulePlaceholderPage moduleName="Nabídky" />;
+    }
+    if (moduleKey === "Výroba" || moduleKey === "Zakázky výrobní příkazy") {
       if (
         productionWideSplit &&
         selectedProductionOrderId !== null
@@ -561,6 +610,59 @@ export default function App() {
         />
       );
     }
+    if (moduleKey === "Výroba detail VP") {
+      return (
+        <ModulePlaceholderPage moduleName="Detail VP — otevřete ze seznamu výrobních příkazů nebo ze záložky" />
+      );
+    }
+    if (moduleKey === "Výroba operace") {
+      return <ModulePlaceholderPage moduleName="Operace ve výrobě" />;
+    }
+    if (moduleKey === "Výroba výkazy") {
+      return <ModulePlaceholderPage moduleName="Výkazy" />;
+    }
+    if (moduleKey === "Výroba kooperace") {
+      return <ModulePlaceholderPage moduleName="Kooperace" />;
+    }
+    if (moduleKey === "Výroba zmetky") {
+      return <ModulePlaceholderPage moduleName="Zmetky" />;
+    }
+    if (moduleKey === "Výroba příjem") {
+      return <ModulePlaceholderPage moduleName="Příjem z výroby" />;
+    }
+    if (moduleKey === "Plán fronty") {
+      return <ShopfloorKioskPage />;
+    }
+    if (moduleKey === "Plán neplánované") {
+      return <MachinePlanningPage />;
+    }
+    if (moduleKey === "Plán vytížení") {
+      return <CapacityDashboardPage />;
+    }
+    if (moduleKey === "Plán rebuild") {
+      return <ModulePlaceholderPage moduleName="Rebuild plánu" />;
+    }
+    if (moduleKey === "Technologie normy") {
+      return <ModulePlaceholderPage moduleName="Normy" />;
+    }
+    if (moduleKey === "Technologie měření") {
+      return <ModulePlaceholderPage moduleName="Měření" />;
+    }
+    if (moduleKey === "Sklad příjemky") {
+      return <ModulePlaceholderPage moduleName="Příjemky" />;
+    }
+    if (moduleKey === "Sklad výdeje") {
+      return <ModulePlaceholderPage moduleName="Výdeje" />;
+    }
+    if (moduleKey === "Sklad lokace") {
+      return <StorageLocationPage />;
+    }
+    if (moduleKey === "Sklad inventura") {
+      return <ModulePlaceholderPage moduleName="Inventura" />;
+    }
+    if (moduleKey === "Kvalita atesty") {
+      return <ModulePlaceholderPage moduleName="Atesty" />;
+    }
     if (moduleKey === "Požadavky materiálu") {
       return (
         <MaterialRequirementsPage
@@ -585,49 +687,116 @@ export default function App() {
         />
       );
     }
-    if (moduleKey === "Nastavení") {
-      return <SettingsPage onBackToDashboard={openHomeModuleTab} />;
+    if (moduleKey === "Nákup dodavatelé") {
+      return <CustomerLibraryPage />;
+    }
+    if (moduleKey === "Zákazníci") {
+      return <CustomerLibraryPage />;
+    }
+    if (moduleKey === "Portfolio skupiny") {
+      return <PortfolioGroupLibraryPage />;
+    }
+    if (moduleKey === "Kiosk") {
+      return <ShopfloorKioskPage />;
+    }
+    if (moduleKey === "Pracoviště") {
+      return <WorkplaceLibraryPage />;
+    }
+    if (moduleKey === "Stroje") {
+      return <MachinePlanningPage />;
+    }
+    if (moduleKey === "Knihovna operací") {
+      return <OperationLibraryPage />;
+    }
+    if (moduleKey === "Materiály") {
+      return <MaterialLibraryPage />;
+    }
+    if (moduleKey === "Skupiny materiálů") {
+      return <MaterialGroupLibraryPage />;
+    }
+    if (moduleKey === "Zaměstnanci") {
+      return <ZamestnanciHubPage />;
+    }
+    if (moduleKey === "Sklad pohyby") {
+      return <ModulePlaceholderPage moduleName="Pohyby materiálu" />;
+    }
+    if (moduleKey === "Pohyby výrobků") {
+      return <ModulePlaceholderPage moduleName="Pohyby výrobků" />;
+    }
+    if (moduleKey === "Sklad číselníky") {
+      return <SkladCiselnikyPage />;
+    }
+    if (moduleKey === "Kvalita kontrola") {
+      return <ModulePlaceholderPage moduleName="Kontrola kvality" />;
+    }
+    if (moduleKey === "Kvalita neshody") {
+      return <ModulePlaceholderPage moduleName="Neshody" />;
+    }
+    if (moduleKey === "Kvalita reklamace") {
+      return <ModulePlaceholderPage moduleName="Reklamace" />;
+    }
+    if (moduleKey === "SYS konfigurace") {
+      return <SystemSettingsPlaceholder title="Konfigurace systému" />;
+    }
+    if (moduleKey === "SYS uživatelé") {
+      return <SystemSettingsPlaceholder title="Uživatelé" />;
+    }
+    if (moduleKey === "SYS role") {
+      return <SystemSettingsPlaceholder title="Role" />;
+    }
+    if (moduleKey === "SYS číselné řady") {
+      return <SystemSettingsPlaceholder title="Číselné řady" />;
+    }
+    if (moduleKey === "SYS tiskové sestavy") {
+      return <SystemSettingsPlaceholder title="Tiskové sestavy" />;
+    }
+    if (moduleKey === "SYS texty") {
+      return <SystemSettingsPlaceholder title="Texty" />;
+    }
+    if (moduleKey === "SYS barcode") {
+      return <SystemSettingsPlaceholder title="Barcode" />;
+    }
+    if (moduleKey === "SYS import export") {
+      return <SystemSettingsPlaceholder title="Import / export" />;
+    }
+    if (moduleKey === "SYS pořadí navigace") {
+      return <NavSidebarOrderPage onOrderSaved={loadNavSidebarOrder} />;
     }
     if (moduleKey === "Plánování") {
       return <PlannerPage {...dashboardLinkProps} />;
-    }
-    if (moduleKey === "Kvalita") {
-      return <ModulePlaceholderPage moduleName={moduleKey} />;
     }
     return <ModulePlaceholderPage moduleName={moduleKey} />;
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: UI.appBackground, fontFamily: "Arial, sans-serif" }}>
-      <TopNav
-        activeModule={activeModule}
-        onNavigate={handleTopNavNavigate}
-        navItems={NAV_ITEMS as unknown as string[]}
-        rightSlot={<GlobalShellScanLookup onResolve={applyScanLookupResult} />}
+    <ErpAppShell
+      activeModule={activeModule}
+      contextLine={topBarContextLine}
+      onNavigate={handleTopNavNavigate}
+      navGroups={sidebarNavGroups}
+      rightSlot={<GlobalShellScanLookup onResolve={applyScanLookupResult} />}
+    >
+      <WorkspaceTabBar
+        tabs={workspaceTabs.map((t) => ({ key: t.key, title: t.title }))}
+        activeKey={activeWorkspaceTabId}
+        onSelect={setActiveWorkspaceTabId}
+        onClose={closeWorkspaceTab}
+        onCloseOthers={closeOtherWorkspaceTabs}
+        onCloseAll={closeAllWorkspaceTabs}
       />
-      <div style={UI.mainContainer}>
-        <WorkspaceTabBar
-          tabs={workspaceTabs.map((t) => ({ key: t.key, title: t.title }))}
-          activeKey={activeWorkspaceTabId}
-          onSelect={setActiveWorkspaceTabId}
-          onClose={closeWorkspaceTab}
-          onCloseOthers={closeOtherWorkspaceTabs}
-          onCloseAll={closeAllWorkspaceTabs}
+      {activeWorkspaceTab ? (
+        <WorkspaceTabPanel
+          tab={activeWorkspaceTab}
+          onCloseThisTab={() => closeWorkspaceTab(activeWorkspaceTab.key)}
+          onUpdateTabTitle={updateWorkspaceTabTitle}
+          openWorkspaceTab={openWorkspaceTab}
+          setPreviewDrawer={setPreviewDrawer}
+          renderModule={renderModuleBody}
         />
-        {activeWorkspaceTab ? (
-          <WorkspaceTabPanel
-            tab={activeWorkspaceTab}
-            onCloseThisTab={() => closeWorkspaceTab(activeWorkspaceTab.key)}
-            onUpdateTabTitle={updateWorkspaceTabTitle}
-            openWorkspaceTab={openWorkspaceTab}
-            setPreviewDrawer={setPreviewDrawer}
-            renderModule={renderModuleBody}
-          />
-        ) : (
-          <DashboardPage {...dashboardLinkProps} />
-        )}
-      </div>
+      ) : (
+        <DashboardPage {...dashboardLinkProps} />
+      )}
       <ErpPreviewDrawer open={previewDrawer} onClose={() => setPreviewDrawer(null)} />
-    </div>
+    </ErpAppShell>
   );
 }

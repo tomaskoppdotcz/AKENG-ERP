@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { akengFetch } from "../services/akengFetch";
 
 const API_BASE = "http://127.0.0.1:8001";
 
@@ -75,7 +76,7 @@ export default function PlannerBoardPage() {
   }, [selectedMachineId]);
 
   async function loadMachines() {
-    const res = await fetch(`${API_BASE}/master-data/machines`);
+    const res = await akengFetch(`${API_BASE}/master-data/machines`);
     const data = await res.json();
     setMachines(data);
     if (data.length > 0 && !selectedMachineId) {
@@ -87,8 +88,8 @@ export default function PlannerBoardPage() {
     setLoading(true);
     try {
       const [opsRes, calRes] = await Promise.all([
-        fetch(`${API_BASE}/planning/operations?machine_id=${machineId}`),
-        fetch(`${API_BASE}/planning/machine-calendar?machine_id=${machineId}`),
+        akengFetch(`${API_BASE}/planning/operations?machine_id=${machineId}`),
+        akengFetch(`${API_BASE}/planning/machine-calendar?machine_id=${machineId}`),
       ]);
 
       const ops = await opsRes.json();
@@ -104,7 +105,7 @@ export default function PlannerBoardPage() {
   async function rebuildSchedule() {
     if (!selectedMachineId) return;
 
-    await fetch(`${API_BASE}/planning/build-schedule`, {
+    await akengFetch(`${API_BASE}/planning/build-schedule`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -119,7 +120,7 @@ export default function PlannerBoardPage() {
   async function moveOperation(operationId: number, direction: "up" | "down") {
     if (!selectedMachineId) return;
 
-    await fetch(`${API_BASE}/planning/move`, {
+    await akengFetch(`${API_BASE}/planning/move`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

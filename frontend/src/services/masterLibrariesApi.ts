@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -53,7 +55,7 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
 }
 
 export async function getOperationLibraryItems(): Promise<OperationLibraryItem[]> {
-  const res = await fetch(`${API_BASE}/libraries/operations`);
+  const res = await akengFetch(`${API_BASE}/libraries/operations`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst knihovnu operací.");
   }
@@ -63,7 +65,7 @@ export async function getOperationLibraryItems(): Promise<OperationLibraryItem[]
 export async function createOperationLibraryItem(
   payload: OperationLibraryPayload
 ): Promise<OperationLibraryItem> {
-  const res = await fetch(`${API_BASE}/libraries/operations`, {
+  const res = await akengFetch(`${API_BASE}/libraries/operations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -78,7 +80,7 @@ export async function updateOperationLibraryItem(
   id: number,
   payload: OperationLibraryPayload
 ): Promise<OperationLibraryItem> {
-  const res = await fetch(`${API_BASE}/libraries/operations/${id}`, {
+  const res = await akengFetch(`${API_BASE}/libraries/operations/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -90,7 +92,7 @@ export async function updateOperationLibraryItem(
 }
 
 export async function deleteOperationLibraryItem(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/libraries/operations/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/libraries/operations/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se smazat operaci."));
   }
@@ -98,7 +100,7 @@ export async function deleteOperationLibraryItem(id: number): Promise<{ status: 
 }
 
 export async function getWorkplaceLibraryItems(): Promise<WorkplaceLibraryItem[]> {
-  const res = await fetch(`${API_BASE}/libraries/workplaces`);
+  const res = await akengFetch(`${API_BASE}/libraries/workplaces`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst knihovnu pracovišť.");
   }
@@ -108,7 +110,7 @@ export async function getWorkplaceLibraryItems(): Promise<WorkplaceLibraryItem[]
 export async function createWorkplaceLibraryItem(
   payload: WorkplaceLibraryPayload
 ): Promise<WorkplaceLibraryItem> {
-  const res = await fetch(`${API_BASE}/libraries/workplaces`, {
+  const res = await akengFetch(`${API_BASE}/libraries/workplaces`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -123,7 +125,7 @@ export async function updateWorkplaceLibraryItem(
   id: number,
   payload: WorkplaceLibraryPayload
 ): Promise<WorkplaceLibraryItem> {
-  const res = await fetch(`${API_BASE}/libraries/workplaces/${id}`, {
+  const res = await akengFetch(`${API_BASE}/libraries/workplaces/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -135,7 +137,7 @@ export async function updateWorkplaceLibraryItem(
 }
 
 export async function deleteWorkplaceLibraryItem(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/libraries/workplaces/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/libraries/workplaces/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se smazat pracoviště."));
   }
@@ -173,7 +175,7 @@ export type CustomerCreatePayload = {
 export type CustomerUpdatePayload = Partial<CustomerCreatePayload>;
 
 export async function getCustomers(): Promise<CustomerListItem[]> {
-  const res = await fetch(`${API_BASE}/customers`);
+  const res = await akengFetch(`${API_BASE}/customers`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst zákazníky."));
   }
@@ -181,7 +183,7 @@ export async function getCustomers(): Promise<CustomerListItem[]> {
 }
 
 export async function createCustomer(payload: CustomerCreatePayload): Promise<CustomerListItem> {
-  const res = await fetch(`${API_BASE}/customers`, {
+  const res = await akengFetch(`${API_BASE}/customers`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -193,7 +195,7 @@ export async function createCustomer(payload: CustomerCreatePayload): Promise<Cu
 }
 
 export async function updateCustomer(id: number, payload: CustomerUpdatePayload): Promise<CustomerListItem> {
-  const res = await fetch(`${API_BASE}/customers/${id}`, {
+  const res = await akengFetch(`${API_BASE}/customers/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -205,7 +207,7 @@ export async function updateCustomer(id: number, payload: CustomerUpdatePayload)
 }
 
 export async function deleteCustomer(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/customers/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/customers/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se smazat zákazníka."));
   }
@@ -228,7 +230,7 @@ export type EmployeeSubgroupPayload = {
 };
 
 export async function getEmployeeSubgroups(): Promise<EmployeeSubgroupRow[]> {
-  const res = await fetch(`${API_BASE}/master-data/employee-subgroups`);
+  const res = await akengFetch(`${API_BASE}/master-data/employee-subgroups`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst role zaměstnanců."));
   }
@@ -236,7 +238,7 @@ export async function getEmployeeSubgroups(): Promise<EmployeeSubgroupRow[]> {
 }
 
 export async function createEmployeeSubgroup(payload: EmployeeSubgroupPayload): Promise<EmployeeSubgroupRow> {
-  const res = await fetch(`${API_BASE}/master-data/employee-subgroups`, {
+  const res = await akengFetch(`${API_BASE}/master-data/employee-subgroups`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -251,7 +253,7 @@ export async function updateEmployeeSubgroup(
   id: number,
   payload: EmployeeSubgroupPayload
 ): Promise<EmployeeSubgroupRow> {
-  const res = await fetch(`${API_BASE}/master-data/employee-subgroups/${id}`, {
+  const res = await akengFetch(`${API_BASE}/master-data/employee-subgroups/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -284,7 +286,7 @@ export type EmployeeMasterPayload = {
 };
 
 export async function getEmployeesMaster(): Promise<EmployeeMasterRow[]> {
-  const res = await fetch(`${API_BASE}/master-data/employees`);
+  const res = await akengFetch(`${API_BASE}/master-data/employees`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst zaměstnance."));
   }
@@ -292,7 +294,7 @@ export async function getEmployeesMaster(): Promise<EmployeeMasterRow[]> {
 }
 
 export async function createEmployeeMaster(payload: EmployeeMasterPayload): Promise<EmployeeMasterRow> {
-  const res = await fetch(`${API_BASE}/master-data/employees`, {
+  const res = await akengFetch(`${API_BASE}/master-data/employees`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -307,7 +309,7 @@ export async function updateEmployeeMaster(
   id: number,
   payload: EmployeeMasterPayload
 ): Promise<EmployeeMasterRow> {
-  const res = await fetch(`${API_BASE}/master-data/employees/${id}`, {
+  const res = await akengFetch(`${API_BASE}/master-data/employees/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

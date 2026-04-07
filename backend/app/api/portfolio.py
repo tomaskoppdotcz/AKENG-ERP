@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.api.deps import require_action
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
@@ -488,7 +490,11 @@ def list_portfolio_groups(
 
 
 @router.post("/groups")
-def create_portfolio_group(payload: PortfolioGroupCreatePayload, db: Session = Depends(get_db)):
+def create_portfolio_group(
+    payload: PortfolioGroupCreatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     cust = db.scalar(select(Customer).where(Customer.id == payload.customer_id))
     if cust is None:
         raise HTTPException(status_code=404, detail="Zákazník nebyl nalezen.")
@@ -506,7 +512,12 @@ def create_portfolio_group(payload: PortfolioGroupCreatePayload, db: Session = D
 
 
 @router.put("/groups/{group_id}")
-def update_portfolio_group(group_id: int, payload: PortfolioGroupUpdatePayload, db: Session = Depends(get_db)):
+def update_portfolio_group(
+    group_id: int,
+    payload: PortfolioGroupUpdatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = db.scalar(select(PortfolioGroup).where(PortfolioGroup.id == group_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Skupina portfolia nebyla nalezena.")
@@ -531,7 +542,11 @@ def update_portfolio_group(group_id: int, payload: PortfolioGroupUpdatePayload, 
 
 
 @router.delete("/groups/{group_id}")
-def delete_portfolio_group(group_id: int, db: Session = Depends(get_db)):
+def delete_portfolio_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = db.scalar(select(PortfolioGroup).where(PortfolioGroup.id == group_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Skupina portfolia nebyla nalezena.")
@@ -561,7 +576,11 @@ def get_portfolio_items(db: Session = Depends(get_db)):
 
 
 @router.post("/items")
-def create_portfolio_item(payload: PortfolioItemCreatePayload, db: Session = Depends(get_db)):
+def create_portfolio_item(
+    payload: PortfolioItemCreatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     _validate_portfolio_refs(db, payload.customer_id, payload.portfolio_group_id)
     row = PortfolioItem(
         gpn=payload.gpn,
@@ -587,7 +606,12 @@ def create_portfolio_item(payload: PortfolioItemCreatePayload, db: Session = Dep
 
 
 @router.post("/items/{item_id}/copy")
-def copy_portfolio_item(item_id: int, payload: PortfolioItemCreatePayload, db: Session = Depends(get_db)):
+def copy_portfolio_item(
+    item_id: int,
+    payload: PortfolioItemCreatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     src = db.scalar(
         select(PortfolioItem)
         .where(PortfolioItem.id == item_id)
@@ -680,7 +704,12 @@ def get_portfolio_item(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/items/{item_id}")
-def update_portfolio_item(item_id: int, payload: PortfolioItemUpdatePayload, db: Session = Depends(get_db)):
+def update_portfolio_item(
+    item_id: int,
+    payload: PortfolioItemUpdatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = db.scalar(select(PortfolioItem).where(PortfolioItem.id == item_id))
     if not row:
         raise HTTPException(status_code=404, detail="Portfolio item not found")
@@ -727,7 +756,11 @@ def update_portfolio_item(item_id: int, payload: PortfolioItemUpdatePayload, db:
 
 
 @router.delete("/items/{item_id}")
-def delete_portfolio_item(item_id: int, db: Session = Depends(get_db)):
+def delete_portfolio_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = db.scalar(select(PortfolioItem).where(PortfolioItem.id == item_id))
     if not row:
         raise HTTPException(status_code=404, detail="Portfolio item not found")
@@ -771,7 +804,11 @@ def get_portfolio_item_technology(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/items/{item_id}/technology-template")
-def create_item_technology_template(item_id: int, db: Session = Depends(get_db)):
+def create_item_technology_template(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     item = db.scalar(select(PortfolioItem).where(PortfolioItem.id == item_id))
     if not item:
         raise HTTPException(status_code=404, detail="Portfolio item not found")
@@ -813,6 +850,7 @@ def create_template_operation(
     template_id: int,
     payload: PortfolioOperationUpsert,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
 ):
     template = db.scalar(select(PortfolioTechnologyTemplate).where(PortfolioTechnologyTemplate.id == template_id))
     if not template:
@@ -967,6 +1005,7 @@ def create_template_technology_material(
     template_id: int,
     payload: PortfolioTechnologyMaterialUpsert,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
 ):
     template = db.scalar(select(PortfolioTechnologyTemplate).where(PortfolioTechnologyTemplate.id == template_id))
     if not template:
@@ -1028,6 +1067,7 @@ def update_template_technology_material(
     material_id: int,
     payload: PortfolioTechnologyMaterialUpdate,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
 ):
     row = db.scalar(
         select(PortfolioTechnologyTemplateMaterial).where(PortfolioTechnologyTemplateMaterial.id == material_id)
@@ -1102,7 +1142,11 @@ def update_template_technology_material(
 
 
 @router.delete("/technology-material/{material_id}")
-def delete_template_technology_material(material_id: int, db: Session = Depends(get_db)):
+def delete_template_technology_material(
+    material_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = db.scalar(
         select(PortfolioTechnologyTemplateMaterial).where(PortfolioTechnologyTemplateMaterial.id == material_id)
     )
@@ -1120,6 +1164,7 @@ def reorder_template_operations(
     template_id: int,
     payload: ReorderOperationsBody,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
 ):
     template = db.scalar(select(PortfolioTechnologyTemplate).where(PortfolioTechnologyTemplate.id == template_id))
     if not template:
@@ -1161,6 +1206,7 @@ def update_template_operation(
     operation_id: int,
     payload: PortfolioOperationUpdate,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
 ):
     row = db.scalar(
         select(PortfolioTechnologyTemplateOperation).where(PortfolioTechnologyTemplateOperation.id == operation_id)
@@ -1234,7 +1280,11 @@ def update_template_operation(
 
 
 @router.delete("/template-operations/{operation_id}")
-def delete_template_operation(operation_id: int, db: Session = Depends(get_db)):
+def delete_template_operation(
+    operation_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = db.scalar(
         select(PortfolioTechnologyTemplateOperation).where(PortfolioTechnologyTemplateOperation.id == operation_id)
     )

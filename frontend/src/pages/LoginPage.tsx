@@ -1,13 +1,15 @@
 import React, { FormEvent, useState } from "react";
+import { ERP_ROLE_OPTIONS, type ErpRole } from "../auth/rbac";
 import { UI } from "../styles/ui";
 
 type Props = {
-  onLogin: () => void;
+  onLogin: (role: ErpRole | null) => void;
 };
 
 export default function LoginPage({ onLogin }: Props) {
   const [usernameOrEmail, setUsernameOrEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [roleChoice, setRoleChoice] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
   function handleSubmit(e: FormEvent) {
@@ -19,7 +21,9 @@ export default function LoginPage({ onLogin }: Props) {
     }
 
     setError(null);
-    onLogin();
+    const role: ErpRole | null =
+      roleChoice && ERP_ROLE_OPTIONS.some((o) => o.value === roleChoice) ? (roleChoice as ErpRole) : null;
+    onLogin(role);
   }
 
   return (
@@ -60,6 +64,26 @@ export default function LoginPage({ onLogin }: Props) {
               />
             </div>
 
+            <div>
+              <div style={UI.inputs.label}>Role (pro test RBAC)</div>
+              <select
+                value={roleChoice}
+                onChange={(e) => setRoleChoice(e.target.value)}
+                style={UI.inputs.base}
+                aria-label="Role pro omezení přístupu"
+              >
+                <option value="">— Bez role (vše povoleno, výchozí) —</option>
+                {ERP_ROLE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, lineHeight: 1.4 }}>
+                Role se uloží do prohlížeče a posílá se hlavičkou <code style={{ fontSize: 10 }}>X-AKENG-Role</code> na API.
+              </div>
+            </div>
+
             <button type="submit" style={UI.buttons.primary}>
               Přihlásit se
             </button>
@@ -86,4 +110,3 @@ export default function LoginPage({ onLogin }: Props) {
     </div>
   );
 }
-

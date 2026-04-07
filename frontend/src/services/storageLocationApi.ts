@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -33,13 +35,13 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
 }
 
 export async function getStorageLocations(): Promise<StorageLocation[]> {
-  const res = await fetch(`${API_BASE}/storage-locations`);
+  const res = await akengFetch(`${API_BASE}/storage-locations`);
   if (!res.ok) throw new Error(await readErrorMessage(res, "Nepodařilo se načíst umístění."));
   return res.json();
 }
 
 export async function createStorageLocation(payload: StorageLocationPayload): Promise<StorageLocation> {
-  const res = await fetch(`${API_BASE}/storage-locations`, {
+  const res = await akengFetch(`${API_BASE}/storage-locations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -52,7 +54,7 @@ export async function updateStorageLocation(
   id: number,
   payload: Partial<StorageLocationPayload>
 ): Promise<StorageLocation> {
-  const res = await fetch(`${API_BASE}/storage-locations/${id}`, {
+  const res = await akengFetch(`${API_BASE}/storage-locations/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -62,7 +64,7 @@ export async function updateStorageLocation(
 }
 
 export async function deleteStorageLocation(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/storage-locations/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/storage-locations/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await readErrorMessage(res, "Nepodařilo se smazat umístění."));
   return res.json();
 }

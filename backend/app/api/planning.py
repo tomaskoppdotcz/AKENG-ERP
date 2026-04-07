@@ -2,6 +2,8 @@ import logging
 from datetime import date
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+
+from app.api.deps import require_action
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -177,14 +179,21 @@ def get_machine_schedule(machine_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/build-schedule")
-def build_schedule(payload: BuildScheduleRequest, db: Session = Depends(get_db)):
+def build_schedule(
+    payload: BuildScheduleRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     service = PlanningEngineService(db)
     service.rebuild_machine_schedule(payload.machine_id, date.fromisoformat(payload.from_date))
     return {"status": "ok", "machine_id": payload.machine_id}
 
 
 @router.post("/rebuild-all")
-def rebuild_all(db: Session = Depends(get_db)):
+def rebuild_all(
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     service = PlanningEngineService(db)
     result = service.rebuild_all(date.today())
     return {
@@ -194,7 +203,11 @@ def rebuild_all(db: Session = Depends(get_db)):
 
 
 @router.post("/move")
-def move_operation(payload: MoveOperationRequest, db: Session = Depends(get_db)):
+def move_operation(
+    payload: MoveOperationRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     ops = db.scalars(
         select(PlanningOperation)
         .where(PlanningOperation.machine_id == payload.machine_id)
@@ -224,7 +237,11 @@ def move_operation(payload: MoveOperationRequest, db: Session = Depends(get_db))
 
 
 @router.post("/move-gantt")
-def move_gantt_operation(payload: MoveGanttOperationRequest, db: Session = Depends(get_db)):
+def move_gantt_operation(
+    payload: MoveGanttOperationRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
@@ -287,7 +304,11 @@ def move_gantt_operation(payload: MoveGanttOperationRequest, db: Session = Depen
 
 
 @router.post("/update-operation")
-def update_operation(payload: UpdatePlanningOperationRequest, db: Session = Depends(get_db)):
+def update_operation(
+    payload: UpdatePlanningOperationRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
@@ -327,7 +348,10 @@ def update_operation(payload: UpdatePlanningOperationRequest, db: Session = Depe
 
 
 @router.post("/build-demo-schedules")
-def build_demo_schedules(db: Session = Depends(get_db)):
+def build_demo_schedules(
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     service = PlanningEngineService(db)
     machine_codes = ["PILA", "CTX_BETA_800", "CMX_600_V", "MEZIOPERACNI_KONTROLA", "VYSTUPNI_KONTROLA", "BALENI"]
     total = 0
@@ -345,6 +369,7 @@ def build_demo_schedules(db: Session = Depends(get_db)):
 def rebuild_material_reservations(
     payload: MaterialReservationRebuildRequest | None = Body(None),
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
 ):
     body = payload or MaterialReservationRebuildRequest()
     summary = run_material_reservation_rebuild(
@@ -358,14 +383,20 @@ def rebuild_material_reservations(
 
 
 @router.post("/material-reservations/cleanup-orphans")
-def cleanup_material_reservation_orphans(db: Session = Depends(get_db)):
+def cleanup_material_reservation_orphans(
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     summary = cleanup_orphan_material_reservations(db)
     db.commit()
     return {"status": "ok", **summary}
 
 
 @router.post("/material-reservations/rebuild-all")
-def material_reservations_rebuild_all(db: Session = Depends(get_db)):
+def material_reservations_rebuild_all(
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     tp_summary = rebuild_all_tp_material_reservations(db)
     consumption_summary = run_material_reservation_rebuild(db)
     db.commit()
@@ -373,7 +404,11 @@ def material_reservations_rebuild_all(db: Session = Depends(get_db)):
 
 
 @router.post("/material-reservations/rebuild-for-job-item/{job_item_id}")
-def material_reservations_rebuild_for_job_item_endpoint(job_item_id: int, db: Session = Depends(get_db)):
+def material_reservations_rebuild_for_job_item_endpoint(
+    job_item_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     tp_summary = rebuild_tp_material_reservations_for_job_item(db, job_item_id)
     consumption_summary = run_material_reservation_rebuild(db, job_item_id=job_item_id)
     db.commit()
@@ -381,7 +416,11 @@ def material_reservations_rebuild_for_job_item_endpoint(job_item_id: int, db: Se
 
 
 @router.post("/material-reservations/rebuild-for-template/{template_id}")
-def material_reservations_rebuild_for_template_endpoint(template_id: int, db: Session = Depends(get_db)):
+def material_reservations_rebuild_for_template_endpoint(
+    template_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     tp_summary = rebuild_tp_material_reservations_for_technology_template(db, template_id)
     consumption_summary = run_material_reservation_rebuild(db)
     db.commit()
@@ -506,7 +545,10 @@ class MaterialPurchaseOrderPatchPayload(BaseModel):
 
 @router.patch("/material/purchase-orders/{po_id}")
 def patch_material_purchase_order(
-    po_id: int, body: MaterialPurchaseOrderPatchPayload, db: Session = Depends(get_db)
+    po_id: int,
+    body: MaterialPurchaseOrderPatchPayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("purchase.write")),
 ):
     st = (body.status or "").strip().lower()
     if st not in MATERIAL_PURCHASE_ORDER_STATUSES:
@@ -523,7 +565,11 @@ def patch_material_purchase_order(
 
 
 @router.post("/material/purchase-orders")
-def create_material_purchase_order(body: MaterialPurchaseOrderPayload, db: Session = Depends(get_db)):
+def create_material_purchase_order(
+    body: MaterialPurchaseOrderPayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("purchase.write")),
+):
     if not body.lines:
         raise HTTPException(status_code=422, detail="Alespoň jedna řádka objednávky.")
     cust = db.get(Customer, int(body.supplier_customer_id))

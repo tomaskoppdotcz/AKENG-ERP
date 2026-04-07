@@ -6,6 +6,7 @@ from sqlalchemy import inspect as sa_inspect, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.orders import ProductionOrderOperation
@@ -260,7 +261,11 @@ def list_operation_library_items(db: Session = Depends(get_db)):
 
 
 @router.post("/operations")
-def create_operation_library_item(payload: OperationLibraryPayload, db: Session = Depends(get_db)):
+def create_operation_library_item(
+    payload: OperationLibraryPayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = OperationLibraryItem(
         code=_blank_to_none(payload.code),
         name=payload.name,
@@ -278,6 +283,7 @@ def update_operation_library_item(
     operation_id: int,
     payload: OperationLibraryPayload,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
 ):
     row = db.scalar(select(OperationLibraryItem).where(OperationLibraryItem.id == operation_id))
     if not row:
@@ -292,7 +298,11 @@ def update_operation_library_item(
 
 
 @router.delete("/operations/{operation_id}")
-def delete_operation_library_item(operation_id: int, db: Session = Depends(get_db)):
+def delete_operation_library_item(
+    operation_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = db.scalar(select(OperationLibraryItem).where(OperationLibraryItem.id == operation_id))
     if not row:
         raise HTTPException(status_code=404, detail="Operation library item not found")
@@ -309,7 +319,11 @@ def list_workplace_library_items(db: Session = Depends(get_db)):
 
 
 @router.post("/workplaces")
-def create_workplace_library_item(payload: WorkplaceLibraryPayload, db: Session = Depends(get_db)):
+def create_workplace_library_item(
+    payload: WorkplaceLibraryPayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = WorkplaceLibraryItem(
         code=_blank_to_none(payload.code),
         name=payload.name,
@@ -332,6 +346,7 @@ def update_workplace_library_item(
     workplace_id: int,
     payload: WorkplaceLibraryPayload,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
 ):
     row = db.scalar(select(WorkplaceLibraryItem).where(WorkplaceLibraryItem.id == workplace_id))
     if not row:
@@ -356,7 +371,11 @@ def update_workplace_library_item(
 
 
 @router.delete("/workplaces/{workplace_id}")
-def delete_workplace_library_item(workplace_id: int, db: Session = Depends(get_db)):
+def delete_workplace_library_item(
+    workplace_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     row = db.scalar(select(WorkplaceLibraryItem).where(WorkplaceLibraryItem.id == workplace_id))
     if not row:
         raise HTTPException(status_code=404, detail="Workplace library item not found")

@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 export const MATERIAL_PURCHASE_STATUSES = ["draft", "ordered", "confirmed", "received", "cancelled"] as const;
@@ -35,14 +37,14 @@ export type MaterialPurchaseOrderDetail = {
 };
 
 export async function listMaterialPurchaseOrders(): Promise<MaterialPurchaseOrderListRow[]> {
-  const res = await fetch(`${API_BASE}/planning/material/purchase-orders`);
+  const res = await akengFetch(`${API_BASE}/planning/material/purchase-orders`);
   if (!res.ok) throw new Error("Nepodařilo se načíst nákupní objednávky materiálu.");
   const raw = await res.json();
   return Array.isArray(raw?.items) ? raw.items : [];
 }
 
 export async function getMaterialPurchaseOrder(id: number): Promise<MaterialPurchaseOrderDetail> {
-  const res = await fetch(`${API_BASE}/planning/material/purchase-orders/${id}`);
+  const res = await akengFetch(`${API_BASE}/planning/material/purchase-orders/${id}`);
   if (res.status === 404) throw new Error("Objednávka nebyla nalezena.");
   if (!res.ok) throw new Error("Nepodařilo se načíst detail objednávky.");
   return res.json();
@@ -52,7 +54,7 @@ export async function patchMaterialPurchaseOrderStatus(
   id: number,
   status: string
 ): Promise<{ status: string; material_purchase_order_id: number }> {
-  const res = await fetch(`${API_BASE}/planning/material/purchase-orders/${id}`, {
+  const res = await akengFetch(`${API_BASE}/planning/material/purchase-orders/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),

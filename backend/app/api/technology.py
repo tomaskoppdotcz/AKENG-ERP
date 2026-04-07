@@ -4,6 +4,7 @@ from sqlalchemy import inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.master_data import Machine
 from app.models.technology_library import TechnologyTemplate, TechnologyTemplateOperation
@@ -195,7 +196,11 @@ def get_template_by_gpn(gpn: str, db: Session = Depends(get_db)):
 
 
 @router.post("/templates")
-def create_template(payload: TechnologyTemplateCreate, db: Session = Depends(get_db)):
+def create_template(
+    payload: TechnologyTemplateCreate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     exists = db.scalar(
         select(TechnologyTemplate).where(TechnologyTemplate.gpn == payload.gpn)
     )
@@ -226,6 +231,7 @@ def add_template_operation(
     template_id: int,
     payload: TechnologyTemplateOperationCreate,
     db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
 ):
     template = db.scalar(
         select(TechnologyTemplate).where(TechnologyTemplate.id == template_id)
@@ -259,7 +265,11 @@ def add_template_operation(
 
 
 @router.post("/templates/full")
-def create_full_template(payload: TechnologyTemplateFullCreate, db: Session = Depends(get_db)):
+def create_full_template(
+    payload: TechnologyTemplateFullCreate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     exists = db.scalar(
         select(TechnologyTemplate).where(TechnologyTemplate.gpn == payload.gpn)
     )
@@ -316,7 +326,12 @@ def create_full_template(payload: TechnologyTemplateFullCreate, db: Session = De
 
 
 @router.put("/templates/{template_id}")
-def update_template(template_id: int, payload: TechnologyTemplateUpdate, db: Session = Depends(get_db)):
+def update_template(
+    template_id: int,
+    payload: TechnologyTemplateUpdate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     template = db.scalar(
         select(TechnologyTemplate).where(TechnologyTemplate.id == template_id)
     )
@@ -381,7 +396,10 @@ def update_template(template_id: int, payload: TechnologyTemplateUpdate, db: Ses
 
 
 @router.post("/templates/seed-sample")
-def seed_sample_templates(db: Session = Depends(get_db)):
+def seed_sample_templates(
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("technology.write")),
+):
     samples = [
         {
             "gpn": "89578150",

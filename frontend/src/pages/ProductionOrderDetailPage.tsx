@@ -13,6 +13,7 @@ import {
   type ProductionOrderDetail,
 } from "../services/productionOrdersApi";
 import { buildErpUrl } from "../utils/erpDeepLink";
+import { canPerformAction, readStoredErpRole } from "../auth/rbac";
 
 const API_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -89,6 +90,11 @@ export default function ProductionOrderDetailPage({
   const [receiveMessage, setReceiveMessage] = useState<string | null>(null);
   const [receiveError, setReceiveError] = useState<string | null>(null);
   const [stornoBusy, setStornoBusy] = useState(false);
+
+  const erpRole = useMemo(() => readStoredErpRole(), []);
+  const canProductionExecute = canPerformAction(erpRole, "production.execute");
+  const canProductionStorno = canPerformAction(erpRole, "production.storno");
+  const canStockMutate = canPerformAction(erpRole, "stock.mutate");
 
   async function loadDetail() {
     setLoading(true);
@@ -289,7 +295,7 @@ export default function ProductionOrderDetailPage({
                 <button
                   type="button"
                   style={UI.buttons.primary}
-                  disabled={!poWorkflowActive}
+                  disabled={!poWorkflowActive || !canStockMutate}
                   onClick={() => {
                     setReceiveMessage(null);
                     setReceiveError(null);
@@ -301,7 +307,12 @@ export default function ProductionOrderDetailPage({
                   Přijmout na sklad
                 </button>
               ) : null}
-              <button type="button" style={UI.buttons.secondary} disabled={!poWorkflowActive || stornoBusy} onClick={() => void handleStornoVp()}>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                disabled={!poWorkflowActive || stornoBusy || !canProductionStorno}
+                onClick={() => void handleStornoVp()}
+              >
                 {stornoBusy ? "Stornuji…" : "Stornovat VP"}
               </button>
               <button onClick={onBack} style={UI.buttonSecondary}>
@@ -394,7 +405,7 @@ export default function ProductionOrderDetailPage({
                           <button
                             type="button"
                             style={UI.buttons.secondary}
-                            disabled={!poWorkflowActive || busyOp === op.operation_no}
+                            disabled={!poWorkflowActive || busyOp === op.operation_no || !canProductionExecute}
                             onClick={() => handleStartOperation(op.operation_no)}
                           >
                             Zahájit
@@ -420,7 +431,7 @@ export default function ProductionOrderDetailPage({
                           <button
                             type="button"
                             style={UI.buttons.primary}
-                            disabled={!poWorkflowActive || busyOp === op.operation_no}
+                            disabled={!poWorkflowActive || busyOp === op.operation_no || !canProductionExecute}
                             onClick={() => handleReportOperation(op.operation_no)}
                           >
                             Odvést
@@ -582,7 +593,12 @@ export default function ProductionOrderDetailPage({
               <button type="button" style={UI.buttons.secondary} disabled={receiveBusy} onClick={() => setReceiveOpen(false)}>
                 Zrušit
               </button>
-              <button type="button" style={UI.buttons.primary} disabled={receiveBusy} onClick={() => void handleReceiveToStock()}>
+              <button
+                type="button"
+                style={UI.buttons.primary}
+                disabled={receiveBusy || !canStockMutate}
+                onClick={() => void handleReceiveToStock()}
+              >
                 {receiveBusy ? "Ukládám…" : "Potvrdit příjem"}
               </button>
             </>

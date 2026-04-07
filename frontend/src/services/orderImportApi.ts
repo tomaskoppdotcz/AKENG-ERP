@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -23,7 +25,7 @@ export type OrdersOverviewResponse = {
 };
 
 export async function getOrdersOverview(): Promise<OrdersOverviewResponse> {
-  const res = await fetch(`${API_BASE}/orders-overview/list`);
+  const res = await akengFetch(`${API_BASE}/orders-overview/list`);
   if (!res.ok) {
     throw new Error("Nepodarilo se nacist prehled zakazek.");
   }
@@ -64,7 +66,7 @@ export async function previewImportPdf(file: File): Promise<ImportPreviewRespons
   form.append("file", file);
 
   // Backend currently exposes a single-step import at /import/customer-order-pdf.
-  const res = await fetch(`${API_BASE}/import/customer-order-pdf`, {
+  const res = await akengFetch(`${API_BASE}/import/customer-order-pdf`, {
     method: "POST",
     body: form,
   });
@@ -110,7 +112,7 @@ export type OrderDetailResponse = {
 export async function getOrderDetail(
   customerOrderId: number
 ): Promise<OrderDetailResponse> {
-  const res = await fetch(`${API_BASE}/order-detail/${customerOrderId}`);
+  const res = await akengFetch(`${API_BASE}/order-detail/${customerOrderId}`);
   if (!res.ok) {
     throw new Error("Nepodarilo se nacist detail zakazky.");
   }
@@ -147,7 +149,7 @@ export type OrderItemDetailResponse = {
 export async function getOrderItemDetail(
   jobItemId: number
 ): Promise<OrderItemDetailResponse> {
-  const res = await fetch(`${API_BASE}/order-item-detail/${jobItemId}`);
+  const res = await akengFetch(`${API_BASE}/order-item-detail/${jobItemId}`);
   if (!res.ok) {
     throw new Error("Nepodarilo se nacist detail polozky zakazky.");
   }
@@ -155,7 +157,7 @@ export async function getOrderItemDetail(
 }
 
 export async function createVpForItem(jobItemId: number) {
-  const res = await fetch(`${API_BASE}/manual-order/create-vp`, {
+  const res = await akengFetch(`${API_BASE}/manual-order/create-vp`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ job_item_id: jobItemId }),
@@ -176,7 +178,7 @@ export async function addManualOperation(payload: {
   qty?: number;
   note?: string | null;
 }) {
-  const res = await fetch(`${API_BASE}/manual-order/add-operation`, {
+  const res = await akengFetch(`${API_BASE}/manual-order/add-operation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

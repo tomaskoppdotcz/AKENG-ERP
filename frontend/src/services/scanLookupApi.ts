@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -25,7 +27,7 @@ export type ScanLookupResponse = {
 };
 
 export async function scanLookup(scanCode: string): Promise<ScanLookupResponse> {
-  const res = await fetch(`${API_BASE}/scan-lookup`, {
+  const res = await akengFetch(`${API_BASE}/scan-lookup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ scan_code: scanCode }),

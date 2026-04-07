@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.planning import PlanningOperation
 from app.services.planning_engine import PlanningEngineService
@@ -27,7 +28,11 @@ def get_work_orders(db: Session = Depends(get_db)):
 
 
 @router.post("/plan-work-order")
-def auto_plan_work_order(payload: AutoPlanWorkOrderRequest, db: Session = Depends(get_db)):
+def auto_plan_work_order(
+    payload: AutoPlanWorkOrderRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
     work_order_no = (payload.work_order_no or "").strip()
     if not work_order_no:
         raise HTTPException(status_code=400, detail="work_order_no je povinny.")

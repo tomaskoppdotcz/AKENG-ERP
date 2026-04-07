@@ -9,6 +9,7 @@ from sqlalchemy import func, inspect as sa_inspect, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, joinedload
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.core.scan_code import material_library_scan_code_for_id
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
@@ -232,7 +233,11 @@ def list_material_groups(db: Session = Depends(get_db)):
 
 
 @router.post("/groups")
-def create_material_group(payload: MaterialGroupCreatePayload, db: Session = Depends(get_db)):
+def create_material_group(
+    payload: MaterialGroupCreatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     code = payload.code.strip() if payload.code else None
     row = MaterialGroup(name=payload.name.strip(), code=code or None, is_active=payload.is_active)
     db.add(row)
@@ -242,7 +247,12 @@ def create_material_group(payload: MaterialGroupCreatePayload, db: Session = Dep
 
 
 @router.put("/groups/{group_id}")
-def update_material_group(group_id: int, payload: MaterialGroupUpdatePayload, db: Session = Depends(get_db)):
+def update_material_group(
+    group_id: int,
+    payload: MaterialGroupUpdatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(MaterialGroup).where(MaterialGroup.id == group_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Skupina materiálu nenalezena")
@@ -262,7 +272,11 @@ def update_material_group(group_id: int, payload: MaterialGroupUpdatePayload, db
 
 
 @router.delete("/groups/{group_id}")
-def delete_material_group(group_id: int, db: Session = Depends(get_db)):
+def delete_material_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(MaterialGroup).where(MaterialGroup.id == group_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Skupina materiálu nenalezena")
@@ -283,7 +297,11 @@ def delete_material_group(group_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/")
-def create_material(payload: MaterialLibraryPayload, db: Session = Depends(get_db)):
+def create_material(
+    payload: MaterialLibraryPayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     dup = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.code == payload.code))
     if dup:
         raise HTTPException(status_code=400, detail="Material with this code already exists")
@@ -316,7 +334,12 @@ def create_material(payload: MaterialLibraryPayload, db: Session = Depends(get_d
 
 
 @router.put("/{material_id}")
-def update_material(material_id: int, payload: MaterialLibraryPayload, db: Session = Depends(get_db)):
+def update_material(
+    material_id: int,
+    payload: MaterialLibraryPayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == material_id))
     if not row:
         raise HTTPException(status_code=404, detail="Material not found")
@@ -348,7 +371,11 @@ def update_material(material_id: int, payload: MaterialLibraryPayload, db: Sessi
 
 
 @router.delete("/{material_id}")
-def delete_material(material_id: int, db: Session = Depends(get_db)):
+def delete_material(
+    material_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(MaterialLibraryItem).where(MaterialLibraryItem.id == material_id))
     if not row:
         raise HTTPException(status_code=404, detail="Material not found")

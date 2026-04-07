@@ -1,4 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
+import { UI } from "../styles/ui";
+import { akengFetch } from "../services/akengFetch";
 
 type Machine = {
   id: number;
@@ -57,7 +62,7 @@ export default function MachinePlanningPage() {
   }, [selectedMachineId]);
 
   async function loadMachines() {
-    const res = await fetch(`${API_BASE}/master-data/machines`);
+    const res = await akengFetch(`${API_BASE}/master-data/machines`);
     const data = await res.json();
     setMachines(data);
     if (data.length > 0) {
@@ -69,8 +74,8 @@ export default function MachinePlanningPage() {
     setLoading(true);
     try {
       const [opsRes, calRes] = await Promise.all([
-        fetch(`${API_BASE}/planning/operations?machine_id=${machineId}`),
-        fetch(`${API_BASE}/planning/machine-calendar?machine_id=${machineId}`),
+        akengFetch(`${API_BASE}/planning/operations?machine_id=${machineId}`),
+        akengFetch(`${API_BASE}/planning/machine-calendar?machine_id=${machineId}`),
       ]);
 
       const ops = await opsRes.json();
@@ -86,7 +91,7 @@ export default function MachinePlanningPage() {
   async function rebuildSchedule() {
     if (!selectedMachineId) return;
 
-    await fetch(`${API_BASE}/planning/build-schedule`, {
+    await akengFetch(`${API_BASE}/planning/build-schedule`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -101,7 +106,7 @@ export default function MachinePlanningPage() {
   async function moveOperation(operationId: number, direction: "up" | "down") {
     if (!selectedMachineId) return;
 
-    await fetch(`${API_BASE}/planning/move`, {
+    await akengFetch(`${API_BASE}/planning/move`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -149,30 +154,43 @@ export default function MachinePlanningPage() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#f8fafc",
-        padding: 16,
-        fontFamily: "Arial, sans-serif",
-      }}
-    >
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "280px 1fr 320px",
-          gap: 16,
-        }}
-      >
+    <PageContainer style={{ paddingTop: 10 }}>
+      <PageHeader
+        title="Neplánované operace"
+        subtitle="Plánování fronty stroje a neplánovaných operací"
+        actions={
+          <button
+            type="button"
+            onClick={() => void rebuildSchedule()}
+            style={UI.buttons.secondary}
+            disabled={!selectedMachineId}
+          >
+            Přepočítat plán
+          </button>
+        }
+      />
+
+      <PageSection>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(220px, 280px) minmax(0, 1fr) minmax(220px, 320px)",
+            gap: 16,
+            width: "100%",
+            minWidth: 0,
+            fontFamily: "Arial, Helvetica, sans-serif",
+          }}
+        >
         <aside
           style={{
             background: "#fff",
             padding: 16,
-            border: "1px solid #ddd",
+            border: "1px solid #dbe2ea",
             borderRadius: 12,
+            minWidth: 0,
           }}
         >
-          <h2>Stroje</h2>
+          <h2 style={{ ...UI.sectionTitle, marginTop: 0 }}>Stroje</h2>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {machines.map((machine) => (
               <button
@@ -201,39 +219,16 @@ export default function MachinePlanningPage() {
           style={{
             background: "#fff",
             padding: 16,
-            border: "1px solid #ddd",
+            border: "1px solid #dbe2ea",
             borderRadius: 12,
+            minWidth: 0,
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: 16,
-            }}
-          >
-            <div>
-              <h1 style={{ margin: 0 }}>
-                {selectedMachine ? `Plánování: ${selectedMachine.name}` : "Plánování"}
-              </h1>
-              <div style={{ color: "#666", fontSize: 14 }}>
-                Fronta stroje a neplánované operace
-              </div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={UI.sectionTitle}>
+              {selectedMachine ? `Plánování: ${selectedMachine.name}` : "Vyberte stroj"}
             </div>
-
-            <button
-              onClick={rebuildSchedule}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: "1px solid #111",
-                background: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              Přepočítat plán
-            </button>
+            <div style={UI.sectionSubtitle}>Fronta naplánovaných a čekajících operací</div>
           </div>
 
           {loading ? (
@@ -241,9 +236,9 @@ export default function MachinePlanningPage() {
           ) : (
             <>
               <h3>Fronta stroje</h3>
-              <table width="100%" cellPadding={6} style={{ borderCollapse: "collapse" }}>
+              <table style={{ ...UI.table, width: "100%" }} cellPadding={6}>
                 <thead>
-                  <tr>
+                  <tr style={{ background: "#f8fafc" }}>
                     <th>#</th>
                     <th>GPN</th>
                     <th>Operace</th>
@@ -356,10 +351,10 @@ export default function MachinePlanningPage() {
                 })}
               </div>
 
-              <h3>Neplánované operace</h3>
-              <table width="100%" cellPadding={6} style={{ borderCollapse: "collapse" }}>
+              <h3 style={{ ...UI.sectionTitle, fontSize: 16 }}>Neplánované operace</h3>
+              <table style={{ ...UI.table, width: "100%" }} cellPadding={6}>
                 <thead>
-                  <tr>
+                  <tr style={{ background: "#f8fafc" }}>
                     <th>GPN</th>
                     <th>Operace</th>
                     <th>Ø</th>
@@ -393,11 +388,12 @@ export default function MachinePlanningPage() {
           style={{
             background: "#fff",
             padding: 16,
-            border: "1px solid #ddd",
+            border: "1px solid #dbe2ea",
             borderRadius: 12,
+            minWidth: 0,
           }}
         >
-          <h2>Kapacita stroje</h2>
+          <h2 style={{ ...UI.sectionTitle, marginTop: 0 }}>Kapacita stroje</h2>
           {calendar.slice(0, 10).map((day) => {
             const free =
               day.available_minutes -
@@ -425,7 +421,8 @@ export default function MachinePlanningPage() {
             );
           })}
         </aside>
-      </div>
-    </div>
+        </div>
+      </PageSection>
+    </PageContainer>
   );
 }

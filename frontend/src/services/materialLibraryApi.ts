@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -62,7 +64,7 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
 }
 
 export async function getMaterialLibraryItems(): Promise<MaterialLibraryItem[]> {
-  const res = await fetch(MATERIALS_BASE);
+  const res = await akengFetch(MATERIALS_BASE);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst materiály."));
   }
@@ -70,7 +72,7 @@ export async function getMaterialLibraryItems(): Promise<MaterialLibraryItem[]> 
 }
 
 export async function getMaterialGroups(): Promise<MaterialGroup[]> {
-  const res = await fetch(`${MATERIALS_BASE}groups`);
+  const res = await akengFetch(`${MATERIALS_BASE}groups`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst skupiny materiálů."));
   }
@@ -86,7 +88,7 @@ export type MaterialGroupCreatePayload = {
 export type MaterialGroupUpdatePayload = Partial<MaterialGroupCreatePayload>;
 
 export async function createMaterialGroup(payload: MaterialGroupCreatePayload): Promise<MaterialGroup> {
-  const res = await fetch(`${MATERIALS_BASE}groups`, {
+  const res = await akengFetch(`${MATERIALS_BASE}groups`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -98,7 +100,7 @@ export async function createMaterialGroup(payload: MaterialGroupCreatePayload): 
 }
 
 export async function updateMaterialGroup(id: number, payload: MaterialGroupUpdatePayload): Promise<MaterialGroup> {
-  const res = await fetch(`${MATERIALS_BASE}groups/${id}`, {
+  const res = await akengFetch(`${MATERIALS_BASE}groups/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -110,7 +112,7 @@ export async function updateMaterialGroup(id: number, payload: MaterialGroupUpda
 }
 
 export async function deleteMaterialGroup(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${MATERIALS_BASE}groups/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${MATERIALS_BASE}groups/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se smazat skupinu materiálů."));
   }
@@ -120,7 +122,7 @@ export async function deleteMaterialGroup(id: number): Promise<{ status: string 
 export async function createMaterialLibraryItem(
   payload: MaterialLibraryPayload
 ): Promise<MaterialLibraryItem> {
-  const res = await fetch(MATERIALS_BASE, {
+  const res = await akengFetch(MATERIALS_BASE, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -135,7 +137,7 @@ export async function updateMaterialLibraryItem(
   id: number,
   payload: MaterialLibraryPayload
 ): Promise<MaterialLibraryItem> {
-  const res = await fetch(`${API_BASE}/materials/${id}`, {
+  const res = await akengFetch(`${API_BASE}/materials/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -147,7 +149,7 @@ export async function updateMaterialLibraryItem(
 }
 
 export async function deleteMaterialLibraryItem(id: number): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/materials/${id}`, { method: "DELETE" });
+  const res = await akengFetch(`${API_BASE}/materials/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se smazat materiál."));
   }

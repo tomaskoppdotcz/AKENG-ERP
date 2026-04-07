@@ -1,12 +1,18 @@
 import React, { useEffect, useMemo, useState } from "react";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
 import { UI } from "../styles/ui";
 import {
   getJobItems,
   getJobs,
   getProductionOrders,
   type ErpWorkflowListFilter,
+  type OrdersOverviewOrderTypeFilter,
   type ProductionOrderRow,
 } from "../services/ordersApi";
+import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilterRow";
+import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
 import { buildErpUrl } from "../utils/erpDeepLink";
 
 type DrawingItem = {
@@ -24,6 +30,7 @@ type DrawingItem = {
   vp: string;
   vpLinks: Array<{ id: number; vp_code: string }>;
   stav: string;
+  order_type: string;
 };
 
 function rowWorkflowActive(itemWf: string | null | undefined, orderWf: string | null | undefined): boolean {
@@ -33,12 +40,6 @@ function rowWorkflowActive(itemWf: string | null | undefined, orderWf: string | 
   };
   return ok(itemWf) && ok(orderWf);
 }
-
-const WORKFLOW_LIST_OPTIONS: { id: ErpWorkflowListFilter; label: string }[] = [
-  { id: "active", label: "Aktivní" },
-  { id: "cancelled", label: "Stornované" },
-  { id: "all", label: "Vše" },
-];
 
 type Props = {
   onBackToDashboard?: () => void;
@@ -84,10 +85,6 @@ type DrawingsSubtab = (typeof SUBTABS)[number];
 const FILTERS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
 type DrawingFilter = (typeof FILTERS)[number];
 
-function q(v: string) {
-  return v.trim().toLowerCase();
-}
-
 function formatVpCodes(codes: string[]): string {
   const cleaned = codes.map((c) => c.trim()).filter((c) => c.length > 0);
   if (cleaned.length === 0) return "—";
@@ -114,13 +111,13 @@ export default function DrawingsPage({
 }: Props) {
   const [activeSubtab, setActiveSubtab] = useState<DrawingsSubtab>("Přehled");
   const [hoverSubtab, setHoverSubtab] = useState<DrawingsSubtab | null>(null);
-  const [query, setQuery] = useState("");
   const [activeFilters, setActiveFilters] = useState<DrawingFilter[]>([]);
   const [hoveredRow, setHoveredRow] = useState<number | null>(null);
   const [rows, setRows] = useState<DrawingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [workflowListFilter, setWorkflowListFilter] = useState<ErpWorkflowListFilter>("active");
+  const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +154,7 @@ export default function DrawingsPage({
                   workflowListFilter === "active" ? poWfActive(v.workflow_status) : !poWfActive(v.workflow_status)
                 );
           const cancelledRow = !rowWorkflowActive(row.workflow_status, row.order_workflow_status);
+          const otRaw = String(row.order_type ?? "customer").trim().toLowerCase();
           return {
             zakazka: job?.zak_code ?? "—",
             job_item_id: row.id,
@@ -172,6 +170,7 @@ export default function DrawingsPage({
             vp: formatVpCodes(vpRows.map((v) => v.vp_code)),
             vpLinks: vpRows.map((v) => ({ id: v.id, vp_code: v.vp_code })),
             stav: cancelledRow ? "Storno" : "—",
+            order_type: otRaw === "internal" ? "internal" : "customer",
           };
         });
         setRows(mapped);
@@ -189,11 +188,15 @@ export default function DrawingsPage({
     };
   }, [workflowListFilter]);
 
+  const rowsByOrderType = useMemo(() => {
+    if (overviewOrderType === "all") return rows;
+    return rows.filter((r) =>
+      overviewOrderType === "internal" ? r.order_type === "internal" : r.order_type === "customer"
+    );
+  }, [rows, overviewOrderType]);
+
   const filteredRows = useMemo(() => {
-    const normalized = q(query);
-    return rows.filter((row) => {
-      const haystack = [row.zakazka, row.gpn, row.popis, row.material, row.vp].join(" ").toLowerCase();
-      const matchesQuery = !normalized || haystack.includes(normalized);
+    return rowsByOrderType.filter((row) => {
       const done = row.stav === "Hotovo";
       const late = row.termin !== "—" && row.termin < new Date().toISOString().slice(0, 10);
       const hasDelivery = row.line_no != null && row.line_no % 2 === 0;
@@ -207,9 +210,9 @@ export default function DrawingsPage({
         return true;
       });
 
-      return matchesQuery && matchesFilters;
+      return matchesFilters;
     });
-  }, [rows, query, activeFilters]);
+  }, [rowsByOrderType, activeFilters]);
 
   const kpi = useMemo(() => {
     const celkemPolozek = rows.length;
@@ -231,29 +234,16 @@ export default function DrawingsPage({
   }, [rows]);
 
   return (
-    <div style={{ paddingTop: 10 }}>
-      <div style={UI.pageHeaderRow}>
-        <div>
-          <div style={UI.sectionTitle}>Výkresy</div>
-          <div style={UI.sectionSubtitle}>
-            Položky zákaznických i interních zakázek (GPN / řádky); VP včetně doplnění skladu (restock).
-          </div>
-        </div>
-        <div style={UI.pageHeaderActions}>
-          {query.trim() ? (
-            <button
-              type="button"
-              style={UI.buttons.secondary}
-              onClick={() => window.open(buildErpUrl({ view: "portfolioSearch", gpn: query.trim() }), "_blank")}
-            >
-              Portfolio — nové okno ({query.trim()})
-            </button>
-          ) : null}
+    <PageContainer style={{ paddingTop: 10 }}>
+      <PageHeader
+        title="Výkresy"
+        subtitle="Položky zákaznických i interních zakázek (GPN / řádky); VP včetně doplnění skladu (restock)."
+        actions={
           <button type="button" style={UI.buttons.secondary} onClick={() => onBackToDashboard?.()}>
             Zpět na nástěnku
           </button>
-        </div>
-      </div>
+        }
+      />
 
       <div style={UI.summaryTilesGridOuter}>
         <div style={UI.summaryTilesGridSix}>
@@ -266,14 +256,7 @@ export default function DrawingsPage({
         </div>
       </div>
 
-      <div
-        style={{
-          width: "100%",
-          overflowX: "auto",
-          overflowY: "hidden",
-          marginBottom: 4,
-        }}
-      >
+      <div style={{ width: "100%", overflowX: "auto" }}>
         <div
           style={{
             ...UI.subTabsContainer,
@@ -281,8 +264,6 @@ export default function DrawingsPage({
             width: "max-content",
             minWidth: "100%",
             justifyContent: "flex-start",
-            marginTop: 0,
-            marginBottom: 0,
           }}
         >
           {SUBTABS.map((tab) => {
@@ -307,9 +288,53 @@ export default function DrawingsPage({
         </div>
       </div>
 
-      <div style={{ marginTop: 16, ...UI.card, padding: 16, borderRadius: 14 }}>
-        {activeSubtab === "Přehled" ? (
-          <>
+      {activeSubtab === "Přehled" ? (
+        <PageSection gapTop={16}>
+          <div
+            style={{
+              ...UI.card,
+              padding: 0,
+              borderRadius: 14,
+              width: "100%",
+              boxSizing: "border-box",
+              overflow: "hidden",
+            }}
+          >
+            <div style={{ padding: 16, paddingBottom: 14, borderBottom: "1px solid #e2e8f0" }}>
+              <OverviewPrimaryFilterRow
+                loading={loading}
+                typPrehleduOptions={OVERVIEW_ORDER_TYPE_OPTIONS}
+                typPrehleduActiveId={overviewOrderType}
+                onTypPrehledu={(id) => setOverviewOrderType(id as OrdersOverviewOrderTypeFilter)}
+                stavZakazkyOptions={OVERVIEW_WORKFLOW_OPTIONS}
+                stavZakazkyActiveId={workflowListFilter}
+                onStavZakazky={(id) => setWorkflowListFilter(id as ErpWorkflowListFilter)}
+                rowStyle={{ marginBottom: 0 }}
+                trailing={
+                  <>
+                    {FILTERS.map((filter) => {
+                      const active = activeFilters.includes(filter);
+                      return (
+                        <button
+                          key={filter}
+                          type="button"
+                          onClick={() =>
+                            setActiveFilters((prev) =>
+                              prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
+                            )
+                          }
+                          style={{ ...UI.ordersFilterChip, ...(active ? UI.ordersFilterChipActive : {}) }}
+                        >
+                          {filter}
+                        </button>
+                      );
+                    })}
+                  </>
+                }
+              />
+            </div>
+
+            <div style={{ padding: 16 }}>
             {loading ? <div style={UI.sectionSubtitle}>Načítám výkresy…</div> : null}
             {error ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{error}</div> : null}
             {!loading && !error && rows.length === 0 ? (
@@ -327,58 +352,8 @@ export default function DrawingsPage({
                 Žádné položky v tomto režimu. Zkuste „Vše“ nebo „Stornované“, případně vytvořte zakázku a řádky v modulu Zakázky.
               </div>
             ) : null}
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 12 }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#475569" }}>Zobrazit:</span>
-              {WORKFLOW_LIST_OPTIONS.map(({ id, label }) => {
-                const active = workflowListFilter === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setWorkflowListFilter(id)}
-                    disabled={loading}
-                    style={{
-                      ...UI.ordersFilterChip,
-                      ...(active ? UI.ordersFilterChipActive : {}),
-                      ...(loading ? { opacity: 0.6, cursor: "wait" } : {}),
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={UI.ordersFilterBar}>
-              <div style={UI.ordersFilterSearchWrap}>
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Hledat GPN, výkres, zakázku, materiál nebo VP..."
-                  style={UI.inputs.base}
-                />
-              </div>
-              <div style={UI.ordersFilterChips}>
-                {FILTERS.map((filter) => {
-                  const active = activeFilters.includes(filter);
-                  return (
-                    <button
-                      key={filter}
-                      type="button"
-                      onClick={() =>
-                        setActiveFilters((prev) =>
-                          prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
-                        )
-                      }
-                      style={{ ...UI.ordersFilterChip, ...(active ? UI.ordersFilterChipActive : {}) }}
-                    >
-                      {filter}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
 
-            {!loading && rows.length > 0 ? (
+            {!loading && !error && rows.length > 0 ? (
             <div style={{ overflowX: "auto" }}>
               <table style={UI.table}>
                 <thead>
@@ -540,13 +515,26 @@ export default function DrawingsPage({
               </table>
             </div>
             ) : null}
-          </>
-        ) : (
-          <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0, fontWeight: 900 }}>
-            {`Modul ${activeSubtab} pro výkresy je ve vývoji.`}
+            </div>
           </div>
-        )}
-      </div>
-    </div>
+        </PageSection>
+      ) : (
+        <PageSection gapTop={16}>
+          <div
+            style={{
+              ...UI.card,
+              padding: 16,
+              borderRadius: 14,
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          >
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0, fontWeight: 900 }}>
+              {`Modul ${activeSubtab} pro výkresy je ve vývoji.`}
+            </div>
+          </div>
+        </PageSection>
+      )}
+    </PageContainer>
   );
 }

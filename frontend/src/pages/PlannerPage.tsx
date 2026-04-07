@@ -26,6 +26,10 @@ import {
   maxDayStackCount,
   plannerGlobalMachineOrder,
 } from "../components/plannerGanttDayUtils";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
+import { canPerformAction, readStoredErpRole } from "../auth/rbac";
 
 function formatDateInput(date: Date): string {
   const y = date.getFullYear();
@@ -244,12 +248,14 @@ function OperationDetailPanel({
   onSaved,
   onOpenProductionOrder,
   onOpenMaterialRequirements,
+  canPlanningWrite,
 }: {
   item: PlannerGanttItem | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
   onOpenProductionOrder?: (productionOrderId: number, title?: string) => void;
   onOpenMaterialRequirements?: () => void;
+  canPlanningWrite: boolean;
 }) {
   const [status, setStatus] = useState("");
   const [materialReady, setMaterialReady] = useState(false);
@@ -268,6 +274,7 @@ function OperationDetailPanel({
   if (!item) return null;
 
   async function handleSave() {
+    if (!canPlanningWrite) return;
     try {
       setSaving(true);
       setMessage("");
@@ -425,6 +432,7 @@ function OperationDetailPanel({
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
+              disabled={!canPlanningWrite}
               style={{
                 width: "100%",
                 border: "1px solid #cbd5e1",
@@ -458,6 +466,7 @@ function OperationDetailPanel({
             <input
               type="checkbox"
               checked={materialReady}
+              disabled={!canPlanningWrite}
               onChange={(e) => setMaterialReady(e.target.checked)}
             />
             Materiál ready (ruční přepis; primárně řídí backend z VP)
@@ -476,6 +485,7 @@ function OperationDetailPanel({
             <input
               type="checkbox"
               checked={isLocked}
+              disabled={!canPlanningWrite}
               onChange={(e) => setIsLocked(e.target.checked)}
             />
             Lock operace
@@ -483,7 +493,7 @@ function OperationDetailPanel({
 
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || !canPlanningWrite}
             style={{
               border: "1px solid #0f172a",
               background: "#0f172a",
@@ -548,6 +558,9 @@ export default function PlannerPage({
     })
   );
 
+  const erpRole = useMemo(() => readStoredErpRole(), []);
+  const canPlanningWrite = canPerformAction(erpRole, "planning.write");
+
   async function loadData() {
     try {
       setLoading(true);
@@ -603,6 +616,7 @@ export default function PlannerPage({
 
   async function handleDragEnd(event: DragEndEvent) {
     setActiveDragItem(null);
+    if (!canPlanningWrite) return;
 
     const overData = event.over?.data.current as
       | { type?: string; machineId?: number; queuePosition?: number }
@@ -633,153 +647,150 @@ export default function PlannerPage({
 
   return (
     <>
-      <div style={{ minHeight: "100vh", background: "#f8fafc", padding: 16, paddingRight: selectedItem ? 404 : 16 }}>
-        <div style={{ width: "100%", maxWidth: "100%", margin: "0 auto", display: "grid", gap: 14 }}>
-          <div
-            style={{
-              background: "#fff",
-              border: "1px solid #dbe2ea",
-              borderRadius: 20,
-              padding: 20,
-              boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+      <PageContainer style={{ paddingTop: 10, paddingRight: selectedItem ? 404 : 0, minWidth: 0 }}>
+        <PageHeader
+          title="Planner Gantt"
+          subtitle={
+            <>
+              <div style={{ fontSize: 13, color: "#64748b", marginTop: 0 }}>
+                Výchozí rozsah 7 dní. Řádky pracovišť v pevném pořadí (ne podle abecedy). Blok: op / WP → VP / GPN → další WP.
+              </div>
+              <div style={{ fontSize: 11, color: "#334155", marginTop: 6, fontWeight: 700 }}>
+                DnD mezi řádky / frontu · detail = klik · tooltip = najetí myší.
+              </div>
+            </>
+          }
+          actions={
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
               <div>
-                <div style={{ fontSize: 28, fontWeight: 900, color: "#0f172a" }}>Planner Gantt</div>
-                <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
-                  Výchozí rozsah 7 dní. Řádky pracovišť v pevném pořadí (ne podle abecedy). Blok: op / WP → VP / GPN → další WP.
-                </div>
-                <div style={{ fontSize: 11, color: "#334155", marginTop: 6, fontWeight: 700 }}>
-                  DnD mezi řádky / frontu · detail = klik · tooltip = najetí myší.
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Od</div>
-                  <input
-                    type="date"
-                    value={fromDate}
-                    onChange={(e) => setFromDate(e.target.value)}
-                    style={{
-                      border: "1px solid #cbd5e1",
-                      borderRadius: 12,
-                      padding: "10px 12px",
-                      fontSize: 14,
-                      background: "#fff",
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Do</div>
-                  <input
-                    type="date"
-                    value={toDate}
-                    onChange={(e) => setToDate(e.target.value)}
-                    style={{
-                      border: "1px solid #cbd5e1",
-                      borderRadius: 12,
-                      padding: "10px 12px",
-                      fontSize: 14,
-                      background: "#fff",
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Filtr stroj</div>
-                  <input
-                    type="text"
-                    value={machineFilter}
-                    onChange={(e) => setMachineFilter(e.target.value)}
-                    placeholder="napr. BETA, TC, PILA..."
-                    style={{
-                      width: 220,
-                      border: "1px solid #cbd5e1",
-                      borderRadius: 12,
-                      padding: "10px 12px",
-                      fontSize: 14,
-                      background: "#fff",
-                    }}
-                  />
-                </div>
-
-                <button
-                  onClick={loadData}
-                  disabled={loading || moving}
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Od</div>
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
                   style={{
-                    border: "1px solid #0f172a",
-                    background: "#0f172a",
-                    color: "#fff",
+                    border: "1px solid #cbd5e1",
                     borderRadius: 12,
-                    padding: "11px 16px",
-                    fontWeight: 800,
-                    cursor: "pointer",
-                    opacity: loading || moving ? 0.6 : 1,
+                    padding: "10px 12px",
+                    fontSize: 14,
+                    background: "#fff",
                   }}
-                >
-                  {loading ? "Nacitam..." : moving ? "Presouvam..." : "Obnovit data"}
-                </button>
+                />
               </div>
-            </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16, alignItems: "center" }}>
-              {[
-                ["Ceka", "#94a3b8"],
-                ["Naplanovano", "#f59e0b"],
-                ["Bezi", "#3b82f6"],
-                ["Hotovo", "#10b981"],
-                ["Blokovano", "#ef4444"],
-              ].map(([label, color]) => (
-                <div
-                  key={label}
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Do</div>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
                   style={{
-                    padding: "6px 10px",
-                    borderRadius: 999,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: "#fff",
-                    background: color,
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 12,
+                    padding: "10px 12px",
+                    fontSize: 14,
+                    background: "#fff",
                   }}
-                >
-                  {label}
-                </div>
-              ))}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Filtr stroj</div>
+                <input
+                  type="text"
+                  value={machineFilter}
+                  onChange={(e) => setMachineFilter(e.target.value)}
+                  placeholder="napr. BETA, TC, PILA..."
+                  style={{
+                    width: 220,
+                    minWidth: 0,
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 12,
+                    padding: "10px 12px",
+                    fontSize: 14,
+                    background: "#fff",
+                  }}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void loadData()}
+                disabled={loading || moving}
+                style={{
+                  border: "1px solid #0f172a",
+                  background: "#0f172a",
+                  color: "#fff",
+                  borderRadius: 12,
+                  padding: "11px 16px",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  opacity: loading || moving ? 0.6 : 1,
+                }}
+              >
+                {loading ? "Nacitam..." : moving ? "Presouvam..." : "Obnovit data"}
+              </button>
+            </div>
+          }
+        />
+
+        <PageSection gapTop={12}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", width: "100%" }}>
+            {[
+              ["Ceka", "#94a3b8"],
+              ["Naplanovano", "#f59e0b"],
+              ["Bezi", "#3b82f6"],
+              ["Hotovo", "#10b981"],
+              ["Blokovano", "#ef4444"],
+            ].map(([label, color]) => (
               <div
+                key={label}
                 style={{
                   padding: "6px 10px",
                   borderRadius: 999,
                   fontSize: 12,
                   fontWeight: 700,
-                  color: "#0f172a",
-                  background: "#ffedd5",
-                  border: "1px solid #fb923c",
+                  color: "#fff",
+                  background: color,
                 }}
               >
-                Čeká na materiál = zlatý obrys bloku
+                {label}
               </div>
+            ))}
+            <div
+              style={{
+                padding: "6px 10px",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 700,
+                color: "#0f172a",
+                background: "#ffedd5",
+                border: "1px solid #fb923c",
+              }}
+            >
+              Čeká na materiál = zlatý obrys bloku
             </div>
-
-            {error ? (
-              <div
-                style={{
-                  marginTop: 16,
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  background: "#fef2f2",
-                  color: "#b91c1c",
-                  border: "1px solid #fecaca",
-                  fontSize: 14,
-                  fontWeight: 700,
-                }}
-              >
-                {error}
-              </div>
-            ) : null}
           </div>
 
+          {error ? (
+            <div
+              style={{
+                marginTop: 16,
+                padding: "12px 14px",
+                borderRadius: 12,
+                background: "#fef2f2",
+                color: "#b91c1c",
+                border: "1px solid #fecaca",
+                fontSize: 14,
+                fontWeight: 700,
+              }}
+            >
+              {error}
+            </div>
+          ) : null}
+        </PageSection>
+
+        <PageSection>
           <DndContext
             sensors={sensors}
             onDragStart={(event) => {
@@ -796,6 +807,8 @@ export default function PlannerPage({
                 borderRadius: 20,
                 overflow: "hidden",
                 boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
+                width: "100%",
+                boxSizing: "border-box",
               }}
             >
               <div
@@ -961,6 +974,8 @@ export default function PlannerPage({
                 borderRadius: 20,
                 padding: 20,
                 boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
+                width: "100%",
+                boxSizing: "border-box",
               }}
             >
               <div style={{ fontSize: 22, fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>
@@ -970,8 +985,8 @@ export default function PlannerPage({
               {!data || data.unscheduledItems.length === 0 ? (
                 <div style={{ color: "#64748b", fontSize: 14 }}>Zadne nenaplanovane operace.</div>
               ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                <div style={{ overflowX: "auto", width: "100%" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: "100%" }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
                         {["VP", "GPN", "Operace", "Stroj", "Materiál", "Qty", "Fronta", "Status"].map((h) => (
@@ -1039,8 +1054,8 @@ export default function PlannerPage({
               {activeDragItem ? <OverlayBar item={activeDragItem} /> : null}
             </DragOverlay>
           </DndContext>
-        </div>
-      </div>
+        </PageSection>
+      </PageContainer>
 
       <OperationDetailPanel
         item={selectedItem}
@@ -1048,6 +1063,7 @@ export default function PlannerPage({
         onSaved={loadData}
         onOpenProductionOrder={onOpenProductionOrder}
         onOpenMaterialRequirements={onOpenMaterialRequirements}
+        canPlanningWrite={canPlanningWrite}
       />
     </>
   );

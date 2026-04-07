@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import SimpleModal from "../components/SimpleModal";
+import PageContainer from "../components/layout/PageContainer";
+import PageHeader from "../components/layout/PageHeader";
+import PageSection from "../components/layout/PageSection";
 import { UI } from "../styles/ui";
 import { getPortfolioItems, type PortfolioItem } from "../services/portfolioApi";
 import { getStorageLocations, type StorageLocation } from "../services/storageLocationApi";
@@ -250,14 +253,12 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
   const unitLabel = "ks";
 
   return (
-    <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={UI.pageHeaderRow}>
-          <div>
-            <div style={UI.sectionTitle}>Sklad výrobků</div>
-            <div style={UI.sectionSubtitle}>Přehled hotových výrobků (portfolio)</div>
-          </div>
-          <div style={UI.pageHeaderActions}>
+    <>
+      <PageContainer style={{ paddingTop: 10 }}>
+        <PageHeader
+          title="Sklad výrobků"
+          subtitle="Přehled hotových výrobků (portfolio)"
+          actions={
             <button
               type="button"
               style={UI.buttons.primary}
@@ -269,10 +270,11 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
             >
               Nová skladová karta
             </button>
-          </div>
-        </div>
+          }
+        />
 
-        <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+        <PageSection>
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
           {showForm ? (
             <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
               <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>
@@ -469,8 +471,9 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
               </table>
             </div>
           ) : null}
-        </div>
-      </div>
+          </div>
+        </PageSection>
+      </PageContainer>
 
       <SimpleModal
         title="Vydat výrobek"
@@ -528,6 +531,6 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
           </div>
         ) : null}
       </SimpleModal>
-    </div>
+    </>
   );
 }

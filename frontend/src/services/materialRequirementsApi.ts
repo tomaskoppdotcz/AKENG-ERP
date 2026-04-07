@@ -1,3 +1,5 @@
+import { akengFetch } from "./akengFetch";
+
 export type MaterialRequirementRelatedOrder = {
   reservation_id: number;
   /** Merged VP link: underlying reservation ids (issue picks one line). */
@@ -102,7 +104,7 @@ export type CustomerOption = {
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 export async function postMaterialReservationsRebuildAll(): Promise<{ status: string } & Record<string, unknown>> {
-  const res = await fetch(`${API_BASE}/planning/material-reservations/rebuild-all`, { method: "POST" });
+  const res = await akengFetch(`${API_BASE}/planning/material-reservations/rebuild-all`, { method: "POST" });
   if (!res.ok) {
     let message = "Globální přepočet rezervací se nepodařil.";
     try {
@@ -117,7 +119,7 @@ export async function postMaterialReservationsRebuildAll(): Promise<{ status: st
 }
 
 export async function getMaterialRequirements(): Promise<MaterialRequirementRow[]> {
-  const res = await fetch(`${API_BASE}/planning/material/requirements`);
+  const res = await akengFetch(`${API_BASE}/planning/material/requirements`);
   if (!res.ok) {
     let message = "Nepodařilo se načíst požadavky materiálu.";
     try {
@@ -132,7 +134,7 @@ export async function getMaterialRequirements(): Promise<MaterialRequirementRow[
 }
 
 export async function getMaterialRequirementsByVp(): Promise<VpRequirementRow[]> {
-  const res = await fetch(`${API_BASE}/planning/material/requirements-by-vp`);
+  const res = await akengFetch(`${API_BASE}/planning/material/requirements-by-vp`);
   if (!res.ok) {
     let message = "Nepodařilo se načíst požadavky podle VP.";
     try {
@@ -147,7 +149,7 @@ export async function getMaterialRequirementsByVp(): Promise<VpRequirementRow[]>
 }
 
 export async function listCustomersForPurchase(): Promise<CustomerOption[]> {
-  const res = await fetch(`${API_BASE}/customers`);
+  const res = await akengFetch(`${API_BASE}/customers`);
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst dodavatele (adresář zákazníků).");
   }
@@ -172,7 +174,7 @@ export async function postMaterialPurchaseOrder(payload: {
   lines_count: number;
   supplier_name: string;
 }> {
-  const res = await fetch(`${API_BASE}/planning/material/purchase-orders`, {
+  const res = await akengFetch(`${API_BASE}/planning/material/purchase-orders`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -211,7 +213,7 @@ export async function postMaterialIssue(payload: MaterialIssuePayload): Promise<
   reservation_id: number;
   issued_qty: number;
 }> {
-  const res = await fetch(`${API_BASE}/material-stock/issue`, {
+  const res = await akengFetch(`${API_BASE}/material-stock/issue`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

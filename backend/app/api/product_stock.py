@@ -10,6 +10,7 @@ from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, joinedload
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.core.scan_code import product_stock_scan_code_for_id
 from app.models.portfolio import PortfolioItem
@@ -168,7 +169,11 @@ def list_product_stock_items(db: Session = Depends(get_db)):
 
 
 @router.post("/items")
-def create_product_stock_item(payload: ProductStockItemCreate, db: Session = Depends(get_db)):
+def create_product_stock_item(
+    payload: ProductStockItemCreate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     portfolio = db.scalar(select(PortfolioItem).where(PortfolioItem.id == payload.portfolio_item_id))
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio položka nebyla nalezena.")
@@ -210,7 +215,12 @@ def create_product_stock_item(payload: ProductStockItemCreate, db: Session = Dep
 
 
 @router.put("/items/{item_id}")
-def update_product_stock_item(item_id: int, payload: ProductStockItemUpdate, db: Session = Depends(get_db)):
+def update_product_stock_item(
+    item_id: int,
+    payload: ProductStockItemUpdate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(
         select(ProductStockItem)
         .where(ProductStockItem.id == item_id)
@@ -248,7 +258,11 @@ def update_product_stock_item(item_id: int, payload: ProductStockItemUpdate, db:
 
 
 @router.delete("/items/{item_id}")
-def delete_product_stock_item(item_id: int, db: Session = Depends(get_db)):
+def delete_product_stock_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     row = db.scalar(select(ProductStockItem).where(ProductStockItem.id == item_id))
     if not row:
         raise HTTPException(status_code=404, detail="Skladová karta nebyla nalezena.")
@@ -272,7 +286,12 @@ def list_movements(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/items/{item_id}/movements")
-def create_movement(item_id: int, payload: ProductStockMovementCreate, db: Session = Depends(get_db)):
+def create_movement(
+    item_id: int,
+    payload: ProductStockMovementCreate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     stock = db.scalar(select(ProductStockItem).where(ProductStockItem.id == item_id))
     if not stock:
         raise HTTPException(status_code=404, detail="Skladová karta nebyla nalezena.")
@@ -303,7 +322,12 @@ def create_movement(item_id: int, payload: ProductStockMovementCreate, db: Sessi
 
 
 @router.put("/movements/{movement_id}")
-def update_movement(movement_id: int, payload: ProductStockMovementUpdate, db: Session = Depends(get_db)):
+def update_movement(
+    movement_id: int,
+    payload: ProductStockMovementUpdate,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     movement = db.scalar(select(ProductStockMovement).where(ProductStockMovement.id == movement_id))
     if not movement:
         raise HTTPException(status_code=404, detail="Pohyb nebyl nalezen.")
@@ -352,7 +376,11 @@ def update_movement(movement_id: int, payload: ProductStockMovementUpdate, db: S
 
 
 @router.delete("/movements/{movement_id}")
-def delete_movement(movement_id: int, db: Session = Depends(get_db)):
+def delete_movement(
+    movement_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("stock.mutate")),
+):
     movement = db.scalar(select(ProductStockMovement).where(ProductStockMovement.id == movement_id))
     if not movement:
         raise HTTPException(status_code=404, detail="Pohyb nebyl nalezen.")

@@ -8,6 +8,7 @@ from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_action
 from app.core.database import get_db
 from app.core.scan_code import (
     customer_order_scan_code_for_id,
@@ -980,7 +981,11 @@ def get_customer_orders(db: Session = Depends(get_db)):
 
 
 @router.post("/customer-orders")
-def create_customer_order(payload: CustomerOrderCreatePayload, db: Session = Depends(get_db)):
+def create_customer_order(
+    payload: CustomerOrderCreatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("orders.write")),
+):
     customer = db.scalar(select(Customer).where(Customer.id == payload.customer_id))
     if customer is None:
         raise HTTPException(status_code=404, detail="Zákazník nebyl nalezen.")
@@ -1019,7 +1024,12 @@ def create_customer_order(payload: CustomerOrderCreatePayload, db: Session = Dep
 
 
 @router.put("/customer-orders/{customer_order_id}")
-def update_customer_order(customer_order_id: int, payload: CustomerOrderUpdatePayload, db: Session = Depends(get_db)):
+def update_customer_order(
+    customer_order_id: int,
+    payload: CustomerOrderUpdatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("orders.write")),
+):
     co = db.get(CustomerOrder, customer_order_id)
     if co is None:
         raise HTTPException(status_code=404, detail="Objednávka nebyla nalezena.")
@@ -1046,7 +1056,11 @@ def update_customer_order(customer_order_id: int, payload: CustomerOrderUpdatePa
 
 
 @router.post("/customer-orders/{customer_order_id}/storno")
-def storno_customer_order(customer_order_id: int, db: Session = Depends(get_db)):
+def storno_customer_order(
+    customer_order_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("orders.storno")),
+):
     """Storno celé objednávky — zachová záznamy, zruší aktivní rezervace materiálu."""
     co = db.get(CustomerOrder, customer_order_id)
     if co is None:
@@ -1130,6 +1144,10 @@ def get_job_items(
             continue
         if wf == "cancelled" and row_active:
             continue
+        if co is not None:
+            item_order_type = str(getattr(co, "order_type", None) or "customer")
+        else:
+            item_order_type = "internal"
         item = {
             "id": row.id,
             "job_id": row.job_id,
@@ -1139,6 +1157,7 @@ def get_job_items(
             "due_date": row.due_date.isoformat() if row.due_date else None,
             "workflow_status": getattr(row, "workflow_status", None),
             "order_workflow_status": getattr(co, "workflow_status", None) if co is not None else None,
+            "order_type": item_order_type,
             "description": None,
             "portfolio_item_id": None,
         }
@@ -1164,7 +1183,11 @@ def get_job_items(
 
 
 @router.post("/job-items")
-def create_job_item(payload: JobItemCreatePayload, db: Session = Depends(get_db)):
+def create_job_item(
+    payload: JobItemCreatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("orders.write")),
+):
     job = db.scalar(select(Job).where(Job.id == payload.job_id))
     if job is None:
         raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
@@ -1217,7 +1240,12 @@ def create_job_item(payload: JobItemCreatePayload, db: Session = Depends(get_db)
 
 
 @router.put("/job-items/{item_id}")
-def update_job_item(item_id: int, payload: JobItemUpdatePayload, db: Session = Depends(get_db)):
+def update_job_item(
+    item_id: int,
+    payload: JobItemUpdatePayload,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("orders.write")),
+):
     row = db.get(JobItem, item_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Položka zakázky nebyla nalezena.")
@@ -1263,7 +1291,11 @@ def update_job_item(item_id: int, payload: JobItemUpdatePayload, db: Session = D
 
 
 @router.post("/job-items/{item_id}/storno")
-def storno_job_item(item_id: int, db: Session = Depends(get_db)):
+def storno_job_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("orders.storno")),
+):
     """Storno řádku zakázky — VP zůstávají v historii, materiál se uvolní."""
     row = db.get(JobItem, item_id)
     if row is None:
@@ -1298,7 +1330,11 @@ def storno_job_item(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{customer_order_id}/create-production-orders")
-def create_production_orders_from_allocation(customer_order_id: int, db: Session = Depends(get_db)):
+def create_production_orders_from_allocation(
+    customer_order_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("orders.write")),
+):
     co = db.get(CustomerOrder, customer_order_id)
     if co is None:
         raise HTTPException(status_code=404, detail="Objednávka nebyla nalezena.")
