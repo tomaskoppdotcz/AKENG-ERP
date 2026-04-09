@@ -31,6 +31,8 @@ type DrawingItem = {
   vpLinks: Array<{ id: number; vp_code: string }>;
   stav: string;
   order_type: string;
+  faze_vyroby: string;
+  postup: string;
 };
 
 function rowWorkflowActive(itemWf: string | null | undefined, orderWf: string | null | undefined): boolean {
@@ -171,6 +173,8 @@ export default function DrawingsPage({
             vpLinks: vpRows.map((v) => ({ id: v.id, vp_code: v.vp_code })),
             stav: cancelledRow ? "Storno" : "—",
             order_type: otRaw === "internal" ? "internal" : "customer",
+            faze_vyroby: (row.production_phase_label ?? "—").trim() || "—",
+            postup: (row.production_progress_label ?? "—").trim() || "—",
           };
         });
         setRows(mapped);
@@ -358,7 +362,20 @@ export default function DrawingsPage({
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["Zakázka", "Řádek", "GPN", "Popis", "Materiál", "Množství", "Termín", "VP", "Stav", "Nové okno"].map((h) => (
+                    {[
+                      "Zakázka",
+                      "Řádek",
+                      "GPN",
+                      "Popis",
+                      "Materiál",
+                      "Množství",
+                      "Termín",
+                      "Fáze výroby",
+                      "Postup",
+                      "VP",
+                      "Stav",
+                      "Nové okno",
+                    ].map((h) => (
                       <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                         {h}
                       </th>
@@ -441,6 +458,12 @@ export default function DrawingsPage({
                       <td style={{ ...UI.td, padding: "10px 10px" }}>{row.material}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.mnozstvi}</td>
                       <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.termin}</td>
+                      <td style={{ ...UI.td, padding: "10px 10px", maxWidth: 220, fontSize: 12, fontWeight: 600, color: "#334155" }}>
+                        {row.faze_vyroby}
+                      </td>
+                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 700, color: "#475569" }}>
+                        {row.postup}
+                      </td>
                       <td
                         style={{ ...UI.td, padding: "10px 10px", color: row.vp !== "—" ? "#15803d" : "#64748b", fontWeight: 700 }}
                         onClick={(e) => e.stopPropagation()}
@@ -506,7 +529,7 @@ export default function DrawingsPage({
                   ))}
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={10} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={12} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Žádné výsledky.
                       </td>
                     </tr>

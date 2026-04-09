@@ -1,8 +1,9 @@
 import logging
 from collections import defaultdict
 from datetime import date
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
@@ -44,6 +45,7 @@ from app.services.business_workflow import (
     workflow_active_sql,
     workflow_record_active,
 )
+from app.services.job_item_production_labels import production_labels_for_job_item
 from app.services.material_reservation_sync import (
     MATERIAL_RESERVATION_ACTIVE_STATUSES,
     cancel_reservations_for_job_item,
@@ -596,6 +598,155 @@ def _job_item_allocation_values(
     remaining_after_allocation = stock_qty - from_stock_qty
     restock_qty = max(min_qty - remaining_after_allocation, 0.0)
     return (from_stock_qty, to_production_qty, restock_qty)
+
+
+_RESTOCK_PO_TERMINAL_STATUSES = frozenset(
+    {"done", "finished", "cancelled", "hotovo", "complete", "completed"}
+)
+
+
+def _restock_po_is_open_wip(po: ProductionOrder) -> bool:
+    s = (po.status or "").strip().lower()
+    return s not in _RESTOCK_PO_TERMINAL_STATUSES
+
+
+def _open_restock_production_for_skld_portfolio(db: Session, skld_portfolio_item_id: int) -> list[ProductionOrder]:
+    return list(
+        db.scalars(
+            select(ProductionOrder)
+            .where(
+                ProductionOrder.source_type == "restock_allocation",
+                ProductionOrder.portfolio_item_id == int(skld_portfolio_item_id),
+                workflow_active_sql(ProductionOrder.workflow_status),
+            )
+            .order_by(ProductionOrder.id.asc())
+        ).all()
+    )
+
+
+def _apply_prefer_customer_allocation_shift(
+    db: Session,
+    *,
+    item: JobItem,
+    has_portfolio: bool,
+    tp_base: float,
+    rq_base: float,
+) -> tuple[float, float]:
+    """
+    Přesměruje až d=min(WIP_restock, požadavek_do_výroby) z „doplnění skladu“ k zakázce:
+    - sníží objem order_allocation (výroba pro zákazníka)
+    - navýší cíl restock_allocation na W_sum + původní restock z minima skladu (náhrada + zachování WIP)
+    """
+    if not has_portfolio:
+        return (tp_base, rq_base)
+    try:
+        skld = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=item.gpn, logistic_mode="sklad")
+        wip_all = _open_restock_production_for_skld_portfolio(db, int(skld.id))
+        wip = [p for p in wip_all if _restock_po_is_open_wip(p)]
+        W_sum = sum(int(p.quantity or 0) for p in wip)
+        d = min(W_sum, int(round(tp_base)))
+        if d <= 0:
+            return (tp_base, rq_base)
+        tp_eff = max(0.0, float(tp_base) - float(d))
+        rq_eff = float(W_sum) + float(rq_base)
+        return (tp_eff, rq_eff)
+    except HTTPException:
+        return (tp_base, rq_base)
+
+
+def _allocation_preview_for_customer_order(db: Session, customer_order_id: int) -> dict:
+    """Náhled alokace + otevřené VP doplnění skladu (stejné GPN / sklad varianta)."""
+    co = db.get(CustomerOrder, customer_order_id)
+    if co is None:
+        raise HTTPException(status_code=404, detail="Objednávka nebyla nalezena.")
+    ot = str(getattr(co, "order_type", None) or "customer").strip().lower()
+    if ot != "customer":
+        return {
+            "customer_order_id": int(customer_order_id),
+            "lines": [],
+            "any_needs_user_choice": False,
+        }
+
+    job = db.scalars(
+        select(Job).where(Job.customer_order_id == customer_order_id).order_by(Job.id.asc())
+    ).first()
+    if job is None:
+        return {
+            "customer_order_id": int(customer_order_id),
+            "lines": [],
+            "any_needs_user_choice": False,
+        }
+
+    items = db.scalars(select(JobItem).where(JobItem.job_id == job.id).order_by(JobItem.line_no.asc())).all()
+    cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
+    has_portfolio = "portfolio_item_id" in cols
+    has_desc = "description" in cols
+
+    lines: list[dict] = []
+    for it in items:
+        if not workflow_record_active(it):
+            continue
+        row = None
+        if has_portfolio or has_desc:
+            sel = "portfolio_item_id, description" if (has_portfolio and has_desc) else (
+                "portfolio_item_id" if has_portfolio else "description"
+            )
+            row = db.execute(text(f"SELECT {sel} FROM job_items WHERE id = :id"), {"id": it.id}).fetchone()
+        portfolio_item_id = None
+        if row is not None:
+            if has_portfolio and has_desc:
+                portfolio_item_id = row[0]
+            elif has_portfolio:
+                portfolio_item_id = row[0]
+
+        from_stock_qty, to_production_qty, restock_qty = _job_item_allocation_values(db, it, portfolio_item_id)
+
+        restock_wip = {"quantity_open": 0, "production_order_ids": [], "vp_codes": []}
+        needs_user_choice = False
+
+        if portfolio_item_id is not None and has_portfolio:
+            try:
+                skld = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=it.gpn, logistic_mode="sklad")
+                skld_id = int(skld.id)
+                wip_all = _open_restock_production_for_skld_portfolio(db, skld_id)
+                wip = [p for p in wip_all if _restock_po_is_open_wip(p)]
+                qo = sum(int(p.quantity or 0) for p in wip)
+                restock_wip = {
+                    "quantity_open": int(qo),
+                    "production_order_ids": [int(p.id) for p in wip],
+                    "vp_codes": [p.vp_code for p in wip if p.vp_code],
+                }
+                needs_user_choice = qo > 0 and (to_production_qty > 0 or restock_qty > 0)
+            except HTTPException:
+                pass
+
+        lines.append(
+            {
+                "job_item_id": int(it.id),
+                "gpn": (it.gpn or "").strip(),
+                "from_stock_qty": float(from_stock_qty),
+                "to_production_qty": float(to_production_qty),
+                "restock_qty": float(restock_qty),
+                "required_qty": float(it.qty or 0.0),
+                "restock_wip": restock_wip,
+                "needs_user_choice": bool(needs_user_choice),
+            }
+        )
+
+    return {
+        "customer_order_id": int(customer_order_id),
+        "lines": lines,
+        "any_needs_user_choice": any(bool(ln.get("needs_user_choice")) for ln in lines),
+    }
+
+
+class RestockConflictResolutionItem(BaseModel):
+    job_item_id: int = Field(..., ge=1)
+    strategy: Literal["prefer_customer", "prefer_stock"]
+
+
+class CreateProductionOrdersFromAllocationBody(BaseModel):
+    restock_conflict_resolutions: list[RestockConflictResolutionItem] = Field(default_factory=list)
 
 
 def _get_active_internal_job(db: Session) -> Job | None:
@@ -1178,6 +1329,9 @@ def get_job_items(
                     idx += 1
                 if has_portfolio:
                     item["portfolio_item_id"] = raw[idx]
+        ph, prg = production_labels_for_job_item(db, int(row.id), wf)
+        item["production_phase_label"] = ph
+        item["production_progress_label"] = prg
         out.append(item)
     return out
 
@@ -1329,12 +1483,23 @@ def storno_job_item(
     return {"status": "ok", "job_item_id": int(item_id)}
 
 
+@router.get("/{customer_order_id}/allocation-preview")
+def get_allocation_preview(
+    customer_order_id: int,
+    db: Session = Depends(get_db),
+):
+    """Náhled alokace a konfliktu s běžící výrobou doplnění skladu (restock) pro stejné GPN."""
+    return _allocation_preview_for_customer_order(db, customer_order_id)
+
+
 @router.post("/{customer_order_id}/create-production-orders")
 def create_production_orders_from_allocation(
     customer_order_id: int,
+    payload: CreateProductionOrdersFromAllocationBody | None = Body(default=None),
     db: Session = Depends(get_db),
     _rbac: None = Depends(require_action("orders.write")),
 ):
+    body = payload or CreateProductionOrdersFromAllocationBody()
     co = db.get(CustomerOrder, customer_order_id)
     if co is None:
         raise HTTPException(status_code=404, detail="Objednávka nebyla nalezena.")
@@ -1356,6 +1521,33 @@ def create_production_orders_from_allocation(
     if not items:
         return {"production_orders": []}
 
+    strategies = {int(r.job_item_id): r.strategy for r in body.restock_conflict_resolutions}
+
+    preview = _allocation_preview_for_customer_order(db, customer_order_id)
+    needed = {int(ln["job_item_id"]) for ln in preview.get("lines", []) if ln.get("needs_user_choice")}
+    if needed:
+        res_list = list(body.restock_conflict_resolutions)
+        seen_j: set[int] = set()
+        for r in res_list:
+            jid = int(r.job_item_id)
+            if jid in seen_j:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Duplicitní job_item_id v restock_conflict_resolutions.",
+                )
+            seen_j.add(jid)
+        provided = {int(r.job_item_id): r.strategy for r in res_list}
+        missing = sorted(needed - set(provided.keys()))
+        if missing:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "restock_conflict_resolutions_required",
+                    "message": "Před vytvořením VP je nutné rozhodnout o běžící výrobě na doplnění skladu.",
+                    "missing_job_item_ids": missing,
+                },
+            )
+
     cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
     has_portfolio = "portfolio_item_id" in cols
     has_desc = "description" in cols
@@ -1367,6 +1559,7 @@ def create_production_orders_from_allocation(
     for it in items:
         if not workflow_record_active(it):
             continue
+        current_strat = strategies.get(int(it.id))
         row = None
         if has_portfolio or has_desc:
             sel = "portfolio_item_id, description" if (has_portfolio and has_desc) else (
@@ -1385,6 +1578,34 @@ def create_production_orders_from_allocation(
                 description = row[0]
 
         from_stock_qty, to_production_qty, restock_qty = _job_item_allocation_values(db, it, portfolio_item_id)
+        if current_strat == "prefer_customer":
+            to_production_qty, restock_qty = _apply_prefer_customer_allocation_shift(
+                db,
+                item=it,
+                has_portfolio=has_portfolio,
+                tp_base=to_production_qty,
+                rq_base=restock_qty,
+            )
+
+        tpo_i = int(round(to_production_qty))
+        if tpo_i <= 0:
+            order_zm = _production_orders_for_job_item_and_source(db, int(it.id), "order_allocation")
+            if order_zm:
+                zpo = order_zm[0]
+                if int(zpo.quantity or 0) != 0:
+                    zpo.quantity = 0
+                    db.flush()
+                    rebuild_tp_material_reservations_for_production_order(db, zpo)
+                _ensure_job_item_coverage(
+                    db,
+                    job_item_id=it.id,
+                    coverage_type="new_production",
+                    qty=0,
+                    consuming_production_order_id=int(zpo.id),
+                    source_production_order_id=None,
+                    source_stock_receipt_id=None,
+                    note=None,
+                )
 
         candidates = []
         if from_stock_qty > 0:
@@ -1451,6 +1672,12 @@ def create_production_orders_from_allocation(
                     )
                     if restock_existing:
                         existing_restock = restock_existing[0]
+                        if current_strat == "prefer_customer" and len(restock_existing) > 1:
+                            for extra in restock_existing[1:]:
+                                if int(extra.quantity or 0) != 0:
+                                    extra.quantity = 0
+                                    db.flush()
+                                    rebuild_tp_material_reservations_for_production_order(db, extra)
                         if not getattr(existing_restock, "scan_code", None):
                             existing_restock.scan_code = production_order_scan_code_for_id(int(existing_restock.id))
                         _ensure_production_order_operation_scans(

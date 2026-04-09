@@ -1,19 +1,10 @@
 import React from "react";
 import type { PlannerGanttItem } from "../services/plannerApi";
+import { plannerGanttStatusLabel } from "../utils/plannerGanttStatus";
 
 const BLOCK_FONT_PX = 10;
 const BLOCK_LINE_HEIGHT = 1.28;
 const BLOCK_GAP_PX = 1;
-
-function statusLabelForTooltip(status: string): string {
-  const s = (status || "").toLowerCase();
-  if (s === "bezi" || s === "running" || s === "in_progress") return "Běží";
-  if (s === "hotovo" || s === "done" || s === "finished") return "Hotovo";
-  if (s === "blokovano" || s === "blocked") return "Blokováno";
-  if (s === "ceka" || s === "ready" || s === "waiting_release") return "Čeká";
-  if (s === "naplanovano" || s === "planned") return "Naplánováno";
-  return status || "—";
-}
 
 function formatPlanInstant(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -37,7 +28,7 @@ export function plannerGanttHoverDetails(item: PlannerGanttItem): string {
     `Časy: setup ${item.setupTimeMin} min · práce ${item.laborTimeTotalMin} min · celkem ${item.totalOperationTimeMin} min`,
     `Qty: ${item.qty}`,
     mat,
-    `Stav: ${statusLabelForTooltip(item.status)}`,
+    `Stav: ${plannerGanttStatusLabel(item.status)}`,
     `Fronta: ${item.queuePosition ?? "—"}`,
   ].join("\n");
 }

@@ -3,7 +3,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
@@ -23,6 +23,31 @@ PRODUCT_GROUP_PRIORITY = {
 
 # Minuty mezi koncem předchozí a začátkem následující operace téhož VP (přesun / předání).
 VP_INTER_OPERATION_BUFFER_MIN = 15
+
+# Nové placementy nesmí začínat v minulosti (od „teď“ + malý buffer; u dnešního dne navíc min. začátek směny).
+SCHEDULING_NOW_BUFFER_MIN = 5
+
+# expedice zákazníka (expedition_date) ≠ konec výroby: výroba musí skončit dříve, rezerva na expedici / logistiku.
+MANUFACTURING_BUFFER_DAYS_BEFORE_EXPEDITION = 2
+
+# Operace v této „rezervě“ smějí končit nejpozději v den expedition_date (ne jen do manufacturing_deadline).
+_RESERVE_WINDOW_NAME_KEYS = (
+    "exped",
+    "expedition",
+    "balen",
+    "balení",
+    "logist",
+    "přeprav",
+    "preprav",
+    "shipping",
+    "pack",
+    "odesl",
+    "sklad",  # příprava k expedici na skladě
+    "manipul",
+)
+
+# Nelze automaticky vložit do kapacity před manufacturing_deadline / expedition — další běh plánovače zkusí znovu.
+SCHEDULING_LATE_STATUS = "scheduling_late"
 
 
 def _chain_terminal_completed(status: str | None) -> bool:
@@ -66,6 +91,30 @@ class PlanningEngineService:
     def _combine_shift_start(self, d: date) -> datetime:
         return datetime.combine(d, time(hour=6, minute=0))
 
+    def _shift_start_datetime(self, day: MachineCalendar) -> datetime:
+        """Začátek směny pro řádek kalendáře; NULL shift_start_minutes = legacy 06:00."""
+        sm = getattr(day, "shift_start_minutes", None)
+        if sm is None:
+            return self._combine_shift_start(day.calendar_date)
+        sm = int(sm)
+        return datetime.combine(day.calendar_date, time(hour=sm // 60, minute=sm % 60))
+
+    def _shift_end_datetime(self, day: MachineCalendar) -> datetime:
+        """Konec denního okna kapacity: začátek směny + available_minutes (může přejít na další kalendářní den u noční směny)."""
+        return self._shift_start_datetime(day) + timedelta(minutes=int(day.available_minutes or 0))
+
+    def _earliest_wall_clock_floor_for_calendar_day(
+        self, calendar_day: date, day_row: MachineCalendar | None = None
+    ) -> datetime | None:
+        """
+        Pro kalendářní dny dnes a dříve: spodní hranice začátku slotu = max(začátek směny, teď + buffer).
+        Pro budoucí kalendářní dny vrací None — stačí logika směny z kalendáře.
+        """
+        if calendar_day > date.today():
+            return None
+        shift = self._shift_start_datetime(day_row) if day_row is not None else self._combine_shift_start(calendar_day)
+        return max(shift, datetime.now() + timedelta(minutes=SCHEDULING_NOW_BUFFER_MIN))
+
     def _get_machine_days(self, machine_id: int, from_date: date):
         return self.db.scalars(
             select(MachineCalendar)
@@ -91,9 +140,34 @@ class PlanningEngineService:
         if isinstance(raw, datetime):
             return raw.date()
         try:
-            return date.fromisoformat(str(raw))
+            s = str(raw).strip()
+            if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+                return date.fromisoformat(s[:10])
+            return date.fromisoformat(s)
         except Exception:
             return date.max
+
+    def _operation_in_reserve_logistics_window(self, op: PlanningOperation) -> bool:
+        """Expedice / balení / logistika — smí běžet v posledních dnech před expedition_date."""
+        name = (op.operation_name or "").strip().lower()
+        return any(k in name for k in _RESERVE_WINDOW_NAME_KEYS)
+
+    def _manufacturing_deadline_dt(self, ops: list[PlanningOperation]) -> datetime:
+        """Poslední okamžik ukončení výrobní fáze: konec dne (expedition_date − N dní)."""
+        dues = [self._get_due_date(o) for o in ops]
+        due = min(dues) if dues else date.max
+        if due == date.max:
+            return datetime.combine(date.max, time(23, 59, 59))
+        d = due - timedelta(days=MANUFACTURING_BUFFER_DAYS_BEFORE_EXPEDITION)
+        return datetime.combine(d, time(23, 59, 59))
+
+    def _expedition_latest_end_dt(self, ops: list[PlanningOperation]) -> datetime:
+        """Poslední okamžik pro operace v rezervě (expedice) — konec dne expedition_date."""
+        dues = [self._get_due_date(o) for o in ops]
+        due = min(dues) if dues else date.max
+        if due == date.max:
+            return datetime.combine(date.max, time(23, 59, 59))
+        return datetime.combine(due, time(23, 59, 59))
 
     def _group_priority(self, product_group: str):
         key = (product_group or "").strip().lower()
@@ -118,12 +192,8 @@ class PlanningEngineService:
         )
 
     def _vp_target_finish_dt(self, ops: list[PlanningOperation]) -> datetime:
-        dues = [self._get_due_date(o) for o in ops]
-        due = min(dues) if dues else date.max
-        if due == date.max:
-            return datetime.combine(date.max, time(23, 59, 59))
-        tf = due - timedelta(days=3)
-        return datetime.combine(tf, time(23, 59, 59))
+        """Stejné jako konec výrobního okna — pro řazení VP a kontrolu „vejde se řetězec“. """
+        return self._manufacturing_deadline_dt(ops)
 
     def _remaining_vp_chain_minutes(self, ordered_ops: list[PlanningOperation]) -> int:
         total = 0
@@ -178,7 +248,7 @@ class PlanningEngineService:
 
     def _schedulable_status(self, status: str | None) -> bool:
         st = (status or "").strip().lower()
-        return st in {"ready", "planned", "waiting_release"}
+        return st in {"ready", "planned", "waiting_release", SCHEDULING_LATE_STATUS}
 
     def _operation_duration_min(self, op: PlanningOperation) -> int:
         total_time = int(round(float(op.total_operation_time_min or 0)))
@@ -211,6 +281,94 @@ class PlanningEngineService:
             }
         return cache[machine_id]
 
+    def _realign_machine_calendar_planned_minutes_from_schedules(self) -> None:
+        """
+        planned_minutes musí odpovídat součtu total_time_min z machine_schedule na daný den (machine_id + datum začátku).
+        Po smazání řádků machine_schedule rebuildem zůstávaly staré planned_minutes → dny vypadaly plné bez záznamů v rozvrhu.
+        """
+        self.db.execute(update(MachineCalendar).values(planned_minutes=0))
+
+        sched_rows = self.db.scalars(select(MachineSchedule)).all()
+        totals: dict[tuple[int, date], int] = defaultdict(int)
+        for s in sched_rows:
+            ps = s.planned_start
+            if ps is None:
+                continue
+            d = ps.date() if isinstance(ps, datetime) else ps
+            if not isinstance(d, date):
+                continue
+            tm = int(round(float(s.total_time_min or 0)))
+            if tm <= 0:
+                tm = 1
+            totals[(int(s.machine_id), d)] += tm
+
+        for (mid, cal_date), minutes in totals.items():
+            row = self.db.scalar(
+                select(MachineCalendar)
+                .where(MachineCalendar.machine_id == mid)
+                .where(MachineCalendar.calendar_date == cal_date)
+            )
+            if row is None:
+                row = MachineCalendar(
+                    machine_id=mid,
+                    calendar_date=cal_date,
+                    available_minutes=450,
+                    planned_minutes=0,
+                    maintenance_minutes=0,
+                    reserved_minutes=0,
+                    is_working_day=True,
+                    is_machine_available=True,
+                    note=None,
+                )
+                self.db.add(row)
+            row.planned_minutes = int(minutes)
+
+        self.db.flush()
+
+    def _remaining_manufacturing_tail_minutes(self, ordered: list[PlanningOperation], start_op: PlanningOperation) -> int:
+        """Suma trvání + mezer od start_op do konce souvislého bloku výroby (před první rezervní operací)."""
+        idx = next((i for i, o in enumerate(ordered) if o is start_op), -1)
+        if idx < 0:
+            return self._operation_duration_min(start_op) or 1
+        total = 0
+        first = True
+        for o in ordered[idx:]:
+            if _chain_terminal_completed(o.status):
+                continue
+            if self._operation_in_reserve_logistics_window(o):
+                break
+            dur = self._operation_duration_min(o)
+            if dur <= 0:
+                dur = 1
+            if not first:
+                total += VP_INTER_OPERATION_BUFFER_MIN
+            total += dur
+            first = False
+        return max(int(total), 1)
+
+    def _remaining_reserve_tail_minutes(self, ordered: list[PlanningOperation], start_op: PlanningOperation) -> int:
+        """Od rezervní operace do konce řetězce (jen rezervní a následující)."""
+        idx = next((i for i, o in enumerate(ordered) if o is start_op), -1)
+        if idx < 0:
+            return self._operation_duration_min(start_op) or 1
+        if not self._operation_in_reserve_logistics_window(start_op):
+            return self._remaining_manufacturing_tail_minutes(ordered, start_op)
+        total = 0
+        first = True
+        for o in ordered[idx:]:
+            if _chain_terminal_completed(o.status):
+                continue
+            if not self._operation_in_reserve_logistics_window(o):
+                break
+            dur = self._operation_duration_min(o)
+            if dur <= 0:
+                dur = 1
+            if not first:
+                total += VP_INTER_OPERATION_BUFFER_MIN
+            total += dur
+            first = False
+        return max(int(total), 1)
+
     def _place_one_operation(
         self,
         *,
@@ -219,18 +377,32 @@ class PlanningEngineService:
         earliest_start: datetime,
         total_time: int,
         state: dict,
+        latest_end: datetime | None = None,
     ) -> tuple[datetime, datetime] | None:
+        """
+        Umístí operaci (příp. ve více dílech) jen do [shift_start, shift_start + available_minutes].
+        Vrací (začátek prvního dílu, konec posledního dílu); mezi dny je pauza mimo směnu.
+        """
         if total_time <= 0:
             total_time = 1
+        if latest_end is not None and earliest_start > latest_end:
+            return None
         st = self._machine_state(machine_id, from_date, state)
         days: list = st["days"]
         day_index = st["day_index"]
         current_pointer: datetime | None = st["current_pointer"]
 
-        placed = False
-        planned_start = planned_end = None
+        remaining = int(total_time)
+        first_start: datetime | None = None
+        last_end: datetime | None = None
+        op_has_started = False
+        guard = 0
 
-        while not placed:
+        while remaining > 0:
+            guard += 1
+            if guard > 5000:
+                logger.warning("[planning_engine] _place_one_operation guard break machine_id=%s", machine_id)
+                return None
             if day_index >= len(days):
                 last_day = days[-1].calendar_date if days else from_date
                 new_day_date = last_day + timedelta(days=1)
@@ -251,6 +423,9 @@ class PlanningEngineService:
 
             day = days[day_index]
 
+            if latest_end is not None and day.calendar_date > latest_end.date():
+                return None
+
             if not day.is_working_day or not day.is_machine_available:
                 day_index += 1
                 current_pointer = None
@@ -266,30 +441,74 @@ class PlanningEngineService:
                 current_pointer = None
                 continue
 
-            if total_time > free:
+            shift_end = self._shift_end_datetime(day)
+            shift_start = self._shift_start_datetime(day)
+            if shift_end <= shift_start:
                 day_index += 1
                 current_pointer = None
                 continue
 
             if current_pointer is None:
-                current_pointer = self._combine_shift_start(day.calendar_date) + timedelta(minutes=planned)
-            current_pointer = max(current_pointer, earliest_start)
+                current_pointer = shift_start + timedelta(minutes=planned)
+            if not op_has_started:
+                current_pointer = max(current_pointer, earliest_start)
+            wc_floor = self._earliest_wall_clock_floor_for_calendar_day(day.calendar_date, day)
+            if wc_floor is not None:
+                current_pointer = max(current_pointer, wc_floor)
             if current_pointer.date() > day.calendar_date:
                 day_index += 1
                 current_pointer = None
                 continue
 
-            planned_start = current_pointer
-            planned_end = planned_start + timedelta(minutes=total_time)
+            if current_pointer >= shift_end:
+                day_index += 1
+                current_pointer = None
+                continue
 
-            day.planned_minutes = planned + total_time
-            current_pointer = planned_end
-            placed = True
+            room = int((shift_end - current_pointer).total_seconds() // 60)
+            if room <= 0:
+                day_index += 1
+                current_pointer = None
+                continue
+
+            chunk = min(remaining, free, room)
+            if latest_end is not None:
+                if current_pointer > latest_end:
+                    return None
+                deadline_room = int((latest_end - current_pointer).total_seconds() // 60)
+                if deadline_room <= 0:
+                    return None
+                chunk = min(chunk, deadline_room)
+
+            if chunk <= 0:
+                day_index += 1
+                current_pointer = None
+                continue
+
+            seg_start = current_pointer
+            seg_end = seg_start + timedelta(minutes=chunk)
+            if seg_end > shift_end:
+                day_index += 1
+                current_pointer = None
+                continue
+
+            day.planned_minutes = planned + chunk
+            current_pointer = seg_end
+            remaining -= chunk
+            op_has_started = True
+            if first_start is None:
+                first_start = seg_start
+            last_end = seg_end
+
+            if current_pointer >= shift_end:
+                day_index += 1
+                current_pointer = None
 
         st["day_index"] = day_index
         st["current_pointer"] = current_pointer
-        assert planned_start is not None and planned_end is not None
-        return planned_start, planned_end
+        if first_start is None or last_end is None:
+            return None
+        return first_start, last_end
 
     def _per_op_schedule_gate(
         self, ordered: list[PlanningOperation], released: bool
@@ -328,9 +547,12 @@ class PlanningEngineService:
         """
         Smaže machine_schedule (kromě běžících operací), vyčistí plánovací časy u řádků bez dokončení/obsazení,
         znovu naplánuje VP s is_material_released_to_production: celý řetězec operací vpřed, sekvenčně v rámci VP,
-        bez překryvu na stroji, s prioritou target_finish (expedice − 3 dny) a seskupením podle typu + průměru jen u „safe“ VP.
+        bez překryvu na stroji, s prioritou target_finish (konec výroby = expedice − 2 dny rezerva expedici)
+        a seskupením podle typu + průměru jen u „safe“ VP. Operace nad kapacitu před termínem: status scheduling_late.
         """
-        floor = self._combine_shift_start(from_date)
+        shift_floor = self._combine_shift_start(from_date)
+        wc_floor_from = self._earliest_wall_clock_floor_for_calendar_day(from_date)
+        floor = max(shift_floor, wc_floor_from) if wc_floor_from is not None else shift_floor
         all_ops = self.db.scalars(
             select(PlanningOperation).where(PlanningOperation.machine_id.isnot(None))
         ).all()
@@ -437,6 +659,9 @@ class PlanningEngineService:
         else:
             self.db.execute(delete(MachineSchedule))
 
+        self.db.flush()
+        self._realign_machine_calendar_planned_minutes_from_schedules()
+
         for op in all_ops:
             st = (op.status or "").strip().lower()
             if _chain_terminal_completed(op.status) or _shopfloor_active(op.status):
@@ -444,6 +669,7 @@ class PlanningEngineService:
             op.planned_start = None
             op.planned_end = None
             op.queue_position = None
+            op.latest_start = None
             if st == "planned":
                 op.status = "ready"
 
@@ -514,11 +740,14 @@ class PlanningEngineService:
         state: dict = {}
         created: list[MachineSchedule] = []
 
+        scheduling_late_count = 0
         for unit in vp_units_final:
             woo = unit.woo
             ordered = unit.ops
             chain_cursor = vp_next.get(woo, floor)
             buf = timedelta(minutes=VP_INTER_OPERATION_BUFFER_MIN)
+            m_deadline = self._manufacturing_deadline_dt(ordered)
+            exp_latest = self._expedition_latest_end_dt(ordered)
 
             for op in ordered:
                 if _chain_terminal_completed(op.status):
@@ -538,6 +767,7 @@ class PlanningEngineService:
                 mid = int(op.machine_id)
                 total_time = self._operation_duration_min(op)
                 earliest = max(floor, chain_cursor, machine_next.get(mid, floor))
+                latest_end = exp_latest if self._operation_in_reserve_logistics_window(op) else m_deadline
 
                 pair = self._place_one_operation(
                     machine_id=mid,
@@ -545,7 +775,25 @@ class PlanningEngineService:
                     earliest_start=earliest,
                     total_time=total_time,
                     state=state,
+                    latest_end=latest_end,
                 )
+                if pair is None:
+                    op.planned_start = None
+                    op.planned_end = None
+                    op.queue_position = None
+                    op.latest_start = None
+                    op.status = SCHEDULING_LATE_STATUS
+                    scheduling_late_count += 1
+                    logger.warning(
+                        "[planning_engine] scheduling_late vp=%s op_id=%s machine_id=%s latest_end=%s earliest=%s",
+                        woo,
+                        int(op.id),
+                        mid,
+                        latest_end.isoformat() if latest_end else None,
+                        earliest.isoformat(),
+                    )
+                    break
+
                 planned_start, planned_end = pair
 
                 st_m = self._machine_state(mid, from_date, state)
@@ -556,6 +804,12 @@ class PlanningEngineService:
                 op.planned_start = planned_start
                 op.planned_end = planned_end
                 op.status = "planned"
+                if self._operation_in_reserve_logistics_window(op):
+                    tail = self._remaining_reserve_tail_minutes(ordered, op)
+                    op.latest_start = exp_latest - timedelta(minutes=tail)
+                else:
+                    tail = self._remaining_manufacturing_tail_minutes(ordered, op)
+                    op.latest_start = m_deadline - timedelta(minutes=tail)
 
                 sched = MachineSchedule(
                     machine_id=mid,
@@ -577,11 +831,17 @@ class PlanningEngineService:
 
         deadline_violations = 0
         for unit in vp_units:
-            pe = [o.planned_end for o in unit.ops if o.planned_end is not None]
-            if not pe:
-                continue
-            if max(pe) > unit.target_finish_dt:
-                deadline_violations += 1
+            m_deadline_u = self._manufacturing_deadline_dt(unit.ops)
+            for o in unit.ops:
+                if o.planned_end is None:
+                    continue
+                if self._operation_in_reserve_logistics_window(o):
+                    if o.planned_end > self._expedition_latest_end_dt(unit.ops):
+                        deadline_violations += 1
+                        break
+                elif o.planned_end > m_deadline_u:
+                    deadline_violations += 1
+                    break
 
         woo_norm = sorted({(op.work_order_no or "").strip() for op in all_ops if (op.work_order_no or "").strip()})
         for w in woo_norm:
@@ -609,14 +869,18 @@ class PlanningEngineService:
         print(
             "[PLANNER] "
             f"vp_count={len(vp_units)} scheduled_rows={len(created)} skipped_vps={skipped_vps} "
-            f"grouping_applied={'yes' if grouping_applied else 'no'} deadline_violations={deadline_violations}",
+            f"grouping_applied={'yes' if grouping_applied else 'no'} deadline_violations={deadline_violations} "
+            f"scheduling_late={scheduling_late_count}",
             flush=True,
         )
         if deadline_violations:
             logger.warning(
-                "[planning_engine] deadline_violations=%s (target_finish=expedition_date-3d)",
+                "[planning_engine] deadline_violations=%s (manufacturing_end=expedition_date-%dd)",
                 deadline_violations,
+                MANUFACTURING_BUFFER_DAYS_BEFORE_EXPEDITION,
             )
+        if scheduling_late_count:
+            logger.warning("[planning_engine] scheduling_late_count=%s", scheduling_late_count)
         print(
             "[PLANNER_DIAG] rebuild_global_schedules DONE "
             f"scheduled_rows={len(created)} eligible_count={len(eligible)} "

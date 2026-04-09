@@ -151,6 +151,89 @@ export async function getPlannerGantt(fromDate: string, toDate: string): Promise
   return apiFetch<PlannerGanttResponse>(`${API_BASE}/planning/gantt?${params.toString()}`);
 }
 
+export type PlanningRebuildAllResponse = {
+  status: string;
+  machines?: unknown;
+};
+
+/** Globální přepočet rozvrhu (stejné jako engine rebuild_all). */
+export async function rebuildPlanningAll(): Promise<PlanningRebuildAllResponse> {
+  return apiFetch<PlanningRebuildAllResponse>(`${API_BASE}/planning/rebuild-all`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export type MachineShiftTemplateRow = {
+  id: number;
+  machine_id: number;
+  workplace_library_item_id?: number | null;
+  weekday: number;
+  start_minutes: number;
+  end_minutes: number;
+  label: string | null;
+  is_active: boolean;
+};
+
+export async function getMachineShiftTemplates(params?: {
+  machineId?: number;
+  workplaceLibraryItemId?: number;
+}): Promise<MachineShiftTemplateRow[]> {
+  const qs = new URLSearchParams();
+  if (params?.workplaceLibraryItemId != null) {
+    qs.set("workplace_library_item_id", String(params.workplaceLibraryItemId));
+  } else if (params?.machineId != null) {
+    qs.set("machine_id", String(params.machineId));
+  }
+  const q = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch<MachineShiftTemplateRow[]>(`${API_BASE}/planning/machine-shift-templates${q}`);
+}
+
+export async function upsertMachineShiftTemplate(payload: {
+  machineId?: number;
+  workplaceLibraryItemId?: number;
+  weekday: number;
+  startMinutes: number;
+  endMinutes: number;
+  label?: string | null;
+  isActive?: boolean;
+}): Promise<{ status: string; id: number }> {
+  const body: Record<string, unknown> = {
+    weekday: payload.weekday,
+    start_minutes: payload.startMinutes,
+    end_minutes: payload.endMinutes,
+    label: payload.label ?? null,
+    is_active: payload.isActive ?? true,
+  };
+  if (payload.workplaceLibraryItemId != null) {
+    body.workplace_library_item_id = payload.workplaceLibraryItemId;
+  }
+  if (payload.machineId != null) {
+    body.machine_id = payload.machineId;
+  }
+  return apiFetch(`${API_BASE}/planning/machine-shift-templates`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function regenerateMachineCalendarFromShifts(payload: {
+  fromDate: string;
+  toDate: string;
+  machineId?: number | null;
+  workplaceLibraryItemId?: number | null;
+}): Promise<{ status: string; days_touched?: number; rows_upserted?: number }> {
+  return apiFetch(`${API_BASE}/planning/machine-calendar/regenerate-from-shifts`, {
+    method: "POST",
+    body: JSON.stringify({
+      from_date: payload.fromDate,
+      to_date: payload.toDate,
+      machine_id: payload.machineId ?? null,
+      workplace_library_item_id: payload.workplaceLibraryItemId ?? null,
+    }),
+  });
+}
+
 export async function moveGanttOperation(
   planningOperationId: number,
   targetMachineId: number,

@@ -138,6 +138,10 @@ export type JobItemRow = {
   order_type?: string | null;
   description?: string | null;
   portfolio_item_id?: number | null;
+  /** Text z backendu (fáze výroby z VP / plánování). */
+  production_phase_label?: string | null;
+  /** Např. "2 / 5" z backendu. */
+  production_progress_label?: string | null;
 };
 
 export type JobItemCreatePayload = {
@@ -190,10 +194,41 @@ export type CreateProductionOrdersResponse = {
   duplicate_flow_warnings?: DuplicateFlowWarning[];
 };
 
+export type RestockConflictStrategy = "prefer_customer" | "prefer_stock";
+
+export type RestockConflictResolution = {
+  job_item_id: number;
+  strategy: RestockConflictStrategy;
+};
+
+export type AllocationPreviewLine = {
+  job_item_id: number;
+  gpn: string;
+  required_qty: number;
+  from_stock_qty: number;
+  to_production_qty: number;
+  restock_qty: number;
+  restock_wip: {
+    quantity_open: number;
+    production_order_ids: number[];
+    vp_codes: string[];
+  };
+  needs_user_choice: boolean;
+};
+
+export type AllocationPreviewResponse = {
+  customer_order_id: number;
+  lines: AllocationPreviewLine[];
+  any_needs_user_choice: boolean;
+};
+
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
     const j = await res.json();
     if (typeof j.detail === "string") return j.detail;
+    if (j.detail && typeof j.detail === "object" && typeof j.detail.message === "string") {
+      return j.detail.message;
+    }
   } catch {
     /* ignore */
   }
@@ -383,11 +418,22 @@ export async function getProductionOrders(workflowFilter: ErpWorkflowListFilter 
   return res.json();
 }
 
+export async function getAllocationPreview(customerOrderId: number): Promise<AllocationPreviewResponse> {
+  const res = await akengFetch(`${API_BASE}/orders/${customerOrderId}/allocation-preview`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se načíst náhled alokace."));
+  }
+  return res.json();
+}
+
 export async function createProductionOrdersFromAllocation(
-  customerOrderId: number
+  customerOrderId: number,
+  restockConflictResolutions: RestockConflictResolution[] = []
 ): Promise<CreateProductionOrdersResponse> {
   const res = await akengFetch(`${API_BASE}/orders/${customerOrderId}/create-production-orders`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ restock_conflict_resolutions: restockConflictResolutions }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se vytvořit výrobní příkazy."));

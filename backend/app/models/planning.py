@@ -60,6 +60,8 @@ class MachineCalendar(Base):
     calendar_date = Column(Date, nullable=False)
 
     available_minutes = Column(Integer, nullable=False, default=0)
+    # Začátek směny v minutách od půlnoci; NULL = výchozí 06:00 v plánovači (legacy).
+    shift_start_minutes = Column(Integer, nullable=True)
     planned_minutes = Column(Integer, nullable=False, default=0)
     maintenance_minutes = Column(Integer, nullable=False, default=0)
     reserved_minutes = Column(Integer, nullable=False, default=0)

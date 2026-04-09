@@ -137,6 +137,8 @@ def normalize_planning_queue_statuses_for_vp_code(db: Session, vp_code: str) -> 
     head_st = (head.status or "").strip().lower()
     if head_st == "planned":
         pass
+    elif head_st == "scheduling_late":
+        pass  # planner: nelze vložit před manufacturing_deadline — neprepisovat na ready
     elif head_st != "ready":
         head.status = "ready"
         updated += 1

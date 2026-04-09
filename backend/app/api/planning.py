@@ -4,12 +4,13 @@ from datetime import date
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.api.deps import require_action
-from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select
+from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import and_, func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.database import get_db
+from app.core.database import engine, get_db
 from app.models.master_data import Customer, Machine
+from app.models.machine_shift_template import MachineShiftTemplate
 from app.models.material_library import MaterialLibraryItem
 from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
 from app.models.material_stock import MaterialReservation, MaterialStockItem
@@ -28,10 +29,63 @@ from app.services.material_requirements_query import (
     build_standard_material_requirements,
     build_vp_material_requirements,
 )
+from app.services.machine_calendar_generation import (
+    apply_shift_templates_to_calendar_window,
+    dedupe_shift_templates_for_workplace,
+)
 from app.services.planning_engine import PlanningEngineService
+from app.services.workplace_scheduling_anchor import get_or_create_scheduling_machine_for_workplace
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def ensure_planning_shift_schema() -> None:
+    """SQLite/Postgres: sloupec machine_calendar.shift_start_minutes + tabulka šablon přes metadata.create_all."""
+    try:
+        insp = inspect(engine)
+        cols = {c["name"] for c in insp.get_columns("machine_calendar")}
+        if "shift_start_minutes" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE machine_calendar ADD COLUMN shift_start_minutes INTEGER"))
+    except Exception as e:
+        logger.warning("[planning] ensure_planning_shift_schema skipped: %s", e)
+    _ensure_machine_shift_template_workplace_column()
+
+
+def _ensure_machine_shift_template_workplace_column() -> None:
+    try:
+        insp = inspect(engine)
+        if "machine_shift_templates" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("machine_shift_templates")}
+        if "workplace_library_item_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE machine_shift_templates "
+                        "ADD COLUMN workplace_library_item_id INTEGER "
+                        "REFERENCES workplace_library_items(id)"
+                    )
+                )
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE machine_shift_templates SET workplace_library_item_id = "
+                    "(SELECT m.workplace_library_item_id FROM machines m WHERE m.id = machine_shift_templates.machine_id) "
+                    "WHERE workplace_library_item_id IS NULL AND EXISTS "
+                    "(SELECT 1 FROM machines m WHERE m.id = machine_shift_templates.machine_id AND m.workplace_library_item_id IS NOT NULL)"
+                )
+            )
+    except Exception as e:
+        logger.warning("[planning] ensure workplace_library_item_id on shift templates skipped: %s", e)
+
+
+def _anchor_machine_id_for_workplace(db: Session, workplace_library_item_id: int) -> int:
+    m = get_or_create_scheduling_machine_for_workplace(db, int(workplace_library_item_id))
+    if m is None:
+        raise HTTPException(status_code=404, detail="Workplace not found")
+    return int(m.id)
 
 
 class MaterialReservationRebuildRequest(BaseModel):
@@ -62,6 +116,31 @@ class UpdatePlanningOperationRequest(BaseModel):
     status: str | None = None
     material_ready: bool | None = None
     is_locked: bool | None = None
+
+
+class MachineShiftTemplateUpsert(BaseModel):
+    """Uložení šablony: buď workplace_library_item_id (doporučeno), nebo legacy machine_id."""
+
+    machine_id: int | None = None
+    workplace_library_item_id: int | None = None
+    weekday: int = Field(..., ge=0, le=6)
+    start_minutes: int = Field(..., ge=0, le=24 * 60)
+    end_minutes: int = Field(..., ge=0, le=24 * 60)
+    label: str | None = None
+    is_active: bool = True
+
+    @model_validator(mode="after")
+    def _require_owner(self):
+        if self.machine_id is None and self.workplace_library_item_id is None:
+            raise ValueError("Provide machine_id or workplace_library_item_id")
+        return self
+
+
+class RegenerateCalendarFromShiftsRequest(BaseModel):
+    from_date: str
+    to_date: str
+    machine_id: int | None = None
+    workplace_library_item_id: int | None = None
 
 
 def get_machine_ops(db: Session, machine_id: int):
@@ -143,6 +222,7 @@ def get_machine_calendar(machine_id: int, db: Session = Depends(get_db)):
             "machine_id": row.machine_id,
             "calendar_date": row.calendar_date.isoformat() if row.calendar_date else None,
             "available_minutes": row.available_minutes,
+            "shift_start_minutes": getattr(row, "shift_start_minutes", None),
             "planned_minutes": row.planned_minutes,
             "maintenance_minutes": row.maintenance_minutes,
             "reserved_minutes": row.reserved_minutes,
@@ -200,6 +280,114 @@ def rebuild_all(
         "status": "ok",
         "machines": result,
     }
+
+
+@router.get("/machine-shift-templates")
+def list_machine_shift_templates(
+    machine_id: int | None = None,
+    workplace_library_item_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    if workplace_library_item_id is not None:
+        get_or_create_scheduling_machine_for_workplace(db, int(workplace_library_item_id))
+        rows = dedupe_shift_templates_for_workplace(db, int(workplace_library_item_id), active_only=False)
+        rows = sorted(rows, key=lambda r: int(r.weekday))
+    else:
+        q = select(MachineShiftTemplate).order_by(
+            MachineShiftTemplate.machine_id.asc(),
+            MachineShiftTemplate.weekday.asc(),
+        )
+        if machine_id is not None:
+            q = q.where(MachineShiftTemplate.machine_id == int(machine_id))
+        rows = db.scalars(q).all()
+    return [
+        {
+            "id": int(r.id),
+            "machine_id": int(r.machine_id),
+            "workplace_library_item_id": getattr(r, "workplace_library_item_id", None),
+            "weekday": int(r.weekday),
+            "start_minutes": int(r.start_minutes),
+            "end_minutes": int(r.end_minutes),
+            "label": r.label,
+            "is_active": bool(r.is_active),
+        }
+        for r in rows
+    ]
+
+
+@router.put("/machine-shift-templates")
+def upsert_machine_shift_template(
+    payload: MachineShiftTemplateUpsert,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
+    if int(payload.end_minutes) <= int(payload.start_minutes):
+        raise HTTPException(status_code=400, detail="end_minutes must be greater than start_minutes")
+    wid: int | None = None
+    mid: int
+    if payload.workplace_library_item_id is not None:
+        wid = int(payload.workplace_library_item_id)
+        mid = _anchor_machine_id_for_workplace(db, wid)
+    elif payload.machine_id is not None:
+        mid = int(payload.machine_id)
+        m = db.get(Machine, mid)
+        if m is None:
+            raise HTTPException(status_code=404, detail="Machine not found")
+        if m.workplace_library_item_id is not None:
+            wid = int(m.workplace_library_item_id)
+    else:
+        raise HTTPException(status_code=400, detail="Provide machine_id or workplace_library_item_id")
+    row = db.scalar(
+        select(MachineShiftTemplate).where(
+            MachineShiftTemplate.machine_id == mid,
+            MachineShiftTemplate.weekday == int(payload.weekday),
+        )
+    )
+    if row is None:
+        row = MachineShiftTemplate(
+            machine_id=mid,
+            workplace_library_item_id=wid,
+            weekday=int(payload.weekday),
+            start_minutes=int(payload.start_minutes),
+            end_minutes=int(payload.end_minutes),
+            label=payload.label,
+            is_active=bool(payload.is_active),
+        )
+        db.add(row)
+    else:
+        row.workplace_library_item_id = wid
+        row.start_minutes = int(payload.start_minutes)
+        row.end_minutes = int(payload.end_minutes)
+        row.label = payload.label
+        row.is_active = bool(payload.is_active)
+    db.commit()
+    db.refresh(row)
+    return {"status": "ok", "id": int(row.id)}
+
+
+@router.post("/machine-calendar/regenerate-from-shifts")
+def regenerate_calendar_from_shifts(
+    payload: RegenerateCalendarFromShiftsRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("planning.write")),
+):
+    fd = date.fromisoformat(payload.from_date)
+    td = date.fromisoformat(payload.to_date)
+    if payload.workplace_library_item_id is not None:
+        out = apply_shift_templates_to_calendar_window(
+            db,
+            from_date=fd,
+            to_date=td,
+            workplace_library_item_ids=[int(payload.workplace_library_item_id)],
+        )
+    elif payload.machine_id is not None:
+        out = apply_shift_templates_to_calendar_window(
+            db, from_date=fd, to_date=td, machine_ids=[int(payload.machine_id)]
+        )
+    else:
+        out = apply_shift_templates_to_calendar_window(db, from_date=fd, to_date=td, machine_ids=None)
+    db.commit()
+    return {"status": "ok", **out}
 
 
 @router.post("/move")

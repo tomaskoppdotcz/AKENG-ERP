@@ -1,17 +1,8 @@
 import React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import type { PlannerGanttItem } from "../services/plannerApi";
+import { plannerGanttBarColor } from "../utils/plannerGanttStatus";
 import { PlannerGanttStackedBar } from "./PlannerGanttStackedBar";
-
-function statusColor(status: string): string {
-  const s = (status || "").toLowerCase();
-  if (s === "hotovo" || s === "done" || s === "finished") return "#10b981";
-  if (s === "bezi" || s === "running" || s === "in_progress") return "#3b82f6";
-  if (s === "blokovano" || s === "blocked") return "#ef4444";
-  if (s === "ceka" || s === "ready" || s === "waiting_release") return "#94a3b8";
-  if (s === "naplanovano" || s === "planned") return "#f59e0b";
-  return "#f59e0b";
-}
 
 function ColumnDropSpacer({
   machineId,
@@ -108,7 +99,7 @@ export function PlannerGanttDayColumn({
                 item={item}
                 isDragging={activeDragItemId === item.operationId}
                 onSelect={onSelect}
-                barColor={statusColor(item.status)}
+                barColor={plannerGanttBarColor(item.status)}
                 minBlockHeight={minBlockHeight}
               />
               <ColumnDropSpacer machineId={machineId} day={day} queuePosition={gIdx + 2} />

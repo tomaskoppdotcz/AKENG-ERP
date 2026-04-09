@@ -36,6 +36,10 @@ from app.services.material_readiness import (
 )
 from app.services.material_reservation_sync import cancel_active_reservations_for_production_order
 from app.services.material_traceability_vp import vp_material_traceability_for_input
+from app.services.production_order_operation_runtime import (
+    operation_nos_for_production_order,
+    operation_statuses_for_production_order,
+)
 
 # Rezervace materiálu z TP se synchronizují z orders (vytvoření/úprava VP, řádky zakázky) a z portfolio (vstupy TP).
 # Tento modul nemění portfolio ani množství VP tak, aby bylo potřeba zde spouštět přepočet rezervací.
@@ -102,49 +106,8 @@ def _job_item_optional_map(db: Session, item_ids: list[int]) -> tuple[dict[int, 
     return (desc_map, portfolio_map)
 
 
-def _operation_statuses_for_po(
-    db: Session, production_order_id: int, operation_nos: list[int]
-) -> tuple[dict[int, dict], bool, bool]:
-    logs = db.scalars(
-        select(ProductionOrderOperationLog)
-        .where(ProductionOrderOperationLog.production_order_id == int(production_order_id))
-        .order_by(ProductionOrderOperationLog.created_at.asc(), ProductionOrderOperationLog.id.asc())
-    ).all()
-    by_op: dict[int, dict] = {
-        int(no): {
-            "operation_status": "planned",
-            "started_at": None,
-            "last_reported_at": None,
-            "reported_ok_qty_total": 0,
-            "reported_nok_qty_total": 0,
-            "reported_minutes_total": 0,
-        }
-        for no in operation_nos
-    }
-    any_activity = False
-    for log in logs:
-        no = int(log.operation_no)
-        if no not in by_op:
-            continue
-        entry = by_op[no]
-        any_activity = True
-        if log.event_type == "start":
-            if entry["started_at"] is None:
-                entry["started_at"] = log.created_at.isoformat() if log.created_at else None
-            if entry["operation_status"] == "planned":
-                entry["operation_status"] = "in_progress"
-        elif log.event_type == "report":
-            entry["reported_ok_qty_total"] += int(log.ok_qty or 0)
-            entry["reported_nok_qty_total"] += int(log.nok_qty or 0)
-            entry["reported_minutes_total"] += int(log.reported_minutes or 0)
-            entry["last_reported_at"] = log.created_at.isoformat() if log.created_at else None
-            entry["operation_status"] = "done"
-    all_done = bool(by_op) and all(v["operation_status"] == "done" for v in by_op.values())
-    return (by_op, any_activity, all_done)
-
-
 def _recompute_and_set_po_status(db: Session, po: ProductionOrder, operation_nos: list[int]) -> str:
-    _, any_activity, all_done = _operation_statuses_for_po(db, int(po.id), operation_nos)
+    _, any_activity, all_done = operation_statuses_for_production_order(db, int(po.id), operation_nos)
     if all_done:
         po.status = "done"
     elif any_activity:
@@ -152,41 +115,6 @@ def _recompute_and_set_po_status(db: Session, po: ProductionOrder, operation_nos
     elif not po.status:
         po.status = "planned"
     return str(po.status or "planned")
-
-
-def _operation_nos_for_po(db: Session, po: ProductionOrder) -> list[int]:
-    mapped_rows = db.scalars(
-        select(ProductionOrderOperation)
-        .where(ProductionOrderOperation.production_order_id == int(po.id))
-        .order_by(ProductionOrderOperation.operation_no.asc(), ProductionOrderOperation.id.asc())
-    ).all()
-    if mapped_rows:
-        return [int(r.operation_no) for r in mapped_rows]
-    portfolio_item_id = int(po.portfolio_item_id) if po.portfolio_item_id is not None else None
-    if portfolio_item_id is None:
-        return []
-    tpl = db.scalars(
-        select(PortfolioTechnologyTemplate)
-        .where(
-            PortfolioTechnologyTemplate.portfolio_item_id == portfolio_item_id,
-            PortfolioTechnologyTemplate.is_active.is_(True),
-        )
-        .order_by(PortfolioTechnologyTemplate.id.asc())
-    ).first()
-    if tpl is None:
-        tpl = db.scalars(
-            select(PortfolioTechnologyTemplate)
-            .where(PortfolioTechnologyTemplate.portfolio_item_id == portfolio_item_id)
-            .order_by(PortfolioTechnologyTemplate.id.asc())
-        ).first()
-    if tpl is None:
-        return []
-    op_rows = db.scalars(
-        select(PortfolioTechnologyTemplateOperation)
-        .where(PortfolioTechnologyTemplateOperation.template_id == int(tpl.id))
-        .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc())
-    ).all()
-    return [int(r.operation_no) for r in op_rows]
 
 
 def _ensure_product_stock_receipt_for_done_po(db: Session, po: ProductionOrder) -> None:
@@ -241,7 +169,7 @@ def _ensure_product_stock_receipt_for_done_po(db: Session, po: ProductionOrder) 
 
 
 def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
-    operation_nos = _operation_nos_for_po(db, po)
+    operation_nos = operation_nos_for_production_order(db, po)
     if not operation_nos:
         return
     portfolio_item_id = int(po.portfolio_item_id) if po.portfolio_item_id is not None else None
@@ -606,7 +534,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
                 )
             inputs.append(inp_row)
 
-    op_status_by_no, any_activity, all_done = _operation_statuses_for_po(db, int(po.id), operation_nos)
+    op_status_by_no, any_activity, all_done = operation_statuses_for_production_order(db, int(po.id), operation_nos)
     for op in operations:
         st = op_status_by_no.get(int(op["operation_no"]))
         if st:
@@ -677,7 +605,7 @@ def start_production_order_operation(
             detail="Nelze zahájit operaci: materiál nebyl vydán na výrobu (nejprve vydání ze skladu).",
         )
     _ensure_operation_scan_rows(db, po)
-    operation_nos = _operation_nos_for_po(db, po)
+    operation_nos = operation_nos_for_production_order(db, po)
     if operation_nos and int(operation_no) not in operation_nos:
         raise HTTPException(status_code=422, detail="Operace pro tento VP neexistuje.")
 
@@ -709,7 +637,7 @@ def report_production_order_operation(
     if not workflow_record_active(po):
         raise HTTPException(status_code=409, detail="Výrobní příkaz je stornován.")
     _ensure_operation_scan_rows(db, po)
-    operation_nos = _operation_nos_for_po(db, po)
+    operation_nos = operation_nos_for_production_order(db, po)
     if operation_nos and int(operation_no) not in operation_nos:
         raise HTTPException(status_code=422, detail="Operace pro tento VP neexistuje.")
 

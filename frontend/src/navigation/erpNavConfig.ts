@@ -34,6 +34,7 @@ export const ERP_NAV_GROUPS: ErpNavGroup[] = [
     items: [
       { label: "Planner Gantt", moduleKey: "Plánování", tabTitle: "Planner Gantt" },
       { label: "Neplánované operace", moduleKey: "Plán neplánované", tabTitle: "Neplánované operace" },
+      { label: "Směny pracovišť", moduleKey: "Plán směny pracovišť", tabTitle: "Směny pracovišť" },
     ],
   },
   {

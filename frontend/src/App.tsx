@@ -25,6 +25,7 @@ import MaterialLibraryPage from "./pages/MaterialLibraryPage";
 import MaterialGroupLibraryPage from "./pages/MaterialGroupLibraryPage";
 import ZamestnanciHubPage from "./pages/ZamestnanciHubPage";
 import CapacityDashboardPage from "./pages/CapacityDashboardPage";
+import WorkplaceShiftsPage from "./pages/WorkplaceShiftsPage";
 import PortfolioGpnTpPage from "./pages/PortfolioGpnTpPage";
 import StorageLocationPage from "./pages/StorageLocationPage";
 import ErpAppShell from "./components/ErpAppShell.tsx";
@@ -116,6 +117,32 @@ export default function App() {
     });
     setActiveWorkspaceTabId(built.key);
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    try {
+      const raw = sessionStorage.getItem("akeng_pending_module");
+      if (!raw) return;
+      sessionStorage.removeItem("akeng_pending_module");
+      const o = JSON.parse(raw) as { moduleKey?: string; title?: string };
+      if (o?.moduleKey) {
+        let mk = o.moduleKey;
+        if (mk === "Plán směny strojů") mk = "Plán směny pracovišť";
+        openWorkspaceTab({
+          kind: "module",
+          moduleKey: mk,
+          title: (o.title?.trim() || mk) as string,
+        });
+        setActiveModule(mk);
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem("akeng_pending_module");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [isAuthenticated, openWorkspaceTab]);
 
   const dashboardLinkProps = useMemo(
     () => ({
@@ -761,6 +788,9 @@ export default function App() {
     }
     if (moduleKey === "SYS pořadí navigace") {
       return <NavSidebarOrderPage onOrderSaved={loadNavSidebarOrder} />;
+    }
+    if (moduleKey === "Plán směny pracovišť" || moduleKey === "Plán směny strojů") {
+      return <WorkplaceShiftsPage />;
     }
     if (moduleKey === "Plánování") {
       return <PlannerPage {...dashboardLinkProps} />;

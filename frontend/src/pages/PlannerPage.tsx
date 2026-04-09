@@ -14,8 +14,13 @@ import {
   PlannerGanttItem,
   PlannerGanttMachineGroup,
   PlannerGanttResponse,
+  rebuildPlanningAll,
   updatePlanningOperation,
 } from "../services/plannerApi";
+import {
+  plannerGanttBarColor,
+  plannerGanttStatusLabel,
+} from "../utils/plannerGanttStatus";
 import { PlannerGanttDayColumn } from "../components/PlannerGanttDayColumn";
 import {
   PlannerGanttOperationBlock,
@@ -42,59 +47,6 @@ function addDays(date: Date, days: number): Date {
   const x = new Date(date);
   x.setDate(x.getDate() + days);
   return x;
-}
-
-function normalizeStatus(status: string): string {
-  const s = (status || "").toLowerCase();
-
-  if (s === "bezi") return "bezi";
-  if (s === "hotovo") return "hotovo";
-  if (s === "blokovano") return "blokovano";
-  if (s === "ceka") return "ceka";
-  if (s === "naplanovano") return "naplanovano";
-
-  if (s === "planned") return "naplanovano";
-  if (s === "ready") return "ceka";
-  if (s === "waiting_release") return "ceka";
-
-  return s || "naplanovano";
-}
-
-function statusColor(status: string): string {
-  switch (normalizeStatus(status)) {
-    case "hotovo":
-      return "#10b981";
-    case "bezi":
-      return "#3b82f6";
-    case "blokovano":
-      return "#ef4444";
-    case "ceka":
-      return "#94a3b8";
-    case "naplanovano":
-    default:
-      return "#f59e0b";
-  }
-}
-
-function statusLabel(status: string): string {
-  switch (normalizeStatus(status)) {
-    case "hotovo":
-      return "Hotovo";
-    case "bezi":
-      return "Bezi";
-    case "blokovano":
-      return "Blokovano";
-    case "ceka":
-      return "Ceka";
-    case "naplanovano":
-      return "Naplanovano";
-    default:
-      return status || "-";
-  }
-}
-
-function materialLineLabel(materialReady: boolean): string {
-  return materialReady ? "Materiál: připraven" : "Materiál: čeká na materiál";
 }
 
 /** Pořadí řádků Planneru — shoda podle názvu nebo kódu pracoviště (ne abecedně). */
@@ -174,7 +126,7 @@ function OverlayBar({ item }: { item: PlannerGanttItem }) {
         minHeight: LANE_HEIGHT + 8,
         borderRadius: 6,
         padding: "6px 10px",
-        background: statusColor(item.status),
+        background: plannerGanttBarColor(item.status),
         color: "#fff",
         overflow: "hidden",
         boxSizing: "border-box",
@@ -244,6 +196,7 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 
 function OperationDetailPanel({
   item,
+  allItems,
   onClose,
   onSaved,
   onOpenProductionOrder,
@@ -251,6 +204,8 @@ function OperationDetailPanel({
   canPlanningWrite,
 }: {
   item: PlannerGanttItem | null;
+  /** Pro upřesnění popisu waiting_release po scheduling_late na VP. */
+  allItems?: PlannerGanttItem[];
   onClose: () => void;
   onSaved: () => Promise<void>;
   onOpenProductionOrder?: (productionOrderId: number, title?: string) => void;
@@ -349,13 +304,13 @@ function OperationDetailPanel({
             padding: "6px 10px",
             borderRadius: 999,
             color: "#fff",
-            background: statusColor(status),
+            background: plannerGanttBarColor(status),
             fontSize: 12,
             fontWeight: 800,
             marginBottom: 16,
           }}
         >
-          {statusLabel(status)}
+          {plannerGanttStatusLabel(status, item ? { item: { ...item, status }, allItems } : undefined)}
         </div>
 
         <DetailRow label="VP" value={item.workOrderNo ?? "-"} />
@@ -449,7 +404,8 @@ function OperationDetailPanel({
               <option value="hotovo">Hotovo</option>
               <option value="blokovano">Blokovano</option>
               <option value="ready">Ready</option>
-              <option value="waiting_release">Waiting release</option>
+              <option value="waiting_release">Čeká na uvolnění</option>
+              <option value="scheduling_late">Po termínu (plánovač)</option>
             </select>
           </div>
 
@@ -542,6 +498,7 @@ export default function PlannerPage({
   const [toDate, setToDate] = useState(defaultTo);
   const [data, setData] = useState<PlannerGanttResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState("");
   const [machineFilter, setMachineFilter] = useState("");
@@ -583,6 +540,20 @@ export default function PlannerPage({
     }
   }
 
+  async function rebuildPlan() {
+    if (!canPlanningWrite) return;
+    try {
+      setRebuilding(true);
+      setError("");
+      await rebuildPlanningAll();
+      await loadData();
+    } catch (e: any) {
+      setError(e?.message || "Nepodařilo se přepočítat plán.");
+    } finally {
+      setRebuilding(false);
+    }
+  }
+
   useEffect(() => {
     void loadData();
   }, [fromDate, toDate]);
@@ -613,6 +584,11 @@ export default function PlannerPage({
       : data.machines;
     return orderMachinesForGantt(base);
   }, [data, machineFilter]);
+
+  const allPlannerItems = useMemo(() => {
+    if (!data) return [];
+    return [...data.machines.flatMap((m) => m.items), ...data.unscheduledItems];
+  }, [data]);
 
   async function handleDragEnd(event: DragEndEvent) {
     setActiveDragItem(null);
@@ -716,7 +692,7 @@ export default function PlannerPage({
               <button
                 type="button"
                 onClick={() => void loadData()}
-                disabled={loading || moving}
+                disabled={loading || moving || rebuilding}
                 style={{
                   border: "1px solid #0f172a",
                   background: "#0f172a",
@@ -725,11 +701,32 @@ export default function PlannerPage({
                   padding: "11px 16px",
                   fontWeight: 800,
                   cursor: "pointer",
-                  opacity: loading || moving ? 0.6 : 1,
+                  opacity: loading || moving || rebuilding ? 0.6 : 1,
                 }}
               >
                 {loading ? "Nacitam..." : moving ? "Presouvam..." : "Obnovit data"}
               </button>
+
+              {canPlanningWrite ? (
+                <button
+                  type="button"
+                  onClick={() => void rebuildPlan()}
+                  disabled={rebuilding || loading || moving}
+                  title="Globální přepočet rozvrhu (POST /planning/rebuild-all)"
+                  style={{
+                    border: "1px solid #b45309",
+                    background: "#fffbeb",
+                    color: "#92400e",
+                    borderRadius: 12,
+                    padding: "11px 16px",
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    opacity: rebuilding || loading || moving ? 0.6 : 1,
+                  }}
+                >
+                  {rebuilding ? "Přepočítávám…" : "Přepočítat plán"}
+                </button>
+              ) : null}
             </div>
           }
         />
@@ -737,11 +734,13 @@ export default function PlannerPage({
         <PageSection gapTop={12}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", width: "100%" }}>
             {[
-              ["Ceka", "#94a3b8"],
-              ["Naplanovano", "#f59e0b"],
-              ["Bezi", "#3b82f6"],
+              ["Čeká (ready)", "#94a3b8"],
+              ["Čeká na uvolnění", "#6d28d9"],
+              ["Po termínu", "#be123c"],
+              ["Naplánováno", "#f59e0b"],
+              ["Běží", "#3b82f6"],
               ["Hotovo", "#10b981"],
-              ["Blokovano", "#ef4444"],
+              ["Blokováno", "#ef4444"],
             ].map(([label, color]) => (
               <div
                 key={label}
@@ -1034,12 +1033,15 @@ export default function PlannerPage({
                                 padding: "4px 8px",
                                 borderRadius: 999,
                                 color: "#fff",
-                                background: statusColor(item.status),
+                                background: plannerGanttBarColor(item.status),
                                 fontSize: 12,
                                 fontWeight: 800,
                               }}
                             >
-                              {statusLabel(item.status)}
+                              {plannerGanttStatusLabel(item.status, {
+                                item,
+                                allItems: allPlannerItems,
+                              })}
                             </span>
                           </td>
                         </tr>
@@ -1059,6 +1061,7 @@ export default function PlannerPage({
 
       <OperationDetailPanel
         item={selectedItem}
+        allItems={allPlannerItems}
         onClose={() => setSelectedItem(null)}
         onSaved={loadData}
         onOpenProductionOrder={onOpenProductionOrder}

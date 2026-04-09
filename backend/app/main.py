@@ -13,7 +13,7 @@ from app.api.orders import ensure_orders_sqlite_schema, router as orders_router
 from app.api.orders_overview import router as orders_overview_router
 from app.api.order_detail import router as order_detail_router
 from app.api.technology import ensure_technology_sqlite_schema, router as technology_router
-from app.api.planning import router as planning_router
+from app.api.planning import ensure_planning_shift_schema, router as planning_router
 from app.api.planner_gantt import router as planner_gantt_router
 from app.api.capacity_dashboard import router as capacity_dashboard_router
 from app.api.auto_planner import router as auto_planner_router
@@ -63,6 +63,7 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplateOperation,
 )
 from app.models.master_data import EmployeeSubgroup, Machine  # noqa: F401 — metadata / create_all
+from app.models.machine_shift_template import MachineShiftTemplate  # noqa: F401 — metadata / create_all
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
 from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
@@ -94,6 +95,7 @@ app.add_middleware(
 def startup():
     configure_app_console_logging(logging.INFO)
     Base.metadata.create_all(bind=engine)
+    ensure_planning_shift_schema()
     ensure_master_libraries_sqlite_schema(engine)
     ensure_technology_sqlite_schema(engine)
     ensure_orders_sqlite_schema(engine)

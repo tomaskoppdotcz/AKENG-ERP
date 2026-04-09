@@ -1,19 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
+import SimpleModal from "../components/SimpleModal";
 import { UI } from "../styles/ui";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
 import { getPortfolioItems, portfolioVariantOptionText, type PortfolioItem } from "../services/portfolioApi";
 import {
   createProductionOrdersFromAllocation,
   createJobItem,
+  getAllocationPreview,
   stornoCustomerOrder,
   stornoJobItem,
   getJobs,
   getOrderDetail,
   updateCustomerOrder,
   updateJobItem,
+  type AllocationPreviewResponse,
   type OrderDetailItem,
   type OrderDetailResponse,
+  type RestockConflictStrategy,
 } from "../services/ordersApi";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import { canPerformAction, readStoredErpRole } from "../auth/rbac";
@@ -118,7 +122,11 @@ export default function OrderCardPage({
   const [savingItem, setSavingItem] = useState(false);
   const [itemError, setItemError] = useState<string | null>(null);
   const [creatingVp, setCreatingVp] = useState(false);
+  const [vpPreviewLoading, setVpPreviewLoading] = useState(false);
   const [vpError, setVpError] = useState<string | null>(null);
+  const [restockModalOpen, setRestockModalOpen] = useState(false);
+  const [restockPreviewSnapshot, setRestockPreviewSnapshot] = useState<AllocationPreviewResponse | null>(null);
+  const [restockChoices, setRestockChoices] = useState<Record<number, RestockConflictStrategy>>({});
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
   const [customers, setCustomers] = useState<CustomerListItem[]>([]);
   const [jobId, setJobId] = useState<number | null>(null);
@@ -325,10 +333,48 @@ export default function OrderCardPage({
   }
 
   async function handleCreateVp() {
-    setCreatingVp(true);
+    setVpPreviewLoading(true);
     setVpError(null);
     try {
-      await createProductionOrdersFromAllocation(customerOrderId);
+      const preview = await getAllocationPreview(customerOrderId);
+      if (preview.any_needs_user_choice) {
+        setRestockPreviewSnapshot(preview);
+        setRestockChoices({});
+        setRestockModalOpen(true);
+        return;
+      }
+      setVpPreviewLoading(false);
+      setCreatingVp(true);
+      await createProductionOrdersFromAllocation(customerOrderId, []);
+      await load();
+    } catch (e: unknown) {
+      setVpError(e instanceof Error ? e.message : "Nepodařilo se vytvořit výrobní příkazy.");
+    } finally {
+      setVpPreviewLoading(false);
+      setCreatingVp(false);
+    }
+  }
+
+  async function handleConfirmRestockModal() {
+    const snap = restockPreviewSnapshot;
+    if (snap == null) return;
+    const conflicts = snap.lines.filter((l) => l.needs_user_choice);
+    const missing = conflicts.filter((l) => restockChoices[l.job_item_id] == null);
+    if (missing.length > 0) {
+      setVpError("U každého konfliktního řádku zvolte jednu z možností.");
+      return;
+    }
+    setVpError(null);
+    setCreatingVp(true);
+    try {
+      const resolutions = conflicts.map((l) => ({
+        job_item_id: l.job_item_id,
+        strategy: restockChoices[l.job_item_id]!,
+      }));
+      await createProductionOrdersFromAllocation(customerOrderId, resolutions);
+      setRestockModalOpen(false);
+      setRestockPreviewSnapshot(null);
+      setRestockChoices({});
       await load();
     } catch (e: unknown) {
       setVpError(e instanceof Error ? e.message : "Nepodařilo se vytvořit výrobní příkazy.");
@@ -529,7 +575,10 @@ export default function OrderCardPage({
   const totalSalesPrice = data.summary?.total_sales_price ?? 0;
   const orderWorkflowActive = isBusinessWorkflowActive(data.customer_order?.workflow_status);
 
+  const conflictLines = (restockPreviewSnapshot?.lines ?? []).filter((l) => l.needs_user_choice);
+
   return (
+    <>
     <div style={{ ...UI.container, paddingTop: 10 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <DetailPageHeader
@@ -584,9 +633,9 @@ export default function OrderCardPage({
                   type="button"
                   style={UI.buttons.secondary}
                   onClick={handleCreateVp}
-                  disabled={creatingVp || !orderWorkflowActive || !canOrdersWrite}
+                  disabled={vpPreviewLoading || creatingVp || !orderWorkflowActive || !canOrdersWrite}
                 >
-                  {creatingVp ? "Vytvářím VP..." : "Vytvořit VP"}
+                  {vpPreviewLoading ? "Kontroluji alokaci…" : creatingVp ? "Vytvářím VP…" : "Vytvořit VP"}
                 </button>
               ) : null}
               <button
@@ -1167,5 +1216,119 @@ export default function OrderCardPage({
         )}
       </div>
     </div>
+
+    <SimpleModal
+      title="Konflikt: doplnění skladu vs. zakázka"
+      open={restockModalOpen}
+      onClose={() => {
+        if (!creatingVp) {
+          setRestockModalOpen(false);
+          setRestockPreviewSnapshot(null);
+          setRestockChoices({});
+          setVpError(null);
+        }
+      }}
+      footer={
+        <>
+          <button
+            type="button"
+            style={UI.buttons.secondary}
+            onClick={() => {
+              if (!creatingVp) {
+                setRestockModalOpen(false);
+                setRestockPreviewSnapshot(null);
+                setRestockChoices({});
+                setVpError(null);
+              }
+            }}
+            disabled={creatingVp}
+          >
+            Zrušit
+          </button>
+          <button type="button" style={UI.buttons.primary} onClick={() => void handleConfirmRestockModal()} disabled={creatingVp}>
+            {creatingVp ? "Vytvářím VP…" : "Potvrdit a vytvořit VP"}
+          </button>
+        </>
+      }
+    >
+      <p style={{ margin: "0 0 12px", fontSize: 14, color: "#334155", lineHeight: 1.5 }}>
+        U uvedených položek už běží výroba určená na <strong>doplnění skladu</strong> (stejné GPN). Zvolte, zda tuto rozpracovanou
+        výrobu přednostně použít pro zákazníka, nebo ji nechat na sklad a zakázce naplánovat samostatnou výrobu.
+      </p>
+      {vpError && restockModalOpen ? (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "#fef2f2",
+            color: "#991b1b",
+            fontSize: 13,
+            fontWeight: 700,
+          }}
+        >
+          {vpError}
+        </div>
+      ) : null}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {conflictLines.map((line) => {
+          const wip = line.restock_wip;
+          const vpLabel = wip.vp_codes.length ? wip.vp_codes.join(", ") : "—";
+          const choice = restockChoices[line.job_item_id];
+          return (
+            <div
+              key={line.job_item_id}
+              style={{
+                border: "1px solid #e2e8f0",
+                borderRadius: 12,
+                padding: 12,
+                background: "#f8fafc",
+              }}
+            >
+              <div style={{ fontWeight: 900, color: "#0f172a", marginBottom: 8 }}>GPN: {line.gpn || "—"}</div>
+              <div style={{ fontSize: 13, color: "#475569", marginBottom: 10, lineHeight: 1.5 }}>
+                <div>
+                  Požadavek zákazníka: <strong>{formatQty(line.required_qty)} ks</strong>
+                </div>
+                <div>
+                  Ve výrobě na doplnění skladu: <strong>{formatQty(wip.quantity_open)} ks</strong> (VP: {vpLabel})
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 14 }}>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name={`restock-strategy-${line.job_item_id}`}
+                    checked={choice === "prefer_customer"}
+                    onChange={() =>
+                      setRestockChoices((prev) => ({ ...prev, [line.job_item_id]: "prefer_customer" }))
+                    }
+                    disabled={creatingVp}
+                  />
+                  <span>
+                    <strong>Přednost zákazníkovi</strong> — část požadavku do výroby pokryje běžící VP na doplnění skladu;
+                    cíl doplnění skladu se navýší o totéž množství (výroba pro zákazníka se sníží).
+                  </span>
+                </label>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name={`restock-strategy-${line.job_item_id}`}
+                    checked={choice === "prefer_stock"}
+                    onChange={() => setRestockChoices((prev) => ({ ...prev, [line.job_item_id]: "prefer_stock" }))}
+                    disabled={creatingVp}
+                  />
+                  <span>
+                    <strong>Přednost skladu</strong> — nechat rozpracovanou výrobu na doplnění skladu; pro zakázku založit
+                    samostatnou výrobu.
+                  </span>
+                </label>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </SimpleModal>
+    </>
   );
 }
