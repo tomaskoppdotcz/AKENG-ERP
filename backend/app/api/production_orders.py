@@ -280,6 +280,7 @@ def list_production_orders(
                 "source_type": po.source_type,
                 "status": po.status,
                 "zakazka": job.zak_code if job is not None else None,
+                "customer_order_no": (co.customer_po_no if co is not None else None),
                 "line_no": int(ji.line_no) if ji is not None and ji.line_no is not None else None,
                 "due_date": ji.due_date.isoformat() if ji is not None and ji.due_date is not None else None,
                 "order_type": str(getattr(co, "order_type", "customer") or "customer"),
@@ -290,6 +291,7 @@ def list_production_orders(
                 "is_material_covered": mat_cov,
                 "is_material_released_to_production": mat_rel,
                 "is_material_ready": mat_rel,
+                "restock_redirected_from_internal": bool(getattr(po, "restock_redirected_from_internal", False)),
             }
         )
     return {"items": out}
@@ -556,10 +558,12 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         "scan_code": po.scan_code,
         "workflow_status": wf,
         "zakazka": job.zak_code if job is not None else None,
+        "customer_order_no": (co.customer_po_no if co is not None else None),
         "customer_order_id": int(po.customer_order_id) if po.customer_order_id is not None else None,
         "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
         "order_type": str(getattr(co, "order_type", "customer") or "customer"),
         "line_no": int(ji.line_no) if ji is not None and ji.line_no is not None else None,
+        "restock_redirected_from_internal": bool(getattr(po, "restock_redirected_from_internal", False)),
         "gpn": po.gpn or (ji.gpn if ji is not None else None),
         "description": po.description or (desc_map.get(int(ji.id)) if ji is not None else None),
         "portfolio_item_id": int(portfolio.id) if portfolio is not None else None,

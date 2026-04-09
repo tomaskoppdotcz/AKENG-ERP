@@ -52,6 +52,14 @@ function labelSourceType(v: string | null | undefined): string {
   return v;
 }
 
+function labelSourceTypeRow(row: ProductionOrderOverviewRow): string {
+  const base = labelSourceType(row.source_type);
+  if (row.restock_redirected_from_internal) {
+    return `${base} · Přesměrováno ze skladu`;
+  }
+  return base;
+}
+
 /** Stejné popisky jako u ostatních přehledů; u VP zatím nefiltrují Dodací list / Fakturováno. */
 const VP_QUICK_FILTER_LABELS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
 
@@ -210,7 +218,7 @@ export default function ProductionOrdersPage({
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["VP", "GPN", "Název", "Množství", "Logistický režim", "Typ zdroje", "Stav", "Zakázka", "Řádek", "Termín"].map((h) => (
+                    {["VP", "GPN", "Název", "Množství", "Logistický režim", "Typ zdroje", "Stav", "Zakázka", "Objednávka", "Řádek", "Termín"].map((h) => (
                       <th key={h} style={{ ...UI.th, whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -300,7 +308,7 @@ export default function ProductionOrdersPage({
                       <td style={UI.td}>{row.description ?? "—"}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.quantity} ks</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{labelLogisticMode(row.logistic_mode)}</td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{labelSourceType(row.source_type)}</td>
+                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{labelSourceTypeRow(row)}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.status ?? "—"}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
@@ -316,19 +324,20 @@ export default function ProductionOrdersPage({
                           ) : null}
                         </div>
                       </td>
+                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.customer_order_no?.trim() ? row.customer_order_no : "—"}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.line_no ?? "—"}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.due_date ?? "—"}</td>
                     </tr>
                   ))}
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={10} style={{ ...UI.td, textAlign: "center", color: "#64748b" }}>
+                      <td colSpan={11} style={{ ...UI.td, textAlign: "center", color: "#64748b" }}>
                         Žádné výrobní příkazy.
                       </td>
                     </tr>
                   ) : displayRows.length === 0 ? (
                     <tr>
-                      <td colSpan={10} style={{ ...UI.td, textAlign: "center", color: "#64748b" }}>
+                      <td colSpan={11} style={{ ...UI.td, textAlign: "center", color: "#64748b" }}>
                         Žádné výsledky.
                       </td>
                     </tr>

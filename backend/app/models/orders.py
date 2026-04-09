@@ -72,6 +72,8 @@ class ProductionOrder(Base):
     is_material_released_to_production = Column(Boolean, nullable=False, default=False)
     # Legacy: držíme v sync s is_material_released_to_production (API / starší klienti)
     is_material_ready = Column(Boolean, nullable=False, default=False)
+    # prefer_customer: VP přesunut z interního restock řádku na řádek zákazníka (dříve restock_allocation)
+    restock_redirected_from_internal = Column(Boolean, nullable=False, default=False)
 
     job_item = relationship("JobItem", back_populates="production_orders")
 

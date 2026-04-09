@@ -234,12 +234,18 @@ export default function ProductionOrderDetailPage({
   const summary: Array<[string, string]> = [
     ["VP", data.vp_code],
     [labelOrderType(data.order_type), data.zakazka ?? "—"],
+    ["Číslo objednávky", data.customer_order_no?.trim() ? data.customer_order_no : "—"],
     ["Řádek", data.line_no != null ? String(data.line_no) : "—"],
     ["GPN", data.gpn ?? "—"],
     ["Název", data.description ?? "—"],
     ["Portfolio varianta", data.portfolio_item_name ? `${data.portfolio_item_name} (ID ${data.portfolio_item_id})` : "—"],
     ["Logistický režim", labelLogisticMode(data.logistic_mode)],
-    ["Typ zdroje", labelSourceType(data.source_type)],
+    [
+      "Typ zdroje",
+      data.restock_redirected_from_internal
+        ? `${labelSourceType(data.source_type)} · Přesměrováno ze skladu`
+        : labelSourceType(data.source_type),
+    ],
     ["Stav VP", data.status ?? "—"],
     ["Workflow", data.workflow_status?.trim() ? data.workflow_status : "active"],
     ["Množství", `${data.quantity} ks`],

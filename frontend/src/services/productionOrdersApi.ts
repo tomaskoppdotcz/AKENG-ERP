@@ -15,12 +15,16 @@ export type ProductionOrderOverviewRow = {
   source_type: string | null;
   status: string | null;
   zakazka: string | null;
+  /** Číslo objednávky zákazníka (customer_po_no) */
+  customer_order_no?: string | null;
   line_no: number | null;
   due_date: string | null;
   order_type: string | null;
   portfolio_item_id?: number | null;
   customer_order_id?: number | null;
   job_item_id?: number | null;
+  /** VP přesunutý z interního doplnění skladu (prefer_customer) */
+  restock_redirected_from_internal?: boolean | null;
   /** Obchodní workflow; prázdné / active = aktivní VP */
   workflow_status?: string | null;
   /** Pokryto — lze vydat */
@@ -116,6 +120,8 @@ export type ProductionOrderDetail = {
   is_material_covered?: boolean | null;
   is_material_released_to_production?: boolean | null;
   is_material_ready?: boolean | null;
+  customer_order_no?: string | null;
+  restock_redirected_from_internal?: boolean | null;
   technology_template: {
     id: number;
     name: string;
