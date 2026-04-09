@@ -624,6 +624,68 @@ def _open_restock_production_for_skld_portfolio(db: Session, skld_portfolio_item
     )
 
 
+def _open_restock_wip_quantity_for_job_item(db: Session, item: JobItem, has_portfolio: bool) -> int:
+    """Součet množství otevřených VP restock_allocation pro skladovou variantu GPN (stejná logika jako náhled)."""
+    if not has_portfolio:
+        return 0
+    try:
+        skld = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=item.gpn, logistic_mode="sklad")
+        wip_all = _open_restock_production_for_skld_portfolio(db, int(skld.id))
+        wip = [p for p in wip_all if _restock_po_is_open_wip(p)]
+        return int(sum(int(p.quantity or 0) for p in wip))
+    except HTTPException:
+        return 0
+
+
+def _job_line_needs_restock_conflict_choice(
+    to_production_qty: float,
+    restock_qty: float,
+    wip_open_qty: int,
+) -> bool:
+    """Stejná podmínka jako `needs_user_choice` v náhledu alokace."""
+    return wip_open_qty > 0 and (to_production_qty > 0 or restock_qty > 0)
+
+
+def _sklad_portfolio_id_for_job_item_gpn(db: Session, item: JobItem) -> int | None:
+    """ID skladové portfolio varianty pro GPN řádku (stejná kotva jako WIP restock)."""
+    if not (item.gpn or "").strip():
+        return None
+    try:
+        skld = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=item.gpn, logistic_mode="sklad")
+        return int(skld.id)
+    except HTTPException:
+        return None
+
+
+def _assert_no_multi_line_shared_restock_wip_conflict_in_request(db: Session, preview: dict) -> None:
+    """
+    Více aktivních řádků se stejným GPN / sdíleným skladovým portfoliem, které v jednom požadavku
+    vyžadují rozhodnutí o konfliktu WIP, nejsou bezpečně zpracovatelné (Phase 2 neřeší sekvenční rezervaci).
+    """
+    by_skld: dict[int, list[int]] = defaultdict(list)
+    for ln in preview.get("lines", []) or []:
+        if not ln.get("needs_user_choice"):
+            continue
+        jid = int(ln["job_item_id"])
+        it = db.get(JobItem, jid)
+        if it is None or not workflow_record_active(it):
+            continue
+        skld_id = _sklad_portfolio_id_for_job_item_gpn(db, it)
+        if skld_id is None:
+            continue
+        by_skld[skld_id].append(jid)
+    for _skld_id, jids in by_skld.items():
+        if len(set(jids)) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "V jednom požadavku nelze současně vytvářet VP pro více aktivních řádků se stejným GPN, "
+                    "když každý z nich potřebuje rozhodnout o konfliktu s běžícím doplněním skladu (WIP). "
+                    "Nejdříve dokončete vytvoření VP pro jeden řádek, potom pro druhý, nebo slučte řádky zakázky."
+                ),
+            )
+
+
 def _apply_prefer_customer_allocation_shift(
     db: Session,
     *,
@@ -631,20 +693,27 @@ def _apply_prefer_customer_allocation_shift(
     has_portfolio: bool,
     tp_base: float,
     rq_base: float,
+    wip_open_qty: int | None = None,
 ) -> tuple[float, float]:
     """
-    Přesměruje až d=min(WIP_restock, požadavek_do_výroby) z „doplnění skladu“ k zakázce:
-    - sníží objem order_allocation (výroba pro zákazníka)
-    - navýší cíl restock_allocation na W_sum + původní restock z minima skladu (náhrada + zachování WIP)
+    prefer_customer (jen při konfliktu WIP + výroba/doplnění):
+    d = min(WIP, výroba pro zákazníku) → sníží order_allocation, cíl restock = W_sum + rq_base.
+
+    wip_open_qty: pokud je zadáno, použije se místo nového dotazu (konzistence s náhledem).
+    Více řádků stejného GPN ve stejné žádosti: d se počítá z jednoho W_sum z DB; pro deterministické
+    „spotřebování“ WIP napříč řádky lze později doplnit sdílený stav (minimální verze = jeden řádek typický).
     """
     if not has_portfolio:
         return (tp_base, rq_base)
     try:
-        skld = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=item.gpn, logistic_mode="sklad")
-        wip_all = _open_restock_production_for_skld_portfolio(db, int(skld.id))
-        wip = [p for p in wip_all if _restock_po_is_open_wip(p)]
-        W_sum = sum(int(p.quantity or 0) for p in wip)
-        d = min(W_sum, int(round(tp_base)))
+        if wip_open_qty is None:
+            skld = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=item.gpn, logistic_mode="sklad")
+            wip_all = _open_restock_production_for_skld_portfolio(db, int(skld.id))
+            wip = [p for p in wip_all if _restock_po_is_open_wip(p)]
+            W_sum = sum(int(p.quantity or 0) for p in wip)
+        else:
+            W_sum = int(wip_open_qty)
+        d = min(W_sum, max(0, int(round(tp_base))))
         if d <= 0:
             return (tp_base, rq_base)
         tp_eff = max(0.0, float(tp_base) - float(d))
@@ -710,13 +779,15 @@ def _allocation_preview_for_customer_order(db: Session, customer_order_id: int) 
                 skld_id = int(skld.id)
                 wip_all = _open_restock_production_for_skld_portfolio(db, skld_id)
                 wip = [p for p in wip_all if _restock_po_is_open_wip(p)]
-                qo = sum(int(p.quantity or 0) for p in wip)
+                qo = int(sum(int(p.quantity or 0) for p in wip))
                 restock_wip = {
-                    "quantity_open": int(qo),
+                    "quantity_open": qo,
                     "production_order_ids": [int(p.id) for p in wip],
                     "vp_codes": [p.vp_code for p in wip if p.vp_code],
                 }
-                needs_user_choice = qo > 0 and (to_production_qty > 0 or restock_qty > 0)
+                needs_user_choice = _job_line_needs_restock_conflict_choice(
+                    to_production_qty, restock_qty, qo
+                )
             except HTTPException:
                 pass
 
@@ -1524,6 +1595,8 @@ def create_production_orders_from_allocation(
     strategies = {int(r.job_item_id): r.strategy for r in body.restock_conflict_resolutions}
 
     preview = _allocation_preview_for_customer_order(db, customer_order_id)
+    _assert_no_multi_line_shared_restock_wip_conflict_in_request(db, preview)
+
     needed = {int(ln["job_item_id"]) for ln in preview.get("lines", []) if ln.get("needs_user_choice")}
     if needed:
         res_list = list(body.restock_conflict_resolutions)
@@ -1578,14 +1651,18 @@ def create_production_orders_from_allocation(
                 description = row[0]
 
         from_stock_qty, to_production_qty, restock_qty = _job_item_allocation_values(db, it, portfolio_item_id)
+        # prefer_stock / bez strategie: základní výpočet. prefer_customer jen při reálném konfliktu (náhled).
         if current_strat == "prefer_customer":
-            to_production_qty, restock_qty = _apply_prefer_customer_allocation_shift(
-                db,
-                item=it,
-                has_portfolio=has_portfolio,
-                tp_base=to_production_qty,
-                rq_base=restock_qty,
-            )
+            wip_open = _open_restock_wip_quantity_for_job_item(db, it, has_portfolio)
+            if _job_line_needs_restock_conflict_choice(to_production_qty, restock_qty, wip_open):
+                to_production_qty, restock_qty = _apply_prefer_customer_allocation_shift(
+                    db,
+                    item=it,
+                    has_portfolio=has_portfolio,
+                    tp_base=to_production_qty,
+                    rq_base=restock_qty,
+                    wip_open_qty=wip_open,
+                )
 
         tpo_i = int(round(to_production_qty))
         if tpo_i <= 0:
@@ -1678,6 +1755,8 @@ def create_production_orders_from_allocation(
                                     extra.quantity = 0
                                     db.flush()
                                     rebuild_tp_material_reservations_for_production_order(db, extra)
+                        existing_restock.quantity = int(add_q)
+                        db.flush()
                         if not getattr(existing_restock, "scan_code", None):
                             existing_restock.scan_code = production_order_scan_code_for_id(int(existing_restock.id))
                         _ensure_production_order_operation_scans(
@@ -1686,8 +1765,6 @@ def create_production_orders_from_allocation(
                             portfolio_item_id=resolved_portfolio_item_id,
                         )
                         ensure_planning_operations_for_production_order(db, existing_restock)
-                        existing_restock.quantity = int(add_q)
-                        db.flush()
                         rebuild_tp_material_reservations_for_production_order(db, existing_restock)
                         _sync_internal_restock_job_item_qty(db, internal_item.id)
                         result.append(

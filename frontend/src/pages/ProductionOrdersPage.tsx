@@ -6,7 +6,11 @@ import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilt
 import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
 import { UI } from "../styles/ui";
 import type { ErpWorkflowListFilter, OrdersOverviewOrderTypeFilter } from "../services/ordersApi";
-import { getProductionOrdersOverview, type ProductionOrderOverviewRow } from "../services/productionOrdersApi";
+import {
+  getProductionOrdersOverview,
+  openProductionOrderPdfInNewTab,
+  type ProductionOrderOverviewRow,
+} from "../services/productionOrdersApi";
 import { findPortfolioItemByGpn } from "../services/portfolioApi";
 
 type Props = {
@@ -246,6 +250,18 @@ export default function ProductionOrdersPage({
                             Náhled
                           </button>
                         ) : null}
+                        <button
+                          type="button"
+                          style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void openProductionOrderPdfInNewTab(row.id).catch((err) =>
+                              window.alert(err instanceof Error ? err.message : String(err))
+                            );
+                          }}
+                        >
+                          Tisk VP
+                        </button>
                         {String(row.workflow_status ?? "").trim().toLowerCase() === "cancelled" ? (
                           <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 800, color: "#991b1b" }}>Storno</span>
                         ) : null}

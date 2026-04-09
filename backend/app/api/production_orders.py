@@ -710,7 +710,11 @@ def issue_product_from_stock(
 
 
 @router.get("/{production_order_id}/print")
-def print_production_order_pdf(production_order_id: int, db: Session = Depends(get_db)):
+def print_production_order_pdf(
+    production_order_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.execute")),
+):
     po = db.get(ProductionOrder, production_order_id)
     if po is None:
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")

@@ -6,6 +6,7 @@ import { UI } from "../styles/ui";
 import { buildProductionOrderLocationSummary } from "../utils/productionOrderLocationUi";
 import {
   getProductionOrderDetail,
+  openProductionOrderPdfInNewTab,
   receiveFinishedGoodsToStock,
   reportProductionOrderOperation,
   startProductionOrderOperation,
@@ -272,7 +273,11 @@ export default function ProductionOrderDetailPage({
             <>
               <button
                 type="button"
-                onClick={() => window.open(`${API_URL}/production-orders/${productionOrderId}/print`, "_blank")}
+                onClick={() => {
+                  void openProductionOrderPdfInNewTab(productionOrderId).catch((e) =>
+                    window.alert(e instanceof Error ? e.message : String(e))
+                  );
+                }}
                 style={UI.buttonPrimary}
               >
                 Tisk VP

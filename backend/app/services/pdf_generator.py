@@ -18,6 +18,7 @@ from sqlalchemy import select, text
 from app.core.database import SessionLocal
 from app.core.scan_code import production_order_operation_scan_code_for_id
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder, ProductionOrderOperation
+from app.models.planning import PlanningOperation
 from app.models.portfolio import PortfolioItem, PortfolioTechnologyTemplate, PortfolioTechnologyTemplateOperation
 from app.services.material_traceability_vp import vp_material_traceability_for_input
 
@@ -58,6 +59,23 @@ def _optional_job_item_fields(db, job_item_id: int) -> tuple[str | None, int | N
 
 def _format_date(d: date | None) -> str:
     return d.isoformat() if d is not None else "—"
+
+
+def _expedition_from_planning(db, vp_code: str | None) -> str:
+    """První neprázdná expedice z plánovacích operací (work_order_no = VP kód)."""
+    vc = (vp_code or "").strip()
+    if not vc:
+        return "—"
+    ops = db.scalars(
+        select(PlanningOperation)
+        .where(PlanningOperation.work_order_no == vc)
+        .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
+    ).all()
+    for op in ops:
+        ed = getattr(op, "expedition_date", None)
+        if ed is not None and str(ed).strip():
+            return str(ed).strip()
+    return "—"
 
 
 def _pick_unicode_font_paths() -> tuple[str, str]:
@@ -715,7 +733,7 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         draw_top_row(title_y)
 
         header_top = title_y - 4 * mm
-        block_h = 62 * mm
+        block_h = 68 * mm
         c.setStrokeColor(colors.HexColor(AKENG_BORDER_SOFT))
         c.setFillColor(colors.HexColor(AKENG_HEADER_FILL))
         c.roundRect(margin_x, header_top - block_h, w - 2 * margin_x, block_h, 4, fill=1, stroke=1)
@@ -770,6 +788,7 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         below_rows = [
             ("Množství", f"{int(po.quantity or 0)} ks"),
             ("Termín", _format_date(ji.due_date if ji is not None else None)),
+            ("Expedice", _expedition_from_planning(db, po.vp_code)),
             ("Materiál", portfolio.material_default if portfolio is not None and portfolio.material_default else "—"),
             ("Logistický režim", po.logistic_mode or "—"),
         ]

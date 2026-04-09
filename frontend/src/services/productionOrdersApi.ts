@@ -217,3 +217,32 @@ export async function receiveFinishedGoodsToStock(
   }
   return res.json();
 }
+
+/** Otevře PDF VP v nové záložce; posílá `X-AKENG-Role` jako ostatní API volání. */
+export async function openProductionOrderPdfInNewTab(productionOrderId: number): Promise<void> {
+  const res = await akengFetch(`${API_BASE}/production-orders/${productionOrderId}/print`);
+  if (!res.ok) {
+    let message =
+      res.status === 403
+        ? "Nemáte oprávnění k tisku výrobního příkazu."
+        : `Tisk VP se nepodařil (HTTP ${res.status}).`;
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string") message = data.detail;
+      else if (res.status === 403 && Array.isArray(data?.detail) && data.detail[0]?.msg) {
+        message = String(data.detail[0].msg);
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const w = window.open(objectUrl, "_blank", "noopener,noreferrer");
+  if (!w) {
+    URL.revokeObjectURL(objectUrl);
+    throw new Error("Prohlížeč zablokoval nové okno — povolte vyskakovací okna.");
+  }
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120_000);
+}
