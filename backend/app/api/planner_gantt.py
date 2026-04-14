@@ -1,12 +1,13 @@
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.planning import PlanningScheduleSegment
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -55,6 +56,44 @@ def to_iso_or_none(value):
     return str(value)
 
 
+def _coerce_planner_datetime(value) -> datetime | None:
+    """
+    Raw SQL (např. SQLite) často vrací TIMESTAMP jako řetězec; ORM vrací datetime.
+    Sjednocení pro aritmetiku a výstup ISO.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return datetime.combine(value, time.min)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        norm = s.replace(" ", "T", 1) if "T" not in s and " " in s else s
+        try:
+            return datetime.fromisoformat(norm)
+        except ValueError:
+            pass
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt)
+            except ValueError:
+                continue
+        logger.warning("[planner_gantt] Could not parse datetime %r", value)
+        return None
+    return None
+
+
+def _planned_bounds_iso(planned_start, planned_end) -> tuple[str | None, str | None]:
+    ps = _coerce_planner_datetime(planned_start)
+    pe = _coerce_planner_datetime(planned_end)
+    return (ps.isoformat() if ps else None, pe.isoformat() if pe else None)
+
+
 def _fmt_route_code(code: str | None, fallback_name: str | None) -> str | None:
     c = (code or "").strip()
     if c:
@@ -101,7 +140,61 @@ def _build_next_workplace_code_map(db: Session, rows: list) -> dict[int, str | N
     return next_map
 
 
-def map_operation_row(row):
+def _batch_load_schedule_segments(db: Session, op_ids: set[int]) -> dict[int, list]:
+    if not op_ids:
+        return {}
+    rows = db.scalars(
+        select(PlanningScheduleSegment)
+        .where(PlanningScheduleSegment.planning_operation_id.in_(op_ids))
+        .order_by(PlanningScheduleSegment.planning_operation_id, PlanningScheduleSegment.segment_index)
+    ).all()
+    by_op: dict[int, list] = defaultdict(list)
+    for r in rows:
+        by_op[int(r.planning_operation_id)].append(r)
+    return dict(by_op)
+
+
+def _gantt_segment_payloads(
+    machine_id: int,
+    planned_start,
+    planned_end,
+    total_op_min: float,
+    persisted: list | None,
+) -> list[dict]:
+    if persisted:
+        out_seg: list[dict] = []
+        for r in persisted:
+            ps_i, pe_i = _planned_bounds_iso(r.segment_start, r.segment_end)
+            out_seg.append(
+                {
+                    "segmentIndex": int(r.segment_index),
+                    "machineId": int(r.machine_id),
+                    "plannedStart": ps_i or to_iso_or_none(r.segment_start),
+                    "plannedEnd": pe_i or to_iso_or_none(r.segment_end),
+                    "durationMin": int(r.duration_min),
+                }
+            )
+        return out_seg
+    ps = _coerce_planner_datetime(planned_start)
+    pe = _coerce_planner_datetime(planned_end)
+    if ps is not None and pe is not None:
+        wall = max(0, int((pe - ps).total_seconds() // 60))
+        dm = int(round(float(total_op_min or 0)))
+        if dm <= 0:
+            dm = max(1, wall) if wall else 1
+        return [
+            {
+                "segmentIndex": 0,
+                "machineId": int(machine_id),
+                "plannedStart": ps.isoformat(),
+                "plannedEnd": pe.isoformat(),
+                "durationMin": dm,
+            }
+        ]
+    return []
+
+
+def map_operation_row(row, schedule_segments: list[dict] | None = None):
     po_id = row.get("production_order_id")
     wid = row.get("workplace_id")
     wc = _fmt_route_code(
@@ -113,6 +206,7 @@ def map_operation_row(row):
         next_code = None
     else:
         next_code = _fmt_route_code(str(raw_next), None)
+    planned_iso_start, planned_iso_end = _planned_bounds_iso(row.get("planned_start"), row.get("planned_end"))
     out = {
         "operationId": row["operation_id"],
         "orderItemId": row["order_item_id"],
@@ -126,8 +220,8 @@ def map_operation_row(row):
         "workplaceCode": wc,
         "nextWorkplaceCode": next_code,
         "status": normalize_status(row["status"]),
-        "plannedStart": to_iso_or_none(row["planned_start"]),
-        "plannedEnd": to_iso_or_none(row["planned_end"]),
+        "plannedStart": planned_iso_start or to_iso_or_none(row.get("planned_start")),
+        "plannedEnd": planned_iso_end or to_iso_or_none(row.get("planned_end")),
         "setupTimeMin": float(row["setup_time_min"] or 0),
         "laborTimeTotalMin": float(row["total_labor_time_min"] or 0),
         "totalOperationTimeMin": float(row["total_operation_time_min"] or 0),
@@ -138,6 +232,11 @@ def map_operation_row(row):
     }
     if wid is not None:
         out["workplaceId"] = int(wid)
+    mc = row.get("machine_code")
+    if mc is not None and str(mc).strip():
+        out["machineCode"] = str(mc).strip()
+    if schedule_segments:
+        out["scheduleSegments"] = schedule_segments
     return out
 
 
@@ -152,7 +251,7 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
     visible_start = from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
     visible_end = to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-    # Řádky Gantt = knihovna pracovišť (Settings → Pracoviště), ne seznam machines.
+    # Řádky Gantt = knihovna pracoviště (Planner jako zdroj pravdy); stroj v řádku = kotva MIN(m.id).
     resources_sql = text(
         """
         SELECT
@@ -185,6 +284,7 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
             po.operation_name AS operation_name,
             po.operation_no AS operation_no,
             po.machine_id AS machine_id,
+            m.machine_code AS machine_code,
             COALESCE(wp.name, m.name) AS machine_name,
             COALESCE(NULLIF(TRIM(wp.code), ''), wp.name) AS workplace_code,
             COALESCE(po.workplace_library_item_id, m.workplace_library_item_id) AS workplace_id,
@@ -232,6 +332,7 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
             po.operation_name AS operation_name,
             po.operation_no AS operation_no,
             po.machine_id AS machine_id,
+            m.machine_code AS machine_code,
             COALESCE(wp.name, m.name) AS machine_name,
             COALESCE(NULLIF(TRIM(wp.code), ''), wp.name) AS workplace_code,
             COALESCE(po.workplace_library_item_id, m.workplace_library_item_id) AS workplace_id,
@@ -279,6 +380,9 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
     ).mappings().all()
     unscheduled_rows = db.execute(unscheduled_sql).mappings().all()
 
+    all_op_ids = {int(r["operation_id"]) for r in scheduled_rows} | {int(r["operation_id"]) for r in unscheduled_rows}
+    seg_by_op = _batch_load_schedule_segments(db, all_op_ids)
+
     next_map = _build_next_workplace_code_map(db, list(scheduled_rows) + list(unscheduled_rows))
 
     machine_map: dict[int, dict] = {}
@@ -315,14 +419,21 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
                 ),
                 "items": [],
             }
-        machine_map[wp_id]["items"].append(map_operation_row(r))
+        segs = _gantt_segment_payloads(
+            int(r["machine_id"]),
+            r.get("planned_start"),
+            r.get("planned_end"),
+            float(r.get("total_operation_time_min") or 0),
+            seg_by_op.get(int(r["operation_id"])),
+        )
+        machine_map[wp_id]["items"].append(map_operation_row(r, segs))
 
     machines = list(machine_map.values())
     unscheduled_items = []
     for row in unscheduled_rows:
         r = dict(row)
         r["next_workplace_code"] = next_map.get(int(row["operation_id"]))
-        unscheduled_items.append(map_operation_row(r))
+        unscheduled_items.append(map_operation_row(r, []))
 
     sched_wp = {int(r["workplace_id"]) for r in scheduled_rows}
     logger.info(

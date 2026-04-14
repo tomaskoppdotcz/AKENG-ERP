@@ -329,7 +329,7 @@ def rebuild_tp_material_reservations_for_production_order(db: Session, po: Produ
 def rebuild_all_tp_material_reservations(db: Session) -> dict[str, Any]:
     from app.services.material_readiness import refresh_production_order_material_readiness
 
-    eligible_modes = {"vyroba_zakaznik", "sklad"}
+    eligible_modes = {"vyroba_zakaznik", "sklad", "sklad_zakaznik"}
     pos = db.scalars(select(ProductionOrder).order_by(ProductionOrder.id.asc())).all()
     out: dict[str, Any] = {
         "production_orders_rebuilt": 0,
@@ -414,7 +414,7 @@ def rebuild_tp_material_reservations_for_job_item(db: Session, job_item_id: int)
     for po in pos:
         mode = str(po.logistic_mode or "").strip()
         ji_ok = po.job_item_id is not None and db.get(JobItem, int(po.job_item_id)) is not None
-        if mode in {"vyroba_zakaznik", "sklad"} and ji_ok and po.portfolio_item_id is not None:
+        if mode in {"vyroba_zakaznik", "sklad", "sklad_zakaznik"} and ji_ok and po.portfolio_item_id is not None:
             d = rebuild_tp_material_reservations_for_production_order(db, po)
             details.append({"action": "rebuilt", **d})
         else:

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.master_data import Machine
-from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
+from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule, PlanningScheduleSegment
 from app.models.kiosk import Employee, Kiosk
 from app.services.demo_e2e_scenario import cleanup_demo_e2e, run_demo_e2e_seed
 
@@ -130,6 +130,7 @@ def seed_akeng_core(db: Session = Depends(get_db)):
 
 @router.post("/demo-planning-data")
 def seed_demo_planning_data(db: Session = Depends(get_db)):
+    db.execute(delete(PlanningScheduleSegment))
     db.execute(delete(MachineSchedule))
     db.execute(delete(PlanningOperation))
     db.commit()

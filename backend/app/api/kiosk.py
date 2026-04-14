@@ -12,6 +12,12 @@ from app.core.database import get_db
 from app.models.kiosk import Employee, Kiosk, KioskActivityLog, KioskSession, OperationEvent
 from app.models.master_data import Machine
 from app.models.planning import PlanningOperation
+from app.services.kiosk_planner_queue import (
+    list_planning_operations_for_kiosk_machine,
+    operation_on_same_planner_row_as_machine,
+)
+from app.services.kiosk_vp_operation_order import assert_vp_previous_operations_finished_for_kiosk_start
+from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_operation_complete
 from app.services.planning_engine import PlanningEngineService
 
 router = APIRouter()
@@ -148,24 +154,13 @@ def _serialize_op(op: PlanningOperation) -> dict:
     }
 
 
-def _queue_for_machine(db: Session, machine_id: int) -> list[PlanningOperation]:
-    return list(
-        db.scalars(
-            select(PlanningOperation)
-            .where(PlanningOperation.machine_id == int(machine_id))
-            .where(
-                or_(
-                    PlanningOperation.status.is_(None),
-                    ~PlanningOperation.status.in_(["finished", "cancelled"]),
-                )
-            )
-            .order_by(
-                PlanningOperation.queue_position.asc().nulls_last(),
-                PlanningOperation.planned_start.asc().nulls_last(),
-                PlanningOperation.id.asc(),
-            )
-        ).all()
-    )
+def _require_op_on_kiosk_planner_row(db: Session, kiosk: Kiosk, op: PlanningOperation) -> None:
+    km = db.get(Machine, int(kiosk.machine_id))
+    if not km or not operation_on_same_planner_row_as_machine(db, op, km):
+        raise HTTPException(
+            status_code=400,
+            detail="Operace nepatří na stejný řádek Planneru jako tento kiosk (pracoviště / stroj).",
+        )
 
 
 # --- GET /kiosk/machine-queue ---------------------------------------------------
@@ -194,7 +189,7 @@ def kiosk_machine_queue(
         .where(KioskSession.kiosk_id == kiosk.id)
         .where(KioskSession.is_active.is_(True))
     )
-    ops = _queue_for_machine(db, int(machine.id))
+    ops = list_planning_operations_for_kiosk_machine(db, machine)
     return {
         "kiosk_code": kiosk.kiosk_code,
         "machine": {"id": machine.id, "name": machine.name, "machine_code": machine.machine_code},
@@ -300,20 +295,15 @@ def kiosk_resolve_scan(machine_code: str, code: str, db: Session = Depends(get_d
 
     op = None
     for c in candidates:
-        op = db.scalar(
-            select(PlanningOperation).where(
-                PlanningOperation.work_order_no == c,
-                PlanningOperation.machine_id == int(machine.id),
-            )
-        )
+        for row in db.scalars(select(PlanningOperation).where(PlanningOperation.work_order_no == c)).all():
+            if operation_on_same_planner_row_as_machine(db, row, machine):
+                op = row
+                break
         if op:
             break
 
     if not op:
         raise HTTPException(status_code=404, detail="Operace (WOO) nebyla nalezena.")
-
-    if int(op.machine_id) != int(machine.id):
-        raise HTTPException(status_code=400, detail="Operace nepatří tomuto stroji.")
 
     return {"status": "ok", "operation": _serialize_op(op)}
 
@@ -324,8 +314,9 @@ def _run_start(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-    if int(op.machine_id) != int(kiosk.machine_id):
-        raise HTTPException(status_code=400, detail="Operation does not belong to this machine")
+    _require_op_on_kiosk_planner_row(db, kiosk, op)
+
+    assert_vp_previous_operations_finished_for_kiosk_start(db, op)
 
     from app.services.material_readiness import ensure_planning_operation_material_ready_for_start
 
@@ -360,8 +351,7 @@ def _run_pause(
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-    if int(op.machine_id) != int(kiosk.machine_id):
-        raise HTTPException(status_code=400, detail="Operation does not belong to this machine")
+    _require_op_on_kiosk_planner_row(db, kiosk, op)
     final_reason = (pause_reason or reason or "").strip() or None
     db.add(
         OperationEvent(
@@ -390,8 +380,8 @@ def _run_resume(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-    if int(op.machine_id) != int(kiosk.machine_id):
-        raise HTTPException(status_code=400, detail="Operation does not belong to this machine")
+    _require_op_on_kiosk_planner_row(db, kiosk, op)
+    assert_vp_previous_operations_finished_for_kiosk_start(db, op)
     db.add(
         OperationEvent(
             planning_operation_id=op.id,
@@ -412,8 +402,7 @@ def _run_done(kiosk: Kiosk, planning_operation_id: int, qty_ok: int, qty_nok: in
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-    if int(op.machine_id) != int(kiosk.machine_id):
-        raise HTTPException(status_code=400, detail="Operation does not belong to this machine")
+    _require_op_on_kiosk_planner_row(db, kiosk, op)
 
     db.add(
         OperationEvent(
@@ -450,12 +439,13 @@ def _run_done(kiosk: Kiosk, planning_operation_id: int, qty_ok: int, qty_nok: in
             next_op.released_at = release_time
         next_op.status = "ready"
         next_operation_released = True
-        planner = PlanningEngineService(db)
-        planner.rebuild_machine_schedule(next_op.machine_id, date.today())
 
-    db.commit()
+    # Dokončení + actual_end musí být vidět v přepočtu; rebuild provede vlastní commit.
+    db.flush()
+    stock_effect = apply_kiosk_tp_stock_effect_on_operation_complete(db, op, qty_ok=int(qty_ok or 0))
+    PlanningEngineService(db).rebuild_global_schedules(date.today())
     db.refresh(op)
-    return {
+    out = {
         "status": "ok",
         "finished_operation_id": op.id,
         "qty_ok": qty_ok,
@@ -464,6 +454,9 @@ def _run_done(kiosk: Kiosk, planning_operation_id: int, qty_ok: int, qty_nok: in
         "next_operation_id": next_op.id if next_op else None,
         "operation": _serialize_op(op),
     }
+    if stock_effect is not None:
+        out["tp_stock_effect"] = stock_effect
+    return out
 
 
 @router.post("/operation/start")

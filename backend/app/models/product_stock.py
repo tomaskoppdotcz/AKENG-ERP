@@ -53,6 +53,10 @@ class ProductStockMovement(Base):
     movement_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Kiosk dokončení TP kroku Příjem/Výdej sklad — jeden pohyb na plánovací operaci (idempotence).
+    planning_operation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("planning_operations.id"), index=True, nullable=True, unique=True
+    )
 
     stock_item: Mapped["ProductStockItem"] = relationship("ProductStockItem", back_populates="movements")
 
@@ -66,6 +70,9 @@ class ProductStockReceipt(Base):
     qty_received: Mapped[float] = mapped_column(Float, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    planning_operation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("planning_operations.id"), index=True, nullable=True, unique=True
+    )
 
     stock_item: Mapped["ProductStockItem"] = relationship("ProductStockItem", back_populates="receipts")
     production_order: Mapped["ProductionOrder | None"] = relationship("ProductionOrder")

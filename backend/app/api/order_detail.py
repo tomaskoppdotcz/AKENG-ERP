@@ -312,7 +312,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
   def _item_allocation_and_coverage(it: JobItem) -> dict:
     vp_list = vp_list_by_item.get(it.id, [])
     if co_type == "internal":
-      # Interní řádek = jen poptávka doplnění skladu; žádný návrh alokace zakázníka.
+      # Interní řádek = jen poptávka doplnění skladu; bez zákaznického plnění.
       return {
         "required_qty": None,
         "stock_qty": None,

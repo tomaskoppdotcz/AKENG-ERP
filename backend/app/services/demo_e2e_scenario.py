@@ -41,7 +41,7 @@ from app.models.orders import (
     ProductionOrderOperation,
     ProductionOrderOperationLog,
 )
-from app.models.planning import MachineSchedule, PlanningOperation
+from app.models.planning import MachineSchedule, PlanningOperation, PlanningScheduleSegment
 from app.models.portfolio import PortfolioItem, PortfolioTechnologyTemplate, PortfolioTechnologyTemplateOperation
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.services.planning_engine import PlanningEngineService
@@ -410,6 +410,7 @@ def cleanup_demo_e2e(db: Session) -> dict[str, Any]:
             ]
             if op_ids:
                 db.execute(delete(OperationEvent).where(OperationEvent.planning_operation_id.in_(op_ids)))
+                db.execute(delete(PlanningScheduleSegment).where(PlanningScheduleSegment.planning_operation_id.in_(op_ids)))
                 db.execute(delete(MachineSchedule).where(MachineSchedule.planning_operation_id.in_(op_ids)))
                 removed["planning_operations"] = db.execute(
                     delete(PlanningOperation).where(PlanningOperation.id.in_(op_ids))

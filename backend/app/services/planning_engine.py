@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
+from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule, PlanningScheduleSegment
 from app.models.orders import ProductionOrder
 from app.models.technology_library import TechnologyTemplate
 from app.services.vp_operation_generator import normalize_planning_queue_statuses_for_vp_code
@@ -256,9 +256,25 @@ class PlanningEngineService:
             total_time = int(round(float(op.setup_time_min or 0) + float(op.total_labor_time_min or 0)))
         return max(total_time, 0)
 
+    def _vp_chain_buffer(self) -> timedelta:
+        return timedelta(minutes=VP_INTER_OPERATION_BUFFER_MIN)
+
+    def _bump_chain_cursor_after_op_end(
+        self,
+        chain_cursor: datetime,
+        op: PlanningOperation,
+        *,
+        buf: timedelta,
+    ) -> datetime:
+        """Posune řetězec VP o konec operace (+ mezioperační buffer). Používá actual_end, jinak planned_end."""
+        end = op.actual_end or op.planned_end
+        if end is None:
+            return chain_cursor
+        return max(chain_cursor, end + buf)
+
     def _vp_resume_after_completed_ops(self, lst: list[PlanningOperation]) -> datetime | None:
         """Nejpozdější (konec + buffer) napříč již dokončenými operacemi VP."""
-        buf = timedelta(minutes=VP_INTER_OPERATION_BUFFER_MIN)
+        buf = self._vp_chain_buffer()
         ordered = sorted(lst, key=lambda o: (o.operation_no or 9999, o.id))
         latest: datetime | None = None
         for op in ordered:
@@ -270,6 +286,24 @@ class PlanningEngineService:
             cand = end + buf
             latest = cand if latest is None else max(latest, cand)
         return latest
+
+    def _sequential_predecessor_earliest_start(
+        self,
+        ordered: list[PlanningOperation],
+        op: PlanningOperation,
+        floor: datetime,
+        buf: timedelta,
+    ) -> datetime:
+        """
+        Spodní hranice začátku operace `op`: max(floor, všechny předchůdci v TP pořadí podle
+        actual_end / planned_end + buffer). Zajistí pořadí i když chain_cursor mezistav neodpovídá.
+        """
+        t = floor
+        for prev in ordered:
+            if prev.id == op.id:
+                break
+            t = self._bump_chain_cursor_after_op_end(t, prev, buf=buf)
+        return t
 
     def _machine_state(self, machine_id: int, from_date: date, cache: dict) -> dict:
         if machine_id not in cache:
@@ -378,10 +412,16 @@ class PlanningEngineService:
         total_time: int,
         state: dict,
         latest_end: datetime | None = None,
-    ) -> tuple[datetime, datetime] | None:
+    ) -> tuple[datetime, datetime, list[tuple[datetime, datetime, int]]] | None:
         """
-        Umístí operaci (příp. ve více dílech) jen do [shift_start, shift_start + available_minutes].
-        Vrací (začátek prvního dílu, konec posledního dílu); mezi dny je pauza mimo směnu.
+        Umístí operaci do [shift_start, shift_start + available_minutes] po segmentech (konec směny =
+        hranice). Vrací (začátek prvního segmentu, konec posledního segmentu).
+
+        Důležité: práce se bere po segmentech `min(remaining, free, room[, deadline])`; mezi segmenty
+        může být pauza (noc). `planning_schedule_segments` nesou skutečné úseky — wall-clock mezi
+        `planned_start` a `planned_end` nesmí interpretovat jako souvislou práci. Po předchozí
+        operaci na stejném stroji zůstává `current_pointer` na konci úseku, takže návazná operace
+        začíná téhož dne po `earliest_start`, pokud ve směně zbývá kapacita (nepřeskakovat den).
         """
         if total_time <= 0:
             total_time = 1
@@ -395,6 +435,7 @@ class PlanningEngineService:
         remaining = int(total_time)
         first_start: datetime | None = None
         last_end: datetime | None = None
+        segments: list[tuple[datetime, datetime, int]] = []
         op_has_started = False
         guard = 0
 
@@ -453,6 +494,17 @@ class PlanningEngineService:
             if not op_has_started:
                 current_pointer = max(current_pointer, earliest_start)
             wc_floor = self._earliest_wall_clock_floor_for_calendar_day(day.calendar_date, day)
+            # Stejnodenní zbytek směny po návaznosti (jiný stroj / WP): nesmíme nechat „teď“ vyhodit
+            # celý den, když earliest_start je ještě uvnitř [shift_start, shift_end) toho kalendářního dne
+            # (typicky večer / přepočet: wc_floor >= shift_end → jinak by se přeskočilo na další den 06:00).
+            if (
+                wc_floor is not None
+                and shift_end > shift_start
+                and earliest_start.date() == day.calendar_date
+                and earliest_start < shift_end
+                and wc_floor >= shift_end
+            ):
+                wc_floor = None
             if wc_floor is not None:
                 current_pointer = max(current_pointer, wc_floor)
             if current_pointer.date() > day.calendar_date:
@@ -471,14 +523,16 @@ class PlanningEngineService:
                 current_pointer = None
                 continue
 
-            chunk = min(remaining, free, room)
+            chunk_cap = min(remaining, free, room)
             if latest_end is not None:
                 if current_pointer > latest_end:
                     return None
                 deadline_room = int((latest_end - current_pointer).total_seconds() // 60)
                 if deadline_room <= 0:
                     return None
-                chunk = min(chunk, deadline_room)
+                chunk_cap = min(chunk_cap, deadline_room)
+
+            chunk = chunk_cap
 
             if chunk <= 0:
                 day_index += 1
@@ -488,14 +542,18 @@ class PlanningEngineService:
             seg_start = current_pointer
             seg_end = seg_start + timedelta(minutes=chunk)
             if seg_end > shift_end:
-                day_index += 1
-                current_pointer = None
-                continue
+                chunk = max(0, int((shift_end - seg_start).total_seconds() // 60))
+                if chunk <= 0:
+                    day_index += 1
+                    current_pointer = None
+                    continue
+                seg_end = seg_start + timedelta(minutes=chunk)
 
             day.planned_minutes = planned + chunk
             current_pointer = seg_end
             remaining -= chunk
             op_has_started = True
+            segments.append((seg_start, seg_end, int(chunk)))
             if first_start is None:
                 first_start = seg_start
             last_end = seg_end
@@ -508,7 +566,7 @@ class PlanningEngineService:
         st["current_pointer"] = current_pointer
         if first_start is None or last_end is None:
             return None
-        return first_start, last_end
+        return first_start, last_end, segments
 
     def _per_op_schedule_gate(
         self, ordered: list[PlanningOperation], released: bool
@@ -656,8 +714,14 @@ class PlanningEngineService:
             self.db.execute(
                 delete(MachineSchedule).where(MachineSchedule.planning_operation_id.not_in(protect_ids))
             )
+            self.db.execute(
+                delete(PlanningScheduleSegment).where(
+                    PlanningScheduleSegment.planning_operation_id.not_in(protect_ids)
+                )
+            )
         else:
             self.db.execute(delete(MachineSchedule))
+            self.db.execute(delete(PlanningScheduleSegment))
 
         self.db.flush()
         self._realign_machine_calendar_planned_minutes_from_schedules()
@@ -745,19 +809,22 @@ class PlanningEngineService:
             woo = unit.woo
             ordered = unit.ops
             chain_cursor = vp_next.get(woo, floor)
-            buf = timedelta(minutes=VP_INTER_OPERATION_BUFFER_MIN)
+            buf = self._vp_chain_buffer()
             m_deadline = self._manufacturing_deadline_dt(ordered)
             exp_latest = self._expedition_latest_end_dt(ordered)
 
             for op in ordered:
                 if _chain_terminal_completed(op.status):
+                    chain_cursor = self._bump_chain_cursor_after_op_end(chain_cursor, op, buf=buf)
+                    vp_next[woo] = chain_cursor
                     continue
                 if _shopfloor_active(op.status):
                     end = op.actual_end or op.planned_end
+                    chain_cursor = self._bump_chain_cursor_after_op_end(chain_cursor, op, buf=buf)
                     if end is not None:
-                        chain_cursor = max(chain_cursor, end + buf)
                         mid_a = int(op.machine_id)
                         machine_next[mid_a] = max(machine_next.get(mid_a, floor), end)
+                    vp_next[woo] = chain_cursor
                     continue
                 if not bool(getattr(op, "material_ready", False)):
                     break
@@ -766,10 +833,11 @@ class PlanningEngineService:
 
                 mid = int(op.machine_id)
                 total_time = self._operation_duration_min(op)
-                earliest = max(floor, chain_cursor, machine_next.get(mid, floor))
+                pred_floor = self._sequential_predecessor_earliest_start(ordered, op, floor, buf)
+                earliest = max(pred_floor, chain_cursor, machine_next.get(mid, floor))
                 latest_end = exp_latest if self._operation_in_reserve_logistics_window(op) else m_deadline
 
-                pair = self._place_one_operation(
+                placement = self._place_one_operation(
                     machine_id=mid,
                     from_date=from_date,
                     earliest_start=earliest,
@@ -777,7 +845,7 @@ class PlanningEngineService:
                     state=state,
                     latest_end=latest_end,
                 )
-                if pair is None:
+                if placement is None:
                     op.planned_start = None
                     op.planned_end = None
                     op.queue_position = None
@@ -794,7 +862,7 @@ class PlanningEngineService:
                     )
                     break
 
-                planned_start, planned_end = pair
+                planned_start, planned_end, seg_rows = placement
 
                 st_m = self._machine_state(mid, from_date, state)
                 st_m["queue_position"] += 1
@@ -824,6 +892,17 @@ class PlanningEngineService:
                 )
                 self.db.add(sched)
                 created.append(sched)
+                for si, (ss, se, dm) in enumerate(seg_rows):
+                    self.db.add(
+                        PlanningScheduleSegment(
+                            planning_operation_id=int(op.id),
+                            machine_id=int(mid),
+                            segment_index=int(si),
+                            segment_start=ss,
+                            segment_end=se,
+                            duration_min=int(dm),
+                        )
+                    )
 
                 machine_next[mid] = planned_end
                 chain_cursor = planned_end + buf

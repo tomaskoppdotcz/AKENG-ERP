@@ -15,7 +15,7 @@ from app.models.material_library import MaterialLibraryItem
 from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
 from app.models.material_stock import MaterialReservation, MaterialStockItem
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
-from app.models.planning import MachineCalendar, MachineSchedule, PlanningOperation
+from app.models.planning import MachineCalendar, MachineSchedule, PlanningOperation, PlanningScheduleSegment
 from app.services.material_reservation_cleanup import cleanup_orphan_material_reservations
 from app.services.material_reservation_rebuild import run_material_reservation_rebuild
 from app.services.business_workflow import workflow_active_sql
@@ -182,30 +182,55 @@ def reorder_ops_with_target(ops: list[PlanningOperation], target_op: PlanningOpe
 @router.get("/operations")
 def get_planning_operations(machine_id: int, db: Session = Depends(get_db)):
     ops = get_machine_ops(db, machine_id)
+    op_ids = [int(o.id) for o in ops]
+    seg_by: dict[int, list] = {}
+    if op_ids:
+        seg_rows = db.scalars(
+            select(PlanningScheduleSegment)
+            .where(PlanningScheduleSegment.planning_operation_id.in_(op_ids))
+            .order_by(PlanningScheduleSegment.planning_operation_id, PlanningScheduleSegment.segment_index)
+        ).all()
+        for s in seg_rows:
+            seg_by.setdefault(int(s.planning_operation_id), []).append(s)
 
-    return [
-        {
-            "id": op.id,
-            "order_item_id": op.order_item_id,
-            "work_order_no": op.work_order_no,
-            "gpn": op.gpn,
-            "operation_name": op.operation_name,
-            "operation_no": op.operation_no,
-            "qty": op.qty,
-            "input_diameter_mm": op.input_diameter_mm,
-            "setup_time_min": op.setup_time_min,
-            "total_labor_time_min": op.total_labor_time_min,
-            "total_operation_time_min": op.total_operation_time_min,
-            "expedition_date": op.expedition_date,
-            "planned_start": op.planned_start.isoformat() if op.planned_start else None,
-            "planned_end": op.planned_end.isoformat() if op.planned_end else None,
-            "queue_position": op.queue_position,
-            "status": op.status,
-            "material_ready": op.material_ready,
-            "is_locked": op.is_locked,
-        }
-        for op in ops
-    ]
+    out: list[dict] = []
+    for op in ops:
+        oid = int(op.id)
+        segs = seg_by.get(oid, [])
+        planned_schedule_segments = [
+            {
+                "segment_index": int(s.segment_index),
+                "machine_id": int(s.machine_id),
+                "segment_start": s.segment_start.isoformat() if s.segment_start else None,
+                "segment_end": s.segment_end.isoformat() if s.segment_end else None,
+                "duration_min": int(s.duration_min),
+            }
+            for s in segs
+        ]
+        out.append(
+            {
+                "id": op.id,
+                "order_item_id": op.order_item_id,
+                "work_order_no": op.work_order_no,
+                "gpn": op.gpn,
+                "operation_name": op.operation_name,
+                "operation_no": op.operation_no,
+                "qty": op.qty,
+                "input_diameter_mm": op.input_diameter_mm,
+                "setup_time_min": op.setup_time_min,
+                "total_labor_time_min": op.total_labor_time_min,
+                "total_operation_time_min": op.total_operation_time_min,
+                "expedition_date": op.expedition_date,
+                "planned_start": op.planned_start.isoformat() if op.planned_start else None,
+                "planned_end": op.planned_end.isoformat() if op.planned_end else None,
+                "queue_position": op.queue_position,
+                "status": op.status,
+                "material_ready": op.material_ready,
+                "is_locked": op.is_locked,
+                "planned_schedule_segments": planned_schedule_segments,
+            }
+        )
+    return out
 
 
 @router.get("/machine-calendar")

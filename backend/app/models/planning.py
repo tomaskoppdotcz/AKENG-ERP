@@ -90,3 +90,20 @@ class MachineSchedule(Base):
     total_time_min = Column(Float, nullable=False, default=0)
 
     status = Column(String(20), nullable=False, default="planned")
+
+
+class PlanningScheduleSegment(Base):
+    """
+    Kalendářní segmenty jedné planning operace (např. zbytek směny + pokračování další den).
+    machine_schedule zůstává jeden řádek na operaci (první/poslední čas); segmenty = pravda pro Gantt.
+    """
+
+    __tablename__ = "planning_schedule_segments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    planning_operation_id = Column(Integer, ForeignKey("planning_operations.id"), nullable=False, index=True)
+    machine_id = Column(Integer, ForeignKey("machines.id"), nullable=False, index=True)
+    segment_index = Column(Integer, nullable=False)
+    segment_start = Column(DateTime, nullable=False)
+    segment_end = Column(DateTime, nullable=False)
+    duration_min = Column(Integer, nullable=False)

@@ -76,6 +76,40 @@ def ensure_product_stock_sqlite_schema(engine: Engine) -> None:
             )
         )
 
+        insp_after = sa_inspect(engine)
+        tbls = set(insp_after.get_table_names())
+        if "product_stock_movements" in tbls:
+            mv_cols = {c["name"] for c in insp_after.get_columns("product_stock_movements")}
+            if "planning_operation_id" not in mv_cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE product_stock_movements ADD COLUMN planning_operation_id INTEGER "
+                        "REFERENCES planning_operations (id)"
+                    )
+                )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_product_stock_movements_planning_operation_id "
+                    "ON product_stock_movements (planning_operation_id)"
+                )
+            )
+
+        if "product_stock_receipts" in tbls:
+            rc_cols = {c["name"] for c in insp_after.get_columns("product_stock_receipts")}
+            if "planning_operation_id" not in rc_cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE product_stock_receipts ADD COLUMN planning_operation_id INTEGER "
+                        "REFERENCES planning_operations (id)"
+                    )
+                )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_product_stock_receipts_planning_operation_id "
+                    "ON product_stock_receipts (planning_operation_id)"
+                )
+            )
+
 
 def _item_payload(row: ProductStockItem) -> dict:
     p = row.portfolio_item
@@ -104,6 +138,7 @@ def _movement_payload(row: ProductStockMovement) -> dict:
         "movement_date": row.movement_date,
         "reference": row.reference,
         "note": row.note,
+        "planning_operation_id": getattr(row, "planning_operation_id", None),
     }
 
 

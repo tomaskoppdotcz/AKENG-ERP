@@ -1,3 +1,10 @@
+"""
+Most mezi výrobním příkazem (VP) a plánovačem: planning_operations = přesně operace z aktivního
+portfolio technology postupu (TP), případně fallback na technology_library u stejného GPN.
+Žádné automatické dokončovací / logistické kroky (Expedice, příjem sklad, …) se nepřidávají —
+musí být součástí TP v datech.
+"""
+
 import logging
 from typing import Any
 
@@ -9,7 +16,7 @@ from app.services.workplace_scheduling_anchor import get_or_create_scheduling_ma
 from app.models.orders import JobItem, ProductionOrder, ProductionOrderOperation
 from app.models.portfolio import PortfolioTechnologyTemplate, PortfolioTechnologyTemplateOperation
 from app.models.technology_library import TechnologyTemplate
-from app.models.planning import PlanningOperation, MachineSchedule
+from app.models.planning import PlanningOperation, MachineSchedule, PlanningScheduleSegment
 from app.services.business_workflow import workflow_record_active
 
 logger = logging.getLogger(__name__)
@@ -493,6 +500,14 @@ def ensure_planning_operations_for_production_order(db: Session, po: ProductionO
             {"skipped": "workflow_inactive"},
         )
         return {"skipped": "workflow_inactive", "vp_id": int(po.id)}
+    if bool(getattr(po, "blocked_until_reserved_stock_receipt", False)):
+        _vp_planning_pipeline_snapshot(
+            db,
+            po,
+            "skip_blocked_reserved_stock",
+            {"skipped": "blocked_reserved_stock"},
+        )
+        return {"skipped": "blocked_reserved_stock", "vp_id": int(po.id)}
     vp_code = (po.vp_code or "").strip()
     if not vp_code:
         return {"skipped": "no_vp_code", "vp_id": int(po.id)}
@@ -604,7 +619,13 @@ def generate_operations_from_vp(db: Session):
 
 
 def regenerate_operations_from_tp(db: Session):
-    changed = []
+    """
+    Smaže existující planning_operations VP (bez chráněných stavů) a znovu je vytvoří stejnou
+    cestou jako při vzniku VP: portfolio TP (kanonický postup), jinak technology_library.
+    Dříve se zde vždy brala jen technology_library — mohla obsahovat jiný počet kroků než portfolio TP
+    (např. další logistické operace) a plánovač tak neodpovídal řádnému TP výrobku.
+    """
+    changed: list[dict] = []
 
     vps = db.scalars(select(ProductionOrder).order_by(ProductionOrder.id.asc())).all()
 
@@ -612,15 +633,16 @@ def regenerate_operations_from_tp(db: Session):
         job_item = db.get(JobItem, vp.job_item_id)
         if not job_item:
             continue
-
-        template = db.scalar(select(TechnologyTemplate).where(TechnologyTemplate.gpn == job_item.gpn))
-        if not template:
+        if not workflow_record_active(vp):
+            changed.append({"vp": vp.vp_code, "status": "SKIPPED - workflow_inactive"})
+            continue
+        if bool(getattr(vp, "blocked_until_reserved_stock_receipt", False)):
+            changed.append({"vp": vp.vp_code, "status": "SKIPPED - blocked_reserved_stock"})
             continue
 
         ops = db.scalars(select(PlanningOperation).where(PlanningOperation.work_order_no == vp.vp_code)).all()
 
-        protected_statuses = {"finished", "in_progress", "started"}
-        has_protected = any((op.status or "").lower() in protected_statuses for op in ops)
+        has_protected = any(_planning_op_status_is_protected(op.status) for op in ops)
         if has_protected:
             changed.append(
                 {
@@ -633,80 +655,16 @@ def regenerate_operations_from_tp(db: Session):
 
         op_ids = [op.id for op in ops]
         if op_ids:
+            db.execute(delete(PlanningScheduleSegment).where(PlanningScheduleSegment.planning_operation_id.in_(op_ids)))
             db.execute(delete(MachineSchedule).where(MachineSchedule.planning_operation_id.in_(op_ids)))
             db.execute(delete(PlanningOperation).where(PlanningOperation.id.in_(op_ids)))
             db.flush()
 
-        input_diameter = _extract_diameter_from_template(template)
-
-        resolved_regen: list[tuple] = []
-        for tpl_op in sorted(template.operations, key=lambda x: (int(x.operation_no or 0), int(x.id))):
-            machine = db.scalar(select(Machine).where(Machine.machine_code == tpl_op.machine_code))
-            if not machine:
-                changed.append(
-                    {
-                        "vp": vp.vp_code,
-                        "gpn": job_item.gpn,
-                        "operation": tpl_op.operation_name,
-                        "status": f"SKIPPED - machine_code not found: {tpl_op.machine_code}",
-                    }
-                )
-                continue
-            resolved_regen.append((tpl_op, machine))
-
-        first_no_r = min(int(x[0].operation_no) for x in resolved_regen) if resolved_regen else None
-        for tpl_op, machine in resolved_regen:
-            total_labor = float(tpl_op.labor_time_per_piece_min or 0) * int(job_item.qty or 0)
-            total_time = float(tpl_op.setup_time_min or 0) + total_labor
-            st = "ready" if first_no_r is not None and int(tpl_op.operation_no) == first_no_r else "waiting_release"
-
-            db.add(
-                PlanningOperation(
-                    order_item_id=job_item.id,
-                    product_group_id=None,
-                    work_order_no=vp.vp_code,
-                    gpn=job_item.gpn,
-                    operation_name=tpl_op.operation_name,
-                    operation_no=tpl_op.operation_no,
-                    machine_id=machine.id,
-                    qty=job_item.qty,
-                    input_diameter_mm=input_diameter,
-                    setup_time_min=float(tpl_op.setup_time_min or 0),
-                    total_labor_time_min=total_labor,
-                    total_operation_time_min=total_time,
-                    expedition_date=str(job_item.due_date) if job_item.due_date else None,
-                    planned_start=None,
-                    planned_end=None,
-                    actual_start=None,
-                    actual_end=None,
-                    qty_ok=None,
-                    qty_nok=None,
-                    released_at=None,
-                    latest_start=None,
-                    buffer_after_min=int(tpl_op.buffer_after_min or 20),
-                    queue_position=None,
-                    material_ready=bool(getattr(vp, "is_material_released_to_production", False)),
-                    status=st,
-                    planning_mode="auto",
-                    is_locked=False,
-                )
-            )
-
-            changed.append(
-                {
-                    "vp": vp.vp_code,
-                    "gpn": job_item.gpn,
-                    "operation_no": tpl_op.operation_no,
-                    "operation": tpl_op.operation_name,
-                    "machine_code": tpl_op.machine_code,
-                    "product_group": template.product_group,
-                    "input_diameter_mm": input_diameter,
-                    "status": "REGENERATED",
-                }
-            )
-
-        if resolved_regen:
-            normalize_planning_queue_statuses_for_vp_code(db, vp.vp_code)
+        info = ensure_planning_operations_for_production_order(db, vp)
+        row = {"vp": vp.vp_code, "gpn": job_item.gpn, "regenerate": True, **info}
+        changed.append(row)
+        if info.get("created", 0) and not info.get("skipped"):
+            logger.info("[planning_bridge] regenerate_vp vp_code=%s created=%s source=%s", vp.vp_code, info.get("created"), info.get("source"))
 
     db.commit()
     return changed

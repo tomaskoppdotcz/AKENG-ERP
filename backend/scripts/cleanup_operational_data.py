@@ -2,8 +2,9 @@
 """
 Safe cleanup of operational / test transaction data (preserves master data).
 
-Default: dry run (preview counts only).
-Use --apply to execute deletes.
+Default: execute cleanup deletes.
+Use --dry-run for preview counts only.
+--apply is kept as a backward-compatible alias (no-op).
 
 Does NOT delete: portfolio, technology templates, material library, machines,
 workplaces, employees, master libraries, machine_calendar,
@@ -31,16 +32,21 @@ from app.services.cleanup_operational_data import (  # noqa: E402
 def main() -> None:
     parser = argparse.ArgumentParser(description="AKENG ERP — operational data cleanup (preserve master data).")
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview affected row counts only (no deletes).",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
-        help="Execute deletion. Without this flag, only prints preview counts.",
+        help="Backward-compatible alias; cleanup is applied by default.",
     )
     parser.add_argument("--json", action="store_true", help="Print result as JSON.")
     args = parser.parse_args()
 
     db = SessionLocal()
     try:
-        if not args.apply:
+        if args.dry_run:
             prev = preview_counts(db)
             if args.json:
                 print(json.dumps({"dry_run": True, "preview": prev}, indent=2, ensure_ascii=False))
@@ -48,7 +54,7 @@ def main() -> None:
                 print("=== DRY RUN (no deletes) — row counts that would be affected ===\n")
                 for k, v in sorted(prev.items()):
                     print(f"  {k}: {v}")
-                print("\nRun with --apply to delete operational data.")
+                print("\nRun without --dry-run to delete operational data.")
             return
 
         out = run_cleanup_operational_data(db, apply=True)

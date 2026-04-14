@@ -129,6 +129,51 @@ def migrate_technology_template_operations_workplace_ids(db: Session) -> dict[st
     return {"technology_tp_ops_updated": updated, "technology_tp_ops_unresolved": missing}
 
 
+# Přesné machine_code → workplace_library_item.id (ne textové jméno).
+# Použito jen když stroj nemá workplace_library_item_id a v DB existuje kotva __WP_{id}__.
+#
+# Kontrola: plánovač drží jednu sdílenou kapacitu na __WP_6__ (workplace 6); kiosk má dva fyzické
+# „role“ stroje — oba musí mít stejné workplace_library_item_id, aby fronta četla kotvu.
+#
+# Expedice: balení + expedice → jedno WP (kotva __WP_9__ po ensure_scheduling_anchors).
+# Ruční: ruční práce + praní (PRACKA) → workplace Ručni (__WP_15__).
+# Sklad: příjem + výdej → jedno WP 16 / kotva __WP_16__ (sdílená kapacita skladu v plánovači).
+_KNOWN_SHOPFLOOR_MACHINE_CODE_TO_WORKPLACE_ID: dict[str, int] = {
+    "NEFF_I": 5,
+    "NEFF_II": 7,
+    "MEZIOPERACNI_KONTROLA": 6,
+    "VYSTUPNI_KONTROLA": 6,
+    "BALENI": 9,
+    "PRACKA": 15,
+    "PRIJEM_SKLAD": 16,
+    "VYDEJ_SKLAD": 16,
+}
+
+
+def migrate_known_shopfloor_machine_workplace_fk(db: Session) -> dict[str, int]:
+    """
+    Legacy řádky shopfloor stroje bez FK pracoviště (workcenter_id často NULL).
+    Propojí je s WP, pokud existuje planner kotva __WP_{wid}__ — bez shody podle lidského názvu.
+    """
+    linked = 0
+    for code, wid in _KNOWN_SHOPFLOOR_MACHINE_CODE_TO_WORKPLACE_ID.items():
+        wp = db.get(WorkplaceLibraryItem, int(wid))
+        if wp is None:
+            continue
+        anchor_code = f"__WP_{int(wid)}__"
+        anchor = db.scalar(select(Machine).where(Machine.machine_code == anchor_code))
+        if anchor is None:
+            continue
+        m = db.scalar(select(Machine).where(Machine.machine_code == code))
+        if m is None or m.workplace_library_item_id is not None:
+            continue
+        m.workplace_library_item_id = int(wid)
+        linked += 1
+    if linked:
+        db.flush()
+    return {"known_shopfloor_machines_workplace_linked": linked}
+
+
 def migrate_machines_workplace_fk_exact_code_match(db: Session) -> dict[str, int]:
     """Stroj bez FK: přesná shoda machine_code s workplace.code (bez alias map)."""
     linked = 0
@@ -220,6 +265,7 @@ def run_planner_resource_migrations(db: Session) -> dict[str, Any]:
     out.update(migrate_technology_template_operations_workplace_ids(db))
     out.update(migrate_machines_workplace_fk_exact_code_match(db))
     out.update(ensure_scheduling_anchors_for_all_workplaces(db))
+    out.update(migrate_known_shopfloor_machine_workplace_fk(db))
     out.update(sync_planning_operations_workplace_from_machine(db))
     out.update(backfill_production_order_operations_workplace_ids(db))
 

@@ -1,8 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_action
@@ -10,6 +9,11 @@ from app.core.database import get_db
 from app.models.master_data import Machine
 from app.models.kiosk import OperationEvent
 from app.models.planning import PlanningOperation
+from app.services.kiosk_planner_queue import list_planning_operations_for_kiosk_machine
+from app.services.kiosk_vp_operation_order import assert_vp_previous_operations_finished_for_kiosk_start
+from app.services.kiosk_shopfloor_resources import build_kiosk_resource_rows
+from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_operation_complete
+from app.services.planning_engine import PlanningEngineService
 
 router = APIRouter()
 
@@ -102,36 +106,19 @@ def try_write_event(
 
 @router.get("/machines")
 def get_kiosk_machines(db: Session = Depends(get_db)):
-    machines = db.scalars(
-        select(Machine)
-        .where(Machine.is_active == True)
-        .where(Machine.planning_enabled == True)
-        .order_by(Machine.name.asc())
-    ).all()
-
-    return {
-        "machines": [
-            {
-                "machine_id": machine.id,
-                "machine_name": machine.name,
-                "machine_code": machine.machine_code,
-            }
-            for machine in machines
-        ]
-    }
+    """
+    Jedna položka na provozní pracoviště (workplace_library_item): více strojů se stejným
+    workplace_library_item_id se sloučí (Kontrola, Expedice, Ruční+praní, …).
+    """
+    return {"machines": build_kiosk_resource_rows(db)}
 
 
 @router.get("/machine-operations")
 def get_machine_operations(machine_id: int, db: Session = Depends(get_db)):
-    ops = db.scalars(
-        select(PlanningOperation)
-        .where(PlanningOperation.machine_id == machine_id)
-        .order_by(
-            PlanningOperation.queue_position.asc().nulls_last(),
-            PlanningOperation.operation_no.asc(),
-            PlanningOperation.id.asc(),
-        )
-    ).all()
+    machine = db.get(Machine, machine_id)
+    if not machine:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    ops = list_planning_operations_for_kiosk_machine(db, machine)
 
     return {
         "operations": [
@@ -165,6 +152,8 @@ def start_operation(
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
+
+    assert_vp_previous_operations_finished_for_kiosk_start(db, op)
 
     from app.services.material_readiness import ensure_planning_operation_material_ready_for_start
 
@@ -257,8 +246,13 @@ def finish_operation(
     op.qty_ok = int(payload.qty_ok or 0)
     op.qty_nok = int(payload.qty_nok or 0)
     op.status = "hotovo"
+    db.flush()
+    stock_effect = apply_kiosk_tp_stock_effect_on_operation_complete(db, op, qty_ok=int(payload.qty_ok or 0))
     db.commit()
     db.refresh(op)
+
+    # Přeskupit následné operace podle actual_end / uvolněné kapacity (vlastní commit uvnitř).
+    PlanningEngineService(db).rebuild_global_schedules(date.today())
 
     event_logged = try_write_event(
         db=db,
@@ -270,7 +264,7 @@ def finish_operation(
         operator_name=payload.operator_name,
     )
 
-    return {
+    out = {
         "status": "ok",
         "event_logged": event_logged,
         "operation": {
@@ -284,3 +278,6 @@ def finish_operation(
             "qty_nok": op.qty_nok,
         },
     }
+    if stock_effect is not None:
+        out["tp_stock_effect"] = stock_effect
+    return out

@@ -44,7 +44,7 @@ from app.api.portfolio import (
 from app.api.customers import ensure_customers_sqlite_schema, router as customers_router
 from app.api.ui_settings import router as ui_settings_router
 
-from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule
+from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule, PlanningScheduleSegment  # noqa: F401
 from app.models.kiosk import Employee, Kiosk, KioskActivityLog, KioskSession, OperationEvent
 from app.models.orders import (
     CustomerOrder,
@@ -74,6 +74,7 @@ from app.models.material_stock import (
     MaterialStockReservation,
 )
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
+from app.models.restock_wip_reservation import RestockWipReservation  # noqa: F401 — metadata / create_all
 from app.models.storage_location import StorageLocation
 from app.models.erp_user import ErpUser  # noqa: F401 — metadata / create_all
 from app.models.app_setting import AppSetting  # noqa: F401 — metadata / create_all

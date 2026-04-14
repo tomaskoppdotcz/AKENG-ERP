@@ -853,7 +853,8 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         rows_for_pdf: list[dict] = []
         if mapped_ops:
             by_no = {int(r.operation_no): r for r in mapped_ops}
-            all_nos = sorted(set(by_no.keys()) | set(tpl_ops.keys()))
+            # TP je kanonický zdroj — v PDF nikdy nepřidávej operace mimo TP (např. stale legacy Expedice).
+            all_nos = sorted(tpl_ops.keys()) if tpl_ops else sorted(by_no.keys())
             for no in all_nos:
                 m = by_no.get(no)
                 t = tpl_ops.get(no)

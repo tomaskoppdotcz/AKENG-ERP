@@ -28,6 +28,7 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplateOperation,
 )
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
+from app.models.restock_wip_reservation import RestockWipReservation
 from app.services.business_workflow import WORKFLOW_STATUS_CANCELLED, workflow_active_sql, workflow_record_active
 from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
 from app.services.material_readiness import (
@@ -44,6 +45,7 @@ from app.services.production_order_operation_runtime import (
 # Rezervace materiálu z TP se synchronizují z orders (vytvoření/úprava VP, řádky zakázky) a z portfolio (vstupy TP).
 # Tento modul nemění portfolio ani množství VP tak, aby bylo potřeba zde spouštět přepočet rezervací.
 from app.services.pdf_generator import generate_production_order_pdf
+from app.services.restock_wip_reservation_fulfillment import fulfill_restock_wip_reservations_after_source_receipt
 
 router = APIRouter()
 
@@ -196,6 +198,16 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
         .where(PortfolioTechnologyTemplateOperation.template_id == int(tpl.id))
         .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc(), PortfolioTechnologyTemplateOperation.id.asc())
     ).all()
+    tp_op_nos = {int(op.operation_no) for op in tpl_ops}
+    stale_rows = db.scalars(
+        select(ProductionOrderOperation).where(
+            ProductionOrderOperation.production_order_id == int(po.id)
+        )
+    ).all()
+    for stale in stale_rows:
+        if int(stale.operation_no) not in tp_op_nos:
+            db.delete(stale)
+    db.flush()
     for op in tpl_ops:
         ex = db.scalar(
             select(ProductionOrderOperation).where(
@@ -292,9 +304,75 @@ def list_production_orders(
                 "is_material_released_to_production": mat_rel,
                 "is_material_ready": mat_rel,
                 "restock_redirected_from_internal": bool(getattr(po, "restock_redirected_from_internal", False)),
+                "blocked_until_reserved_stock_receipt": bool(
+                    getattr(po, "blocked_until_reserved_stock_receipt", False)
+                ),
             }
         )
     return {"items": out}
+
+
+@router.get("/restock-wip-reservation-notices")
+def list_restock_wip_reservation_notices(
+    limit: int = Query(30, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Aktivní/pending rezervace výstupu z restock VP (signál pro UI: čeká se na příjem rezervovaného výstupu)."""
+    rows = db.scalars(
+        select(RestockWipReservation)
+        .where(
+            RestockWipReservation.status == "pending",
+            RestockWipReservation.reserved_qty > 0,
+        )
+        .order_by(RestockWipReservation.created_at.desc(), RestockWipReservation.id.desc())
+        .limit(int(limit))
+    ).all()
+    if not rows:
+        return {"items": []}
+    src_ids = {int(r.source_production_order_id) for r in rows}
+    cust_ids = {
+        int(r.fulfillment_customer_production_order_id)
+        for r in rows
+        if r.fulfillment_customer_production_order_id is not None
+    }
+    src_pos = db.scalars(select(ProductionOrder).where(ProductionOrder.id.in_(src_ids))).all() if src_ids else []
+    cust_pos = (
+        db.scalars(select(ProductionOrder).where(ProductionOrder.id.in_(cust_ids))).all() if cust_ids else []
+    )
+    src_by_id = {int(p.id): p for p in src_pos}
+    cust_by_id = {int(p.id): p for p in cust_pos}
+    items: list[dict] = []
+    for r in rows:
+        sp = src_by_id.get(int(r.source_production_order_id))
+        # Jen skutečně aktivní vazby: zdrojový VP musí existovat a být workflow active.
+        if sp is None or not workflow_record_active(sp):
+            continue
+        cp = (
+            cust_by_id.get(int(r.fulfillment_customer_production_order_id))
+            if r.fulfillment_customer_production_order_id is not None
+            else None
+        )
+        if cp is not None and not workflow_record_active(cp):
+            continue
+        items.append(
+            {
+                "reservation_id": int(r.id),
+                "status": r.status,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "reserved_qty": int(r.reserved_qty or 0),
+                "source_production_order_id": int(r.source_production_order_id),
+                "source_vp_code": sp.vp_code if sp is not None else None,
+                "customer_production_order_id": int(r.fulfillment_customer_production_order_id)
+                if r.fulfillment_customer_production_order_id is not None
+                else None,
+                "customer_vp_code": cp.vp_code if cp is not None else None,
+                "user_message_cs": (
+                    "Příjem rezervovaného výstupu čeká na naskladnění. "
+                    "Následný výrobní příkaz zákazníka bude odblokován po příjmu."
+                ),
+            }
+        )
+    return {"items": items}
 
 
 @router.post("/{production_order_id}/storno")
@@ -409,12 +487,17 @@ def receive_finished_goods_to_stock(
             note="Ruční příjem na sklad výrobků.",
         )
     )
+    db.flush()
+    restock_fulfillment = fulfill_restock_wip_reservations_after_source_receipt(
+        db, source_production_order_id=int(po.id)
+    )
     db.commit()
     return {
         "status": "ok",
         "product_stock_item_id": int(stock.id),
         "qty_received": qty,
         "current_qty": float(stock.current_qty or 0),
+        "restock_wip_reservation_fulfillment": restock_fulfillment,
     }
 
 
@@ -564,6 +647,9 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         "order_type": str(getattr(co, "order_type", "customer") or "customer"),
         "line_no": int(ji.line_no) if ji is not None and ji.line_no is not None else None,
         "restock_redirected_from_internal": bool(getattr(po, "restock_redirected_from_internal", False)),
+        "blocked_until_reserved_stock_receipt": bool(
+            getattr(po, "blocked_until_reserved_stock_receipt", False)
+        ),
         "gpn": po.gpn or (ji.gpn if ji is not None else None),
         "description": po.description or (desc_map.get(int(ji.id)) if ji is not None else None),
         "portfolio_item_id": int(portfolio.id) if portfolio is not None else None,
@@ -659,10 +745,18 @@ def report_production_order_operation(
     )
 
     new_status = _recompute_and_set_po_status(db, po, operation_nos)
+    restock_fulfillment: dict | None = None
     if new_status == "done":
         _ensure_product_stock_receipt_for_done_po(db, po)
+        db.flush()
+        restock_fulfillment = fulfill_restock_wip_reservations_after_source_receipt(
+            db, source_production_order_id=int(po.id)
+        )
     db.commit()
-    return {"status": "ok", "po_status": new_status}
+    out: dict = {"status": "ok", "po_status": new_status}
+    if restock_fulfillment is not None:
+        out["restock_wip_reservation_fulfillment"] = restock_fulfillment
+    return out
 
 
 @router.post("/product/issue")

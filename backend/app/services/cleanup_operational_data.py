@@ -34,6 +34,7 @@ _SQLITE_SEQUENCE_TABLES = (
     "product_stock_movements",
     "material_reservations",
     "material_stock_reservations",
+    "restock_wip_reservations",
 )
 
 
@@ -55,6 +56,7 @@ def preview_counts(db: Session) -> dict[str, int]:
         ("production_order_operations", "SELECT COUNT(*) FROM production_order_operations"),
         ("material_reservations", "SELECT COUNT(*) FROM material_reservations"),
         ("material_stock_reservations", "SELECT COUNT(*) FROM material_stock_reservations"),
+        ("restock_wip_reservations", "SELECT COUNT(*) FROM restock_wip_reservations"),
         (
             "material_stock_movements_linked",
             "SELECT COUNT(*) FROM material_stock_movements "
@@ -120,6 +122,7 @@ def _execute_cleanup_deletes(db: Session, deleted: dict[str, int]) -> None:
     # Reservations (TP / sklad materiálu)
     d("material_reservations", "DELETE FROM material_reservations")
     d("material_stock_reservations", "DELETE FROM material_stock_reservations")
+    d("restock_wip_reservations", "DELETE FROM restock_wip_reservations")
 
     # Material movements clearly tied to VP / řádek zakázky (attachments CASCADE)
     d(
