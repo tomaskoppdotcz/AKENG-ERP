@@ -11,17 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.planning import PlanningOperation
 
-# Stejné množiny jako planning_engine._chain_terminal_completed (konec řetězce / uvolnění návaznosti).
-VP_OPERATION_TERMINAL_STATUSES = frozenset(
-    {
-        "finished",
-        "done",
-        "hotovo",
-        "complete",
-        "completed",
-        "cancelled",
-    }
-)
+from app.services.planning_operation_status import planning_operation_status_is_terminal
 
 KIOSK_VP_PREVIOUS_NOT_DONE_DETAIL = (
     "Operaci nelze spustit, protože předchozí operace ve výrobním postupu ještě není dokončena."
@@ -29,7 +19,7 @@ KIOSK_VP_PREVIOUS_NOT_DONE_DETAIL = (
 
 
 def is_vp_operation_status_terminal(status: str | None) -> bool:
-    return (status or "").strip().lower() in VP_OPERATION_TERMINAL_STATUSES
+    return planning_operation_status_is_terminal(status)
 
 
 def assert_vp_previous_operations_finished_for_kiosk_start(db: Session, op: PlanningOperation) -> None:

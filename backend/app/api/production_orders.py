@@ -111,9 +111,9 @@ def _job_item_optional_map(db: Session, item_ids: list[int]) -> tuple[dict[int, 
 def _recompute_and_set_po_status(db: Session, po: ProductionOrder, operation_nos: list[int]) -> str:
     _, any_activity, all_done = operation_statuses_for_production_order(db, int(po.id), operation_nos)
     if all_done:
-        po.status = "done"
+        po.status = "hotovo"
     elif any_activity:
-        po.status = "in_progress"
+        po.status = "bezi"
     elif not po.status:
         po.status = "planned"
     return str(po.status or "planned")
@@ -625,9 +625,9 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         if st:
             op.update(st)
     if all_done:
-        po_status = "done"
+        po_status = "hotovo"
     elif any_activity:
-        po_status = "in_progress"
+        po_status = "bezi"
     else:
         po_status = po.status or "planned"
 
@@ -746,7 +746,7 @@ def report_production_order_operation(
 
     new_status = _recompute_and_set_po_status(db, po, operation_nos)
     restock_fulfillment: dict | None = None
-    if new_status == "done":
+    if new_status == "hotovo":
         _ensure_product_stock_receipt_for_done_po(db, po)
         db.flush()
         restock_fulfillment = fulfill_restock_wip_reservations_after_source_receipt(

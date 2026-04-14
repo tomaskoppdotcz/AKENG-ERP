@@ -9,6 +9,10 @@ from sqlalchemy.orm import Session
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule, PlanningScheduleSegment
 from app.models.orders import ProductionOrder
 from app.models.technology_library import TechnologyTemplate
+from app.services.planning_operation_status import (
+    normalize_planning_operation_status,
+    planning_operation_status_is_terminal,
+)
 from app.services.vp_operation_generator import normalize_planning_queue_statuses_for_vp_code
 
 
@@ -51,13 +55,11 @@ SCHEDULING_LATE_STATUS = "scheduling_late"
 
 
 def _chain_terminal_completed(status: str | None) -> bool:
-    s = (status or "").strip().lower()
-    return s in {"finished", "done", "hotovo", "complete", "completed", "cancelled"}
+    return planning_operation_status_is_terminal(status)
 
 
 def _shopfloor_active(status: str | None) -> bool:
-    s = (status or "").strip().lower()
-    return s in {"in_progress", "started", "running", "bezi"}
+    return normalize_planning_operation_status(status) == "bezi"
 
 
 @dataclass
@@ -1043,7 +1045,7 @@ class PlanningEngineService:
             select(PlanningOperation).where(PlanningOperation.machine_id == machine_id)
         ).all():
             st = (op.status or "").strip().lower()
-            if st not in {"ready", "planned", "waiting_release", "in_progress", "started"}:
+            if st not in {"ready", "planned", "waiting_release", "in_progress", "started", "bezi", "running"}:
                 continue
             oid = int(op.id)
             wp_id = getattr(op, "workplace_library_item_id", None)

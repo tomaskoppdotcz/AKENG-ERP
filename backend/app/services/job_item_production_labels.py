@@ -10,6 +10,7 @@ from app.models.orders import ProductionOrder, ProductionOrderOperation
 from app.models.planning import PlanningOperation
 from app.services.business_workflow import workflow_record_active
 from app.services.material_readiness import evaluate_production_order_material_released
+from app.services.planning_operation_status import normalize_planning_operation_status
 from app.services.production_order_operation_runtime import (
     operation_nos_for_production_order,
     operation_statuses_for_production_order,
@@ -46,27 +47,27 @@ def _material_released_for_po(db: Session, po: ProductionOrder) -> bool:
 
 def _phase_and_progress_from_ops(entries: list[dict]) -> tuple[str, str]:
     """
-    entries: { "wp": str, "st": planned|in_progress|done, "mat_ok": bool }
+    entries: { "wp": str, "st": planned|bezi|hotovo, "mat_ok": bool }
     mat_ok = může se začít (materiál uvolněn / ready).
     """
     if not entries:
         return "—", "—"
     total = len(entries)
-    done_n = sum(1 for e in entries if e["st"] == "done")
+    done_n = sum(1 for e in entries if e["st"] == "hotovo")
     progress = f"{done_n} / {total}"
 
     for e in entries:
-        if e["st"] == "in_progress":
+        if e["st"] == "bezi":
             return f"{e['wp']} – běží", progress
     if done_n == total:
         return "Hotovo", progress
 
-    any_started = done_n > 0 or any(e["st"] == "in_progress" for e in entries)
+    any_started = done_n > 0 or any(e["st"] == "bezi" for e in entries)
     if not any_started and any(not e.get("mat_ok", True) for e in entries):
         return "Čeká na materiál", progress
 
     for e in entries:
-        if e["st"] != "done":
+        if e["st"] != "hotovo":
             return f"{e['wp']} – čeká", progress
     return "Hotovo", progress
 
@@ -95,11 +96,12 @@ def _entries_from_filtered_pos(db: Session, pos: list[ProductionOrder]) -> list[
 
 
 def _normalize_planning_status(raw: str | None) -> str:
-    s = (raw or "planned").strip().lower()
-    if s in ("running", "in_progress", "bezi"):
-        return "in_progress"
-    if s in ("done", "finished", "hotovo", "completed"):
-        return "done"
+    """Align planner row status to the same vocabulary as VP log-derived operation_status."""
+    s = normalize_planning_operation_status(raw)
+    if s == "bezi":
+        return "bezi"
+    if s == "hotovo":
+        return "hotovo"
     return "planned"
 
 
@@ -153,7 +155,7 @@ def production_labels_for_job_item(db: Session, job_item_id: int, workflow_filte
         return _phase_and_progress_from_ops(pl_entries)
 
     if pos:
-        if all(str(p.status or "").strip().lower() == "done" for p in pos):
+        if all(str(p.status or "").strip().lower() == "hotovo" for p in pos):
             return "Hotovo", "—"
         active = [p for p in pos if workflow_record_active(p)]
         if active and all(not _material_released_for_po(db, p) for p in active):

@@ -1,24 +1,31 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.kiosk import Employee, Kiosk, KioskActivityLog, KioskSession, OperationEvent
+from app.models.kiosk import Employee, Kiosk, KioskActivityLog, KioskSession
 from app.models.master_data import Machine
 from app.models.planning import PlanningOperation
 from app.services.kiosk_planner_queue import (
     list_planning_operations_for_kiosk_machine,
     operation_on_same_planner_row_as_machine,
 )
-from app.services.kiosk_vp_operation_order import assert_vp_previous_operations_finished_for_kiosk_start
-from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_operation_complete
-from app.services.planning_engine import PlanningEngineService
+from app.services.cz_card_reader_normalize import normalize_czech_keyboard_reader_numeric
+from app.services.employee_credential import find_employee_by_credential
+from app.services.employee_pin import constant_time_fail, verify_pin
+from app.services.kiosk_work_report_service import (
+    SOURCE_PC_KIOSK,
+    work_report_complete,
+    work_report_pause,
+    work_report_resume,
+    work_report_start,
+)
 
 router = APIRouter()
 
@@ -53,7 +60,21 @@ class KioskFinishOperationRequest(BaseModel):
 # --- MVP machine-bound payloads -------------------------------------------------
 class MachineLoginRequest(BaseModel):
     machine_code: str = Field(..., min_length=1)
-    employee_code: str = Field(..., min_length=1, description="Scan or employee code")
+    employee_code: str = Field(
+        ...,
+        min_length=1,
+        description="Kód zaměstnance, UID čipu, legacy card_uid nebo scan_code (stejné službě jako lookup).",
+    )
+
+
+class MachineLoginPinRequest(BaseModel):
+    machine_code: str = Field(..., min_length=1)
+    employee_hint: str = Field(
+        ...,
+        min_length=1,
+        description="Token stejný jako u /kiosk/login (kód / čip / sken) — identifikuje zaměstnance před ověřením PIN.",
+    )
+    pin_code: str = Field(..., min_length=4, max_length=20)
 
 
 class MachineLogoutRequest(BaseModel):
@@ -227,19 +248,7 @@ def kiosk_session_state(machine_code: str, db: Session = Depends(get_db)):
 
 
 # --- POST /kiosk/login | /logout --------------------------------------------------
-@router.post("/login")
-def kiosk_login_machine(payload: MachineLoginRequest, db: Session = Depends(get_db)):
-    kiosk = _kiosk_from_machine_code(db, payload.machine_code)
-    code = payload.employee_code.strip()
-    employee = db.scalar(
-        select(Employee).where(
-            or_(Employee.employee_code == code, Employee.card_uid == code),
-            Employee.is_active.is_(True),
-        )
-    )
-    if not employee:
-        raise HTTPException(status_code=404, detail="Operátor nebyl nalezen.")
-
+def _kiosk_start_session(db: Session, kiosk: Kiosk, employee: Employee) -> KioskSession:
     for s in db.scalars(
         select(KioskSession).where(KioskSession.kiosk_id == kiosk.id).where(KioskSession.is_active.is_(True))
     ).all():
@@ -256,12 +265,66 @@ def kiosk_login_machine(payload: MachineLoginRequest, db: Session = Depends(get_
     db.add(session)
     db.commit()
     db.refresh(session)
+    return session
+
+
+@router.post("/login")
+def kiosk_login_machine(payload: MachineLoginRequest, db: Session = Depends(get_db)):
+    kiosk = _kiosk_from_machine_code(db, payload.machine_code)
+    employee = find_employee_by_credential(
+        db, payload.employee_code, require_active=True, require_kiosk=True
+    )
+    if not employee:
+        raise HTTPException(status_code=404, detail="Operátor nebyl nalezen.")
+
+    session = _kiosk_start_session(db, kiosk, employee)
     machine = db.get(Machine, int(kiosk.machine_id))
     return {
         "status": "ok",
         "kiosk_code": kiosk.kiosk_code,
         "employee": {"id": employee.id, "name": employee.name, "employee_code": employee.employee_code},
         "machine": {"id": machine.id, "name": machine.name, "machine_code": machine.machine_code},
+    }
+
+
+@router.post("/login-pin")
+def kiosk_login_with_pin(payload: MachineLoginPinRequest, db: Session = Depends(get_db)):
+    kiosk = _kiosk_from_machine_code(db, payload.machine_code)
+    employee = find_employee_by_credential(
+        db, payload.employee_hint, require_active=True, require_kiosk=True
+    )
+    ok = employee is not None and verify_pin(payload.pin_code.strip(), employee.pin_hash)
+    if not ok:
+        constant_time_fail()
+        raise HTTPException(status_code=404, detail="Neplatné přihlášení (PIN).")
+
+    _kiosk_start_session(db, kiosk, employee)
+    machine = db.get(Machine, int(kiosk.machine_id))
+    return {
+        "status": "ok",
+        "kiosk_code": kiosk.kiosk_code,
+        "employee": {"id": employee.id, "name": employee.name, "employee_code": employee.employee_code},
+        "machine": {"id": machine.id, "name": machine.name, "machine_code": machine.machine_code},
+    }
+
+
+@router.get("/employee/resolve")
+def kiosk_employee_resolve(machine_code: str, credential: str, db: Session = Depends(get_db)):
+    """Ověří stroj a vrátí zaměstnance bez založení session (příprava UI)."""
+    _kiosk_from_machine_code(db, machine_code)
+    cred = (credential or "").strip()
+    if not cred:
+        raise HTTPException(status_code=422, detail="credential je povinný.")
+    employee = find_employee_by_credential(db, cred, require_active=True, require_kiosk=True)
+    if not employee:
+        raise HTTPException(status_code=404, detail="Operátor nebyl nalezen.")
+    return {
+        "employee": {
+            "id": employee.id,
+            "name": employee.name,
+            "employee_code": employee.employee_code,
+            "has_pin": bool(employee.pin_hash),
+        }
     }
 
 
@@ -281,7 +344,7 @@ def kiosk_logout_machine(payload: MachineLogoutRequest, db: Session = Depends(ge
 @router.get("/resolve-scan")
 def kiosk_resolve_scan(machine_code: str, code: str, db: Session = Depends(get_db)):
     machine = _resolve_machine(db, machine_code)
-    raw = (code or "").strip()
+    raw = normalize_czech_keyboard_reader_numeric((code or "").strip())
     if not raw:
         raise HTTPException(status_code=422, detail="code je povinný.")
 
@@ -311,32 +374,27 @@ def kiosk_resolve_scan(machine_code: str, code: str, db: Session = Depends(get_d
 # --- Operation control (machine_code) -------------------------------------------
 def _run_start(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
     session = _get_active_session(db, kiosk.id)
+    machine = db.get(Machine, int(kiosk.machine_id))
+    if not machine:
+        raise HTTPException(status_code=404, detail="Stroj pro kiosk nenalezen.")
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
     _require_op_on_kiosk_planner_row(db, kiosk, op)
-
-    assert_vp_previous_operations_finished_for_kiosk_start(db, op)
-
-    from app.services.material_readiness import ensure_planning_operation_material_ready_for_start
-
-    ensure_planning_operation_material_ready_for_start(db, op)
-
-    db.add(
-        OperationEvent(
-            planning_operation_id=op.id,
-            machine_id=kiosk.machine_id,
-            employee_id=session.employee_id,
-            event_type="start",
-            event_time=datetime.utcnow(),
-        )
+    emp = db.get(Employee, int(session.employee_id))
+    actor = f"employee:{session.employee_id}"
+    r = work_report_start(
+        db,
+        op,
+        machine=machine,
+        employee_id=int(session.employee_id),
+        operator_display=emp.name if emp else None,
+        source=SOURCE_PC_KIOSK,
+        actor=actor,
+        kiosk_session_id=int(session.id),
     )
-    op.status = "running"
-    if op.actual_start is None:
-        op.actual_start = datetime.utcnow()
-    db.commit()
     db.refresh(op)
-    return {"status": "ok", "planning_operation_id": op.id, "operation_status": op.status, "operation": _serialize_op(op)}
+    return {**r, "planning_operation_id": op.id, "operation": _serialize_op(op)}
 
 
 def _run_pause(
@@ -348,114 +406,79 @@ def _run_pause(
     note: str | None,
 ) -> dict:
     session = _get_active_session(db, kiosk.id)
+    machine = db.get(Machine, int(kiosk.machine_id))
+    if not machine:
+        raise HTTPException(status_code=404, detail="Stroj pro kiosk nenalezen.")
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
     _require_op_on_kiosk_planner_row(db, kiosk, op)
-    final_reason = (pause_reason or reason or "").strip() or None
-    db.add(
-        OperationEvent(
-            planning_operation_id=op.id,
-            machine_id=kiosk.machine_id,
-            employee_id=session.employee_id,
-            event_type="pause",
-            event_time=datetime.utcnow(),
-            reason=final_reason,
-            note=note,
-        )
+    merged_reason = (pause_reason or reason or "").strip()
+    r = work_report_pause(
+        db,
+        op,
+        machine=machine,
+        employee_id=int(session.employee_id),
+        pause_reason=merged_reason,
+        note=note,
+        source=SOURCE_PC_KIOSK,
+        actor=f"employee:{session.employee_id}",
     )
-    op.status = "paused"
-    db.commit()
     db.refresh(op)
     return {
-        "status": "ok",
+        **r,
         "planning_operation_id": op.id,
-        "operation_status": op.status,
-        "pause_reason": final_reason,
+        "pause_reason": merged_reason,
     }
 
 
 def _run_resume(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
     session = _get_active_session(db, kiosk.id)
+    machine = db.get(Machine, int(kiosk.machine_id))
+    if not machine:
+        raise HTTPException(status_code=404, detail="Stroj pro kiosk nenalezen.")
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
     _require_op_on_kiosk_planner_row(db, kiosk, op)
-    assert_vp_previous_operations_finished_for_kiosk_start(db, op)
-    db.add(
-        OperationEvent(
-            planning_operation_id=op.id,
-            machine_id=kiosk.machine_id,
-            employee_id=session.employee_id,
-            event_type="resume",
-            event_time=datetime.utcnow(),
-        )
+    r = work_report_resume(
+        db,
+        op,
+        machine=machine,
+        employee_id=int(session.employee_id),
+        source=SOURCE_PC_KIOSK,
+        actor=f"employee:{session.employee_id}",
     )
-    op.status = "running"
-    db.commit()
     db.refresh(op)
-    return {"status": "ok", "planning_operation_id": op.id, "operation_status": op.status}
+    return {**r, "planning_operation_id": op.id, "operation": _serialize_op(op)}
 
 
 def _run_done(kiosk: Kiosk, planning_operation_id: int, qty_ok: int, qty_nok: int, note: str | None, db: Session) -> dict:
     session = _get_active_session(db, kiosk.id)
+    machine = db.get(Machine, int(kiosk.machine_id))
+    if not machine:
+        raise HTTPException(status_code=404, detail="Stroj pro kiosk nenalezen.")
     op = db.get(PlanningOperation, int(planning_operation_id))
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
     _require_op_on_kiosk_planner_row(db, kiosk, op)
-
-    db.add(
-        OperationEvent(
-            planning_operation_id=op.id,
-            machine_id=kiosk.machine_id,
-            employee_id=session.employee_id,
-            event_type="done",
-            event_time=datetime.utcnow(),
-            qty_ok=qty_ok,
-            qty_nok=qty_nok,
-            note=note,
-        )
+    r = work_report_complete(
+        db,
+        op,
+        machine=machine,
+        employee_id=int(session.employee_id),
+        qty_ok=int(qty_ok or 0),
+        qty_nok=int(qty_nok or 0),
+        note=note,
+        source=SOURCE_PC_KIOSK,
+        actor=f"employee:{session.employee_id}",
     )
-    now = datetime.utcnow()
-    op.status = "finished"
-    if hasattr(op, "actual_end"):
-        op.actual_end = now
-    if hasattr(op, "qty_ok"):
-        op.qty_ok = qty_ok
-    if hasattr(op, "qty_nok"):
-        op.qty_nok = qty_nok
-
-    next_op = db.scalar(
-        select(PlanningOperation)
-        .where(PlanningOperation.order_item_id == op.order_item_id)
-        .where(PlanningOperation.operation_no > op.operation_no)
-        .order_by(PlanningOperation.operation_no.asc())
-    )
-    next_operation_released = False
-    if next_op:
-        buffer_after_min = getattr(op, "buffer_after_min", 20) or 20
-        release_time = now + timedelta(minutes=buffer_after_min)
-        if hasattr(next_op, "released_at"):
-            next_op.released_at = release_time
-        next_op.status = "ready"
-        next_operation_released = True
-
-    # Dokončení + actual_end musí být vidět v přepočtu; rebuild provede vlastní commit.
-    db.flush()
-    stock_effect = apply_kiosk_tp_stock_effect_on_operation_complete(db, op, qty_ok=int(qty_ok or 0))
-    PlanningEngineService(db).rebuild_global_schedules(date.today())
     db.refresh(op)
     out = {
-        "status": "ok",
+        **r,
         "finished_operation_id": op.id,
-        "qty_ok": qty_ok,
-        "qty_nok": qty_nok,
-        "next_operation_released": next_operation_released,
-        "next_operation_id": next_op.id if next_op else None,
         "operation": _serialize_op(op),
     }
-    if stock_effect is not None:
-        out["tp_stock_effect"] = stock_effect
     return out
 
 
@@ -520,25 +543,13 @@ def kiosk_login_card(payload: KioskLoginCardRequest, db: Session = Depends(get_d
     if not kiosk:
         raise HTTPException(status_code=404, detail="Kiosk not found")
 
-    employee = db.scalar(select(Employee).where(Employee.card_uid == payload.card_uid).where(Employee.is_active.is_(True)))
+    employee = find_employee_by_credential(
+        db, payload.card_uid, require_active=True, require_kiosk=True
+    )
     if not employee:
         raise HTTPException(status_code=404, detail="Employee card not found")
 
-    for s in db.scalars(
-        select(KioskSession).where(KioskSession.kiosk_id == kiosk.id).where(KioskSession.is_active.is_(True))
-    ).all():
-        s.is_active = False
-        s.ended_at = datetime.utcnow()
-
-    session = KioskSession(
-        kiosk_id=kiosk.id,
-        machine_id=kiosk.machine_id,
-        employee_id=employee.id,
-        started_at=datetime.utcnow(),
-        is_active=True,
-    )
-    db.add(session)
-    db.commit()
+    _kiosk_start_session(db, kiosk, employee)
 
     machine = db.get(Machine, kiosk.machine_id)
     return {

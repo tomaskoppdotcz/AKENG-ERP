@@ -64,7 +64,7 @@ class ProductionOrder(Base):
     logistic_mode = Column(String, nullable=True)
     source_type = Column(String, nullable=True)
     status = Column(String, nullable=True)
-    # Operational status (planned/done/...) vs business lifecycle: use workflow_status for storno
+    # Operational VP aggregate: planned | bezi | hotovo (workflow_status = business / storno)
     workflow_status = Column(String(20), nullable=True)
     # Stock / rezervace: lze vydat (pokrytí požadavku volným skladem + rezervacemi)
     is_material_covered = Column(Boolean, nullable=False, default=False)

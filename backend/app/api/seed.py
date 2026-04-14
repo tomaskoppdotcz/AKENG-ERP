@@ -68,8 +68,22 @@ def seed_akeng_core(db: Session = Depends(get_db)):
         get_or_create_machine(db, code, name)
 
     employees = [
-        {"employee_code": "E001", "name": "Petr Novak", "card_uid": "CARD001"},
-        {"employee_code": "E002", "name": "Martin Svoboda", "card_uid": "CARD002"},
+        {
+            "employee_code": "E001",
+            "name": "Petr Novak",
+            "first_name": "Petr",
+            "last_name": "Novak",
+            "card_uid": "CARD001",
+            "chip_card_uid": "CARD001",
+        },
+        {
+            "employee_code": "E002",
+            "name": "Martin Svoboda",
+            "first_name": "Martin",
+            "last_name": "Svoboda",
+            "card_uid": "CARD002",
+            "chip_card_uid": "CARD002",
+        },
     ]
 
     for row in employees:

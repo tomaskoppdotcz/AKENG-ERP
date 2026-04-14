@@ -170,9 +170,10 @@ def operation_on_same_planner_row_as_machine(db: Session, op: PlanningOperation,
 
 
 def _open_queue_status_clause():
+    """Exclude terminal planning rows (hotovo/cancelled); legacy finished/done migrated at startup."""
     return or_(
         PlanningOperation.status.is_(None),
-        ~PlanningOperation.status.in_(["finished", "cancelled"]),
+        ~PlanningOperation.status.in_(["hotovo", "cancelled"]),
     )
 
 

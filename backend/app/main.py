@@ -43,6 +43,9 @@ from app.api.portfolio import (
 )
 from app.api.customers import ensure_customers_sqlite_schema, router as customers_router
 from app.api.ui_settings import router as ui_settings_router
+from app.api.work_reports import router as work_reports_router
+
+from app.services.planning_operation_status import backfill_canonical_statuses
 
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule, PlanningScheduleSegment  # noqa: F401
 from app.models.kiosk import Employee, Kiosk, KioskActivityLog, KioskSession, OperationEvent
@@ -96,6 +99,7 @@ app.add_middleware(
 def startup():
     configure_app_console_logging(logging.INFO)
     Base.metadata.create_all(bind=engine)
+    backfill_canonical_statuses(engine)
     ensure_planning_shift_schema()
     ensure_master_libraries_sqlite_schema(engine)
     ensure_technology_sqlite_schema(engine)
@@ -133,6 +137,7 @@ app.include_router(capacity_dashboard_router, prefix="/capacity-dashboard", tags
 app.include_router(auto_planner_router, prefix="/auto-planner", tags=["auto-planner"])
 app.include_router(shopfloor_kiosk_router, prefix="/shopfloor-kiosk", tags=["shopfloor-kiosk"])
 app.include_router(production_router, prefix="/production", tags=["production"])
+app.include_router(work_reports_router, prefix="/work-reports", tags=["work-reports"])
 app.include_router(production_orders_router, prefix="/production-orders", tags=["production-orders"])
 app.include_router(scan_lookup_router, prefix="/scan-lookup", tags=["scan-lookup"])
 app.include_router(seed_router, prefix="/seed", tags=["seed"])

@@ -40,14 +40,14 @@ def operation_statuses_for_production_order(
             if entry["started_at"] is None:
                 entry["started_at"] = log.created_at.isoformat() if log.created_at else None
             if entry["operation_status"] == "planned":
-                entry["operation_status"] = "in_progress"
+                entry["operation_status"] = "bezi"
         elif log.event_type == "report":
             entry["reported_ok_qty_total"] += int(log.ok_qty or 0)
             entry["reported_nok_qty_total"] += int(log.nok_qty or 0)
             entry["reported_minutes_total"] += int(log.reported_minutes or 0)
             entry["last_reported_at"] = log.created_at.isoformat() if log.created_at else None
-            entry["operation_status"] = "done"
-    all_done = bool(by_op) and all(v["operation_status"] == "done" for v in by_op.values())
+            entry["operation_status"] = "hotovo"
+    all_done = bool(by_op) and all(v["operation_status"] == "hotovo" for v in by_op.values())
     return (by_op, any_activity, all_done)
 
 

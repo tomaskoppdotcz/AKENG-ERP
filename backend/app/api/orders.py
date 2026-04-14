@@ -46,6 +46,7 @@ from app.services.vp_operation_generator import (
     ensure_planning_operations_for_production_order,
 )
 from app.services.business_numbering import next_internal_code, next_vp_code, next_zak_code
+from app.services.planning_operation_status import normalize_production_order_status
 from app.services.business_workflow import (
     WORKFLOW_STATUS_CANCELLED,
     workflow_active_sql,
@@ -684,14 +685,12 @@ def _job_item_allocation_values(
     return (from_stock_qty, to_production_qty, restock_qty)
 
 
-_RESTOCK_PO_TERMINAL_STATUSES = frozenset(
-    {"done", "finished", "cancelled", "hotovo", "complete", "completed"}
-)
+_RESTOCK_PO_TERMINAL_NORMALIZED = frozenset({"hotovo", "cancelled"})
 
 
 def _restock_po_is_open_wip(po: ProductionOrder) -> bool:
-    s = (po.status or "").strip().lower()
-    return s not in _RESTOCK_PO_TERMINAL_STATUSES
+    s = normalize_production_order_status(po.status)
+    return s not in _RESTOCK_PO_TERMINAL_NORMALIZED
 
 
 def _existing_po_matching_candidate(

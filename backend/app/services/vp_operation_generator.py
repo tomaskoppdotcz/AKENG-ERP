@@ -18,6 +18,7 @@ from app.models.portfolio import PortfolioTechnologyTemplate, PortfolioTechnolog
 from app.models.technology_library import TechnologyTemplate
 from app.models.planning import PlanningOperation, MachineSchedule, PlanningScheduleSegment
 from app.services.business_workflow import workflow_record_active
+from app.services.planning_operation_status import planning_operation_status_is_protected_for_queue_normalize
 
 logger = logging.getLogger(__name__)
 
@@ -95,22 +96,6 @@ def _vp_planning_pipeline_snapshot(
     )
 
 
-def _planning_op_status_is_protected(status: str | None) -> bool:
-    s = (status or "").strip().lower()
-    return s in {
-        "finished",
-        "in_progress",
-        "started",
-        "cancelled",
-        "done",
-        "complete",
-        "completed",
-        "hotovo",
-        "bezi",
-        "running",
-    }
-
-
 def normalize_planning_queue_statuses_for_vp_code(db: Session, vp_code: str) -> dict[str, Any]:
     """
     Plánovač bere jen status in (ready, planned). První operace VP se strojem (nejmenší operation_no)
@@ -133,7 +118,7 @@ def normalize_planning_queue_statuses_for_vp_code(db: Session, vp_code: str) -> 
 
     head = None
     for o in ops:
-        if _planning_op_status_is_protected(o.status):
+        if planning_operation_status_is_protected_for_queue_normalize(o.status):
             continue
         head = o
         break
@@ -153,7 +138,7 @@ def normalize_planning_queue_statuses_for_vp_code(db: Session, vp_code: str) -> 
     for o in ops:
         if o.id == head.id:
             continue
-        if _planning_op_status_is_protected(o.status):
+        if planning_operation_status_is_protected_for_queue_normalize(o.status):
             continue
         st = (o.status or "").strip().lower()
         if st == "planned":
@@ -642,7 +627,7 @@ def regenerate_operations_from_tp(db: Session):
 
         ops = db.scalars(select(PlanningOperation).where(PlanningOperation.work_order_no == vp.vp_code)).all()
 
-        has_protected = any(_planning_op_status_is_protected(op.status) for op in ops)
+        has_protected = any(planning_operation_status_is_protected_for_queue_normalize(op.status) for op in ops)
         if has_protected:
             changed.append(
                 {

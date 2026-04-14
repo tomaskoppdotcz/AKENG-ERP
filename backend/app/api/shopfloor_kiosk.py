@@ -1,19 +1,22 @@
-from datetime import date, datetime
-
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_action
 from app.core.database import get_db
 from app.models.master_data import Machine
-from app.models.kiosk import OperationEvent
 from app.models.planning import PlanningOperation
+from app.services.employee_credential import find_employee_by_operator_label
 from app.services.kiosk_planner_queue import list_planning_operations_for_kiosk_machine
-from app.services.kiosk_vp_operation_order import assert_vp_previous_operations_finished_for_kiosk_start
 from app.services.kiosk_shopfloor_resources import build_kiosk_resource_rows
-from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_operation_complete
-from app.services.planning_engine import PlanningEngineService
+from app.services.kiosk_work_report_service import (
+    SOURCE_SHOPFLOOR_KIOSK,
+    resolve_shopfloor_actor,
+    work_report_complete,
+    work_report_pause,
+    work_report_resume,
+    work_report_start,
+)
 
 router = APIRouter()
 
@@ -23,7 +26,14 @@ class StartOperationRequest(BaseModel):
     operator_name: str | None = None
 
 
-class StopOperationRequest(BaseModel):
+class PauseOperationRequest(BaseModel):
+    planning_operation_id: int
+    operator_name: str | None = None
+    pause_reason: str = Field(..., min_length=1)
+    note: str | None = None
+
+
+class ResumeOperationRequest(BaseModel):
     planning_operation_id: int
     operator_name: str | None = None
 
@@ -33,75 +43,28 @@ class FinishOperationRequest(BaseModel):
     qty_ok: int = 0
     qty_nok: int = 0
     operator_name: str | None = None
+    note: str | None = None
 
 
-def build_operation_event(
-    op: PlanningOperation,
-    event_type: str,
-    note: str,
-    qty_ok: int,
-    qty_nok: int,
-    operator_name: str | None,
-    event_time: datetime,
-):
-    columns = set(OperationEvent.__table__.columns.keys())
-    payload = {}
-
-    if "planning_operation_id" in columns:
-        payload["planning_operation_id"] = op.id
-    if "machine_id" in columns:
-        payload["machine_id"] = op.machine_id
-    if "event_type" in columns:
-        payload["event_type"] = event_type
-    if "event_time" in columns:
-        payload["event_time"] = event_time
-    if "qty_ok" in columns:
-        payload["qty_ok"] = qty_ok
-    if "qty_nok" in columns:
-        payload["qty_nok"] = qty_nok
-    if "note" in columns:
-        payload["note"] = note
-    if "reason" in columns:
-        payload["reason"] = None
-
-    if operator_name:
-        if "employee_code" in columns:
-            payload["employee_code"] = operator_name
-        elif "operator_name" in columns:
-            payload["operator_name"] = operator_name
-        elif "employee_name" in columns:
-            payload["employee_name"] = operator_name
-        elif "employee" in columns:
-            payload["employee"] = operator_name
-
-    return OperationEvent(**payload)
-
-
-def try_write_event(
-    db: Session,
-    op: PlanningOperation,
-    event_type: str,
-    note: str,
-    qty_ok: int,
-    qty_nok: int,
-    operator_name: str | None,
-):
-    try:
-        event = build_operation_event(
-            op=op,
-            event_type=event_type,
-            note=note,
-            qty_ok=qty_ok,
-            qty_nok=qty_nok,
-            operator_name=operator_name,
-            event_time=datetime.now(),
+def _machine_for_shopfloor_op(db: Session, op: PlanningOperation) -> Machine:
+    mid = op.machine_id
+    if not mid:
+        raise HTTPException(
+            status_code=400,
+            detail="Operace nemá přiřazený stroj — nelze zapsat výkaz (přiřaďte stroj v plánovači).",
         )
-        db.add(event)
-        db.commit()
-        return True
-    except Exception:
-        db.rollback()
-        return False
+    m = db.get(Machine, int(mid))
+    if not m:
+        raise HTTPException(status_code=404, detail="Stroj operace nenalezen.")
+    return m
+
+
+def _resolve_shopfloor_operator(db: Session, operator_name: str | None) -> tuple[int | None, str | None]:
+    emp = find_employee_by_operator_label(db, operator_name)
+    if emp:
+        return int(emp.id), emp.name
+    raw = (operator_name or "").strip() or None
+    return None, raw
 
 
 @router.get("/machines")
@@ -153,34 +116,22 @@ def start_operation(
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
 
-    assert_vp_previous_operations_finished_for_kiosk_start(db, op)
-
-    from app.services.material_readiness import ensure_planning_operation_material_ready_for_start
-
-    ensure_planning_operation_material_ready_for_start(db, op)
-
-    now = datetime.now()
-
-    if op.actual_start is None:
-        op.actual_start = now
-
-    op.status = "bezi"
-    db.commit()
-    db.refresh(op)
-
-    event_logged = try_write_event(
-        db=db,
-        op=op,
-        event_type="start",
-        note="START from kiosk",
-        qty_ok=0,
-        qty_nok=0,
-        operator_name=payload.operator_name,
+    emp_id, disp = _resolve_shopfloor_operator(db, payload.operator_name)
+    actor = resolve_shopfloor_actor(payload.operator_name, emp_id)
+    machine = _machine_for_shopfloor_op(db, op)
+    r = work_report_start(
+        db,
+        op,
+        machine=machine,
+        employee_id=emp_id,
+        operator_display=disp,
+        source=SOURCE_SHOPFLOOR_KIOSK,
+        actor=actor,
+        kiosk_session_id=None,
     )
-
+    db.refresh(op)
     return {
-        "status": "ok",
-        "event_logged": event_logged,
+        **r,
         "operation": {
             "id": op.id,
             "work_order_no": op.work_order_no,
@@ -191,33 +142,63 @@ def start_operation(
     }
 
 
-@router.post("/stop")
-def stop_operation(
-    payload: StopOperationRequest,
+@router.post("/pause")
+def pause_operation(
+    payload: PauseOperationRequest,
     db: Session = Depends(get_db),
     _rbac: None = Depends(require_action("production.execute")),
 ):
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-
-    op.status = "ceka"
-    db.commit()
-    db.refresh(op)
-
-    event_logged = try_write_event(
-        db=db,
-        op=op,
-        event_type="stop",
-        note="STOP from kiosk",
-        qty_ok=0,
-        qty_nok=0,
-        operator_name=payload.operator_name,
+    emp_id, _ = _resolve_shopfloor_operator(db, payload.operator_name)
+    actor = resolve_shopfloor_actor(payload.operator_name, emp_id)
+    machine = _machine_for_shopfloor_op(db, op)
+    r = work_report_pause(
+        db,
+        op,
+        machine=machine,
+        employee_id=emp_id,
+        pause_reason=payload.pause_reason,
+        note=payload.note,
+        source=SOURCE_SHOPFLOOR_KIOSK,
+        actor=actor,
     )
-
+    db.refresh(op)
     return {
-        "status": "ok",
-        "event_logged": event_logged,
+        **r,
+        "operation": {
+            "id": op.id,
+            "work_order_no": op.work_order_no,
+            "operation_name": op.operation_name,
+            "status": op.status,
+        },
+    }
+
+
+@router.post("/resume")
+def resume_operation(
+    payload: ResumeOperationRequest,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.execute")),
+):
+    op = db.get(PlanningOperation, payload.planning_operation_id)
+    if not op:
+        raise HTTPException(status_code=404, detail="Planning operation not found")
+    emp_id, _ = _resolve_shopfloor_operator(db, payload.operator_name)
+    actor = resolve_shopfloor_actor(payload.operator_name, emp_id)
+    machine = _machine_for_shopfloor_op(db, op)
+    r = work_report_resume(
+        db,
+        op,
+        machine=machine,
+        employee_id=emp_id,
+        source=SOURCE_SHOPFLOOR_KIOSK,
+        actor=actor,
+    )
+    db.refresh(op)
+    return {
+        **r,
         "operation": {
             "id": op.id,
             "work_order_no": op.work_order_no,
@@ -236,37 +217,23 @@ def finish_operation(
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-
-    now = datetime.now()
-
-    if op.actual_start is None:
-        op.actual_start = now
-
-    op.actual_end = now
-    op.qty_ok = int(payload.qty_ok or 0)
-    op.qty_nok = int(payload.qty_nok or 0)
-    op.status = "hotovo"
-    db.flush()
-    stock_effect = apply_kiosk_tp_stock_effect_on_operation_complete(db, op, qty_ok=int(payload.qty_ok or 0))
-    db.commit()
-    db.refresh(op)
-
-    # Přeskupit následné operace podle actual_end / uvolněné kapacity (vlastní commit uvnitř).
-    PlanningEngineService(db).rebuild_global_schedules(date.today())
-
-    event_logged = try_write_event(
-        db=db,
-        op=op,
-        event_type="finish",
-        note="FINISH from kiosk",
-        qty_ok=op.qty_ok,
-        qty_nok=op.qty_nok,
-        operator_name=payload.operator_name,
+    emp_id, _ = _resolve_shopfloor_operator(db, payload.operator_name)
+    actor = resolve_shopfloor_actor(payload.operator_name, emp_id)
+    machine = _machine_for_shopfloor_op(db, op)
+    r = work_report_complete(
+        db,
+        op,
+        machine=machine,
+        employee_id=emp_id,
+        qty_ok=int(payload.qty_ok or 0),
+        qty_nok=int(payload.qty_nok or 0),
+        note=payload.note,
+        source=SOURCE_SHOPFLOOR_KIOSK,
+        actor=actor,
     )
-
+    db.refresh(op)
     out = {
-        "status": "ok",
-        "event_logged": event_logged,
+        **r,
         "operation": {
             "id": op.id,
             "work_order_no": op.work_order_no,
@@ -278,6 +245,6 @@ def finish_operation(
             "qty_nok": op.qty_nok,
         },
     }
-    if stock_effect is not None:
-        out["tp_stock_effect"] = stock_effect
+    if "tp_stock_effect" in r:
+        out["tp_stock_effect"] = r["tp_stock_effect"]
     return out

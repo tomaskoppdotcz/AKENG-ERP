@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -12,16 +12,35 @@ class Employee(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     employee_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    """Zobrazované celé jméno (stejné jako full_name v API)."""
     name: Mapped[str] = mapped_column(String(255))
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    card_uid: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # Legacy kiosk chip; prefer chip_card_uid. Multiple NULL allowed for unique in SQLite.
+    card_uid: Mapped[str | None] = mapped_column(String(100), unique=True, index=True, nullable=True)
+    chip_card_uid: Mapped[str | None] = mapped_column(String(100), unique=True, index=True, nullable=True)
+    pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    scan_code: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
+
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    street: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    job_title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
     employee_subgroup_id: Mapped[int | None] = mapped_column(
         ForeignKey("employee_subgroups.id"),
         nullable=True,
         index=True,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_use_kiosk: Mapped[bool] = mapped_column(Boolean, default=True)
+    cost_rate_per_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
