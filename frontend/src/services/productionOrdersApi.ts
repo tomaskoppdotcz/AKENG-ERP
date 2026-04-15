@@ -14,6 +14,8 @@ export type ProductionOrderOverviewRow = {
   logistic_mode: string | null;
   source_type: string | null;
   status: string | null;
+  /** Po dokončení všech operací: sklad vs expedice podle názvu poslední operace TP (jen přehled). */
+  completion_terminal?: "stock" | "expedition" | null;
   zakazka: string | null;
   /** Číslo objednávky zákazníka (customer_po_no) */
   customer_order_no?: string | null;
@@ -25,6 +27,8 @@ export type ProductionOrderOverviewRow = {
   job_item_id?: number | null;
   /** VP přesunutý z interního doplnění skladu (prefer_customer) */
   restock_redirected_from_internal?: boolean | null;
+  /** sklad_zakaznik VP čekající na příjem z rezervovaného restock WIP */
+  blocked_until_reserved_stock_receipt?: boolean | null;
   /** Obchodní workflow; prázdné / active = aktivní VP */
   workflow_status?: string | null;
   /** Pokryto — lze vydat */
@@ -46,7 +50,8 @@ export type ProductionOrderOperationRow = {
   outsourcing: boolean;
   note: string | null;
   operation_scan_code?: string | null;
-  operation_status?: "planned" | "in_progress" | "done";
+  /** Log-derived: naplánováno / běží / hotovo (canonical with planning shopfloor). */
+  operation_status?: "planned" | "bezi" | "hotovo";
   started_at?: string | null;
   last_reported_at?: string | null;
   reported_ok_qty_total?: number;
@@ -116,12 +121,15 @@ export type ProductionOrderDetail = {
   logistic_mode: string | null;
   source_type: string | null;
   status: string | null;
+  /** Termín řádku zakázky (YYYY-MM-DD), pokud je u položky vyplněn. */
+  due_date?: string | null;
   quantity: number;
   is_material_covered?: boolean | null;
   is_material_released_to_production?: boolean | null;
   is_material_ready?: boolean | null;
   customer_order_no?: string | null;
   restock_redirected_from_internal?: boolean | null;
+  blocked_until_reserved_stock_receipt?: boolean | null;
   technology_template: {
     id: number;
     name: string;
@@ -129,6 +137,32 @@ export type ProductionOrderDetail = {
   operations: ProductionOrderOperationRow[];
   inputs: ProductionOrderInputRow[];
 };
+
+/** Nedávno splněné rezervace výstupu z restock VP (GET restock-wip-reservation-notices). */
+export type RestockWipReservationNotice = {
+  reservation_id: number;
+  fulfilled_at: string | null;
+  reserved_qty: number;
+  source_production_order_id: number;
+  source_vp_code: string | null;
+  customer_production_order_id: number | null;
+  customer_vp_code: string | null;
+  user_message_cs: string;
+};
+
+export async function getRestockWipReservationNotices(limit = 30): Promise<RestockWipReservationNotice[]> {
+  const q = new URLSearchParams({ limit: String(Math.min(200, Math.max(1, limit))) });
+  const res = await akengFetch(`${API_BASE}/production-orders/restock-wip-reservation-notices?${q}`);
+  if (!res.ok) {
+    return [];
+  }
+  try {
+    const raw = await res.json();
+    return Array.isArray(raw?.items) ? raw.items : [];
+  } catch {
+    return [];
+  }
+}
 
 export async function getProductionOrdersOverview(
   workflowFilter: ErpWorkflowListFilter = "active"

@@ -13,11 +13,11 @@ import {
   type OrderDetailResponse,
 } from "../services/ordersApi";
 import {
-  findPortfolioItemByGpn,
   getPortfolioItem,
   getPortfolioItems,
   getPortfolioItemTechnology,
   getPortfolioTechnologyMaterials,
+  listPortfolioItemsByGpn,
   type PortfolioItem,
   type PortfolioItemTechnologyMaterialsResponse,
   type PortfolioItemTechnologyResponse,
@@ -240,13 +240,29 @@ export default function OrderItemDetailPage({
     setPortfolioTechnology(null);
     setPortfolioTechnologyMaterials(null);
     const effectivePortfolioId = detail?.item.effective_portfolio_item_id ?? null;
+    const linkedPortfolioId = detail?.item.portfolio_item_id ?? null;
     const loadMatchedItem = async (): Promise<PortfolioItem | null> => {
       if (effectivePortfolioId != null && Number.isFinite(effectivePortfolioId)) {
-        const items = await getPortfolioItems();
-        const byId = items.find((x) => x.id === effectivePortfolioId);
-        if (byId) return byId;
+        try {
+          return await getPortfolioItem(effectivePortfolioId);
+        } catch {
+          const items = await getPortfolioItems();
+          const byId = items.find((x) => x.id === effectivePortfolioId);
+          if (byId) return byId;
+        }
       }
-      return findPortfolioItemByGpn(gpn);
+      if (linkedPortfolioId != null && Number.isFinite(linkedPortfolioId)) {
+        try {
+          return await getPortfolioItem(linkedPortfolioId);
+        } catch {
+          const items = await getPortfolioItems();
+          const byId = items.find((x) => x.id === linkedPortfolioId);
+          if (byId) return byId;
+        }
+      }
+      const variants = await listPortfolioItemsByGpn(gpn);
+      if (variants.length === 1) return variants[0];
+      return null;
     };
     loadMatchedItem()
       .then(async (item) => {
@@ -291,7 +307,7 @@ export default function OrderItemDetailPage({
     return () => {
       cancelled = true;
     };
-  }, [gpnForPortfolio, detail?.item.effective_portfolio_item_id]);
+  }, [gpnForPortfolio, detail?.item.effective_portfolio_item_id, detail?.item.portfolio_item_id]);
 
   useEffect(() => {
     if (activeTab !== "Výdej materiálu") return;
@@ -443,8 +459,16 @@ export default function OrderItemDetailPage({
       }
       return;
     }
-    const found = await findPortfolioItemByGpn(item.gpn);
-    if (found) onOpenPortfolioItem(found);
+    const variants = await listPortfolioItemsByGpn(item.gpn);
+    if (variants.length === 1) {
+      onOpenPortfolioItem(variants[0]);
+      return;
+    }
+    if (variants.length > 1) {
+      window.alert(
+        "V portfoliu je více logistických variant se stejným GPN. Otevřete správnou variantu v modulu Portfolio, nebo u řádku navážte konkrétní portfolio položku."
+      );
+    }
   }
 
   const portfolioPreviewId =

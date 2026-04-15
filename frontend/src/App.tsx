@@ -15,6 +15,7 @@ import MaterialRequirementsPage from "./pages/MaterialRequirementsPage";
 import MaterialPurchaseOrdersPage from "./pages/MaterialPurchaseOrdersPage";
 import PlannerPage from "./pages/PlannerPage";
 import ShopfloorKioskPage from "./pages/ShopfloorKioskPage";
+import WorkReportsPage from "./pages/WorkReportsPage";
 import MachinePlanningPage from "./pages/MachinePlanningPage";
 import CustomerLibraryPage from "./pages/CustomerLibraryPage";
 import WorkplaceLibraryPage from "./pages/WorkplaceLibraryPage";
@@ -646,7 +647,7 @@ export default function App() {
       return <ModulePlaceholderPage moduleName="Operace ve výrobě" />;
     }
     if (moduleKey === "Výroba výkazy") {
-      return <ModulePlaceholderPage moduleName="Výkazy" />;
+      return <WorkReportsPage />;
     }
     if (moduleKey === "Výroba kooperace") {
       return <ModulePlaceholderPage moduleName="Kooperace" />;

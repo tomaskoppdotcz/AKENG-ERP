@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from "react";
+import { WORK_REPORT_PAUSE_REASONS } from "../constants/workReportPauseReasons";
 import {
   getKioskMachineOperations,
   getKioskMachines,
   kioskFinishOperation,
+  kioskPauseOperation,
+  kioskResumeOperation,
   kioskStartOperation,
-  kioskStopOperation,
   KioskMachine,
   KioskOperation,
 } from "../services/plannerApi";
@@ -57,6 +59,9 @@ export default function ShopfloorKioskPage() {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [pauseDialogOpen, setPauseDialogOpen] = useState(false);
+  const [pauseReason, setPauseReason] = useState<string>("");
+  const [finishNote, setFinishNote] = useState("");
 
   async function loadMachines() {
     try {
@@ -137,20 +142,42 @@ export default function ShopfloorKioskPage() {
     }
   }
 
-  async function handleStop() {
+  async function handlePauseConfirm() {
+    if (!selectedOperation || !pauseReason) return;
+    try {
+      setWorking(true);
+      setMessage("");
+      setError("");
+      await kioskPauseOperation({
+        planningOperationId: selectedOperation.id,
+        operatorName,
+        pauseReason,
+      });
+      setPauseDialogOpen(false);
+      setPauseReason("");
+      await loadOperations(Number(selectedMachineId));
+      setMessage("Pauza zaznamenána.");
+    } catch (e: any) {
+      setError(e?.message || "Nepodařilo se pozastavit operaci.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function handleResume() {
     if (!selectedOperation) return;
     try {
       setWorking(true);
       setMessage("");
       setError("");
-      await kioskStopOperation({
+      await kioskResumeOperation({
         planningOperationId: selectedOperation.id,
         operatorName,
       });
       await loadOperations(Number(selectedMachineId));
-      setMessage("Operace byla zastavena.");
+      setMessage("Operace pokračuje.");
     } catch (e: any) {
-      setError(e?.message || "Nepodarilo se zastavit operaci.");
+      setError(e?.message || "Nepodařilo se obnovit operaci.");
     } finally {
       setWorking(false);
     }
@@ -167,7 +194,9 @@ export default function ShopfloorKioskPage() {
         qtyOk,
         qtyNok,
         operatorName,
+        note: finishNote.trim() || null,
       });
+      setFinishNote("");
       await loadOperations(Number(selectedMachineId));
       setMessage("Operace byla dokoncena.");
     } catch (e: any) {
@@ -191,12 +220,12 @@ export default function ShopfloorKioskPage() {
         >
           <div style={{ fontSize: 28, fontWeight: 900, color: "#0f172a" }}>Shopfloor Kiosk</div>
           <div style={{ fontSize: 14, color: "#64748b", marginTop: 6 }}>
-            Terminal pro operatora vyroby na stroji.
+            Terminal pro operatora — jedna položka = jedno provozní pracoviště (sdílená fronta z plánovače).
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Stroj</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Pracoviště</div>
               <select
                 value={selectedMachineId}
                 onChange={(e) => setSelectedMachineId(Number(e.target.value))}
@@ -284,13 +313,13 @@ export default function ShopfloorKioskPage() {
             }}
           >
             <div style={{ fontSize: 20, fontWeight: 900, color: "#0f172a", marginBottom: 16 }}>
-              Operace stroje
+              Fronta pracoviště
             </div>
 
             {loading ? (
               <div style={{ color: "#64748b", fontWeight: 700 }}>Nacitam...</div>
             ) : operations.length === 0 ? (
-              <div style={{ color: "#64748b", fontWeight: 700 }}>Zadne operace pro stroj.</div>
+              <div style={{ color: "#64748b", fontWeight: 700 }}>Zadne operace pro toto pracoviště.</div>
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
                 {operations.map((op) => (
@@ -442,7 +471,25 @@ export default function ShopfloorKioskPage() {
                   </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginTop: 24 }}>
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Poznámka k dokončení</div>
+                  <input
+                    type="text"
+                    value={finishNote}
+                    onChange={(e) => setFinishNote(e.target.value)}
+                    placeholder="volitelné"
+                    style={{
+                      width: "100%",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 12,
+                      padding: "12px 14px",
+                      fontSize: 14,
+                      background: "#fff",
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginTop: 24 }}>
                   <button
                     onClick={handleStart}
                     disabled={working}
@@ -462,7 +509,10 @@ export default function ShopfloorKioskPage() {
                   </button>
 
                   <button
-                    onClick={handleStop}
+                    onClick={() => {
+                      setPauseReason("");
+                      setPauseDialogOpen(true);
+                    }}
                     disabled={working}
                     style={{
                       border: "1px solid #64748b",
@@ -476,7 +526,25 @@ export default function ShopfloorKioskPage() {
                       opacity: working ? 0.6 : 1,
                     }}
                   >
-                    STOP
+                    PAUZA
+                  </button>
+
+                  <button
+                    onClick={handleResume}
+                    disabled={working}
+                    style={{
+                      border: "1px solid #0ea5e9",
+                      background: "#0ea5e9",
+                      color: "#fff",
+                      borderRadius: 14,
+                      padding: "16px 18px",
+                      fontWeight: 900,
+                      fontSize: 16,
+                      cursor: "pointer",
+                      opacity: working ? 0.6 : 1,
+                    }}
+                  >
+                    POKRAČOVAT
                   </button>
 
                   <button
@@ -502,6 +570,83 @@ export default function ShopfloorKioskPage() {
           </div>
         </div>
       </div>
+
+      {pauseDialogOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              padding: 20,
+              maxWidth: 560,
+              width: "100%",
+              border: "1px solid #e2e8f0",
+              boxShadow: "0 20px 40px rgba(15,23,42,0.15)",
+            }}
+          >
+            <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 12 }}>Důvod pauzy</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {WORK_REPORT_PAUSE_REASONS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setPauseReason(r)}
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: pauseReason === r ? "2px solid #2563eb" : "1px solid #cbd5e1",
+                    background: pauseReason === r ? "#eff6ff" : "#fff",
+                    cursor: "pointer",
+                    fontWeight: 700,
+                    fontSize: 13,
+                  }}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setPauseDialogOpen(false);
+                  setPauseReason("");
+                }}
+                style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff" }}
+              >
+                Zrušit
+              </button>
+              <button
+                type="button"
+                disabled={!pauseReason || working}
+                onClick={() => void handlePauseConfirm()}
+                style={{
+                  padding: "10px 16px",
+                  borderRadius: 10,
+                  border: "none",
+                  background: pauseReason ? "#2563eb" : "#94a3b8",
+                  color: "#fff",
+                  fontWeight: 800,
+                  cursor: pauseReason && !working ? "pointer" : "default",
+                }}
+              >
+                Potvrdit pauzu
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { akengFetch } from "./akengFetch";
+import { normalizeCzechKeyboardReaderNumeric } from "../utils/czCardReaderNormalize";
 
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -84,6 +85,36 @@ export async function kioskLogin(machineCode: string, employeeCode: string) {
   );
 }
 
+/** Přihlášení: nejdřív token jako u login (kód/čip/sken), pak ověření PIN. */
+export async function kioskLoginWithPin(machineCode: string, employeeHint: string, pinCode: string) {
+  const hint = normalizeCzechKeyboardReaderNumeric(employeeHint.trim());
+  return parseJson<{
+    status: string;
+    employee: KioskEmployee & { employee_code: string };
+    machine: KioskMachineInfo;
+  }>(
+    await akengFetch(`${API_BASE}/kiosk/login-pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        machine_code: machineCode,
+        employee_hint: hint,
+        pin_code: pinCode,
+      }),
+    })
+  );
+}
+
+/** Bez založení session — náhled operátora po načtení karty/skenem. */
+export async function kioskResolveEmployee(machineCode: string, credential: string) {
+  const u = new URL(`${API_BASE}/kiosk/employee/resolve`);
+  u.searchParams.set("machine_code", machineCode);
+  u.searchParams.set("credential", normalizeCzechKeyboardReaderNumeric(credential.trim()));
+  return parseJson<{
+    employee: KioskEmployee & { employee_code: string; has_pin: boolean };
+  }>(await akengFetch(u.toString()));
+}
+
 export async function kioskLogout(machineCode: string) {
   return parseJson<{ status: string }>(
     await akengFetch(`${API_BASE}/kiosk/logout`, {
@@ -97,7 +128,7 @@ export async function kioskLogout(machineCode: string) {
 export async function kioskResolveScan(machineCode: string, code: string) {
   const u = new URL(`${API_BASE}/kiosk/resolve-scan`);
   u.searchParams.set("machine_code", machineCode);
-  u.searchParams.set("code", code);
+  u.searchParams.set("code", normalizeCzechKeyboardReaderNumeric(code.trim()));
   return parseJson<{ status: string; operation: KioskQueueOp }>(await akengFetch(u.toString()));
 }
 
@@ -144,7 +175,8 @@ export async function kioskOperationDone(
   machineCode: string,
   planningOperationId: number,
   qtyOk: number,
-  qtyNok: number
+  qtyNok: number,
+  note?: string | null
 ) {
   return parseJson<Record<string, unknown>>(
     await akengFetch(`${API_BASE}/kiosk/operation/done`, {
@@ -155,6 +187,7 @@ export async function kioskOperationDone(
         planning_operation_id: planningOperationId,
         qty_ok: qtyOk,
         qty_nok: qtyNok,
+        note: note ?? null,
       }),
     })
   );

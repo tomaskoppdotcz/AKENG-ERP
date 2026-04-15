@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { WORK_REPORT_PAUSE_REASONS } from "../constants/workReportPauseReasons";
 import {
   kioskMachineQueue,
   kioskOperationDone,
@@ -43,14 +44,6 @@ const inputStyle: React.CSSProperties = {
 };
 
 type Props = { machineCode: string };
-const PAUSE_REASONS = [
-  "Seřizování",
-  "Čekání na materiál",
-  "Čekání na kontrolu",
-  "Porucha stroje",
-  "Interní práce",
-  "Přestávka",
-] as const;
 
 function runtimeLabel(op: KioskQueueOp | null, tick: number): string {
   void tick;
@@ -82,6 +75,7 @@ export default function KioskProductionPage({ machineCode }: Props) {
   const [scan, setScan] = useState("");
   const [qtyOk, setQtyOk] = useState(0);
   const [qtyNok, setQtyNok] = useState(0);
+  const [doneNote, setDoneNote] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pauseDialogOpen, setPauseDialogOpen] = useState(false);
@@ -351,6 +345,16 @@ export default function KioskProductionPage({ machineCode }: Props) {
                   />
                 </label>
               </div>
+              <label style={{ fontSize: 16, display: "block", marginBottom: 12 }}>
+                Poznámka k dokončení
+                <input
+                  type="text"
+                  value={doneNote}
+                  onChange={(e) => setDoneNote(e.target.value)}
+                  placeholder="volitelné"
+                  style={{ display: "block", fontSize: 18, width: "100%", maxWidth: 420, padding: 8, marginTop: 4 }}
+                />
+              </label>
               <div>
                 <button
                   type="button"
@@ -385,7 +389,9 @@ export default function KioskProductionPage({ machineCode }: Props) {
                   disabled={busy || !selId || !operatorLoggedIn}
                   onClick={() =>
                     selId &&
-                    run(selId, () => kioskOperationDone(machineCode.trim(), selId, qtyOk, qtyNok))
+                    run(selId, () =>
+                      kioskOperationDone(machineCode.trim(), selId, qtyOk, qtyNok, doneNote.trim() || null)
+                    )
                   }
                 >
                   DOKONČIT
@@ -422,7 +428,7 @@ export default function KioskProductionPage({ machineCode }: Props) {
           >
             <div style={{ fontSize: 30, fontWeight: 900, marginBottom: 12 }}>Důvod pauzy</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {PAUSE_REASONS.map((reason) => (
+              {WORK_REPORT_PAUSE_REASONS.map((reason) => (
                 <button
                   key={reason}
                   type="button"

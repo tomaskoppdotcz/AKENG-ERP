@@ -22,6 +22,17 @@ function KioskRoot() {
     }
     window.history.replaceState({}, "", "/");
   }
+  if (path === "/employees") {
+    try {
+      sessionStorage.setItem(
+        "akeng_pending_module",
+        JSON.stringify({ moduleKey: "Zaměstnanci", title: "Zaměstnanci" })
+      );
+    } catch {
+      /* ignore */
+    }
+    window.history.replaceState({}, "", "/");
+  }
   const params = new URLSearchParams(window.location.search);
   const machine = params.get("machine") || "";
   if (path === "/kiosk/admin" || path.endsWith("/kiosk/admin")) {

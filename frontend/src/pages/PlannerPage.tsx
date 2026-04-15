@@ -27,6 +27,8 @@ import {
   plannerGanttHoverDetails,
 } from "../components/PlannerGanttOperationBlock";
 import {
+  expandPlannerGanttItemsForCells,
+  ganttCellItemKey,
   groupItemsByVisibleDay,
   maxDayStackCount,
   plannerGlobalMachineOrder,
@@ -333,6 +335,64 @@ function OperationDetailPanel({
           label="Planned end"
           value={item.plannedEnd ? new Date(item.plannedEnd).toLocaleString("cs-CZ") : "-"}
         />
+
+        {item.scheduleSegments && item.scheduleSegments.length > 0 ? (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#334155", marginBottom: 8 }}>
+              Plánované segmenty
+            </div>
+            <div
+              style={{
+                border: "1px solid #e2e8f0",
+                borderRadius: 10,
+                overflow: "hidden",
+                fontSize: 13,
+              }}
+            >
+              {item.scheduleSegments.map((s) => {
+                const d0 = s.plannedStart ? new Date(s.plannedStart) : null;
+                const d1 = s.plannedEnd ? new Date(s.plannedEnd) : null;
+                const dateStr =
+                  d0 != null && !Number.isNaN(d0.getTime())
+                    ? d0.toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric", year: "numeric" })
+                    : "—";
+                const fromTo =
+                  d0 != null && d1 != null && !Number.isNaN(d0.getTime()) && !Number.isNaN(d1.getTime())
+                    ? `${d0.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}–${d1.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}`
+                    : "—";
+                return (
+                  <div
+                    key={s.segmentIndex}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr",
+                      gap: 4,
+                      padding: "10px 12px",
+                      borderBottom: "1px solid #f1f5f9",
+                      background: "#fafafa",
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, color: "#0f172a" }}>
+                      Segment {s.segmentIndex + 1}
+                      {item.scheduleSegments!.length > 1 ? ` / ${item.scheduleSegments!.length}` : ""}
+                    </div>
+                    <div style={{ color: "#475569" }}>
+                      <span style={{ fontWeight: 700 }}>{dateStr}</span>
+                      {" · "}
+                      {fromTo}
+                    </div>
+                    <div style={{ color: "#64748b" }}>
+                      {item.machineName}
+                      {s.machineId !== item.machineId ? ` (stroj #${s.machineId})` : ""}
+                    </div>
+                    <div style={{ color: "#64748b", fontWeight: 600 }}>{s.durationMin} min</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
         <DetailRow
           label="Materiál"
           value={
@@ -629,7 +689,7 @@ export default function PlannerPage({
           subtitle={
             <>
               <div style={{ fontSize: 13, color: "#64748b", marginTop: 0 }}>
-                Výchozí rozsah 7 dní. Řádky pracovišť v pevném pořadí (ne podle abecedy). Blok: op / WP → VP / GPN → další WP.
+                Výchozí rozsah 7 dní. Řádky pracovišť z knihovny (Planner); kiosk sdílí stejnou frontu podle pracoviště. Blok: op / WP → VP / GPN → další WP.
               </div>
               <div style={{ fontSize: 11, color: "#334155", marginTop: 6, fontWeight: 700 }}>
                 DnD mezi řádky / frontu · detail = klik · tooltip = najetí myší.
@@ -888,7 +948,8 @@ export default function PlannerPage({
                   {orderedGanttMachines.map((machine) => {
                     const days = data?.days ?? [];
                     const width = days.length * dayColWidth;
-                    const byDay = groupItemsByVisibleDay(machine.items, days);
+                    const expandedForCells = expandPlannerGanttItemsForCells(machine.items);
+                    const byDay = groupItemsByVisibleDay(expandedForCells, days);
                     const maxStack = maxDayStackCount(byDay, days);
                     const minBlockH = LANE_HEIGHT - 2;
                     const rowBodyHeight = stackedRowMinHeightPx(maxStack, minBlockH);
@@ -921,6 +982,9 @@ export default function PlannerPage({
                           </div>
                           <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, fontWeight: 600 }}>
                             {(machine.workplaceCode || "").toUpperCase() || "—"} · {machine.items.length} op.
+                            {expandedForCells.length !== machine.items.length
+                              ? ` · ${expandedForCells.length} bloků`
+                              : ""}
                           </div>
                         </div>
 
@@ -946,8 +1010,15 @@ export default function PlannerPage({
                                 rowMinHeight={rowBodyHeight}
                                 items={byDay.get(day) ?? []}
                                 globalOrder={globalOrder}
-                                activeDragItemId={activeDragItem?.operationId ?? null}
-                                onSelect={setSelectedItem}
+                                activeDragItemKey={
+                                  activeDragItem ? ganttCellItemKey(activeDragItem) : null
+                                }
+                                onSelect={(cellItem) => {
+                                  const canonical = allPlannerItems.find(
+                                    (x) => x.operationId === cellItem.operationId
+                                  );
+                                  setSelectedItem(canonical ?? cellItem);
+                                }}
                                 stackGapPx={STACK_CELL_GAP_PX}
                                 cellPadPx={STACK_CELL_PAD_PX}
                                 minBlockHeight={minBlockH}

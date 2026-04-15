@@ -46,7 +46,7 @@ export function buildProductionOrderLocationSummary(
     };
   }
 
-  const allDone = sorted.every((o) => o.operation_status === "done");
+  const allDone = sorted.every((o) => (o.operation_status || "").toLowerCase() === "hotovo");
   if (allDone) {
     return {
       phase: "finished",
@@ -61,7 +61,7 @@ export function buildProductionOrderLocationSummary(
     };
   }
 
-  const inProg = sorted.find((o) => o.operation_status === "in_progress");
+  const inProg = sorted.find((o) => (o.operation_status || "").toLowerCase() === "bezi");
   if (inProg) {
     const ix = sorted.indexOf(inProg);
     const next = sorted[ix + 1];
@@ -80,7 +80,7 @@ export function buildProductionOrderLocationSummary(
     };
   }
 
-  const frontier = sorted.find((o) => o.operation_status !== "done")!;
+  const frontier = sorted.find((o) => (o.operation_status || "").toLowerCase() !== "hotovo")!;
   const fi = sorted.indexOf(frontier);
   const after = sorted[fi + 1];
   const wF = wpl(frontier.workplace_name);

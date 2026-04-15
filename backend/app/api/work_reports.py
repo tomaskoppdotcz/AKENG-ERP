@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -18,6 +18,7 @@ from app.models.master_data import Machine
 from app.models.master_libraries import WorkplaceLibraryItem
 from app.models.orders import ProductionOrder
 from app.models.planning import PlanningOperation
+from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.work_report import WorkReport, WorkReportAuditLog, WorkReportPause
 from app.services.kiosk_planner_queue import operation_on_same_planner_row_as_machine
 from app.services.kiosk_work_report_service import (
@@ -27,6 +28,9 @@ from app.services.kiosk_work_report_service import (
     resolve_report_links,
     validate_pause_reason,
 )
+from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_operation_complete
+from app.services.planning_engine import PlanningEngineService
+from app.services.planning_operation_status import normalize_planning_operation_status
 
 router = APIRouter()
 
@@ -123,6 +127,73 @@ def _close_open_pauses_for_report(db: Session, rep: WorkReport, end_time: dateti
         p.pause_end = end_time
 
 
+def _normalize_runtime_dt(value: datetime | None) -> datetime | None:
+    """
+    Canonical runtime/report datetime: naive UTC.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _movement_delta(movement_type: str, qty: float) -> float:
+    mt = str(movement_type or "").strip().lower()
+    if mt == "prijem":
+        return float(qty or 0)
+    if mt == "vydej":
+        return -float(qty or 0)
+    return float(qty or 0)
+
+
+def _revert_tp_stock_effect_for_operation(db: Session, planning_operation_id: int) -> None:
+    """
+    Undo kiosk TP stock effect created on HOTOVO for one planning operation.
+    Works on current schema (product_stock_movements / product_stock_receipts).
+    """
+    mv = db.scalar(
+        select(ProductStockMovement).where(ProductStockMovement.planning_operation_id == int(planning_operation_id))
+    )
+    if mv is not None:
+        stock = db.get(ProductStockItem, int(mv.stock_item_id))
+        if stock is not None:
+            stock.current_qty = float(stock.current_qty or 0) - _movement_delta(mv.movement_type, float(mv.qty or 0))
+        db.delete(mv)
+    rc = db.scalar(
+        select(ProductStockReceipt).where(ProductStockReceipt.planning_operation_id == int(planning_operation_id))
+    )
+    if rc is not None:
+        db.delete(rc)
+
+
+def _recompute_po_status_from_chain(db: Session, op: PlanningOperation) -> str | None:
+    woo = (op.work_order_no or "").strip()
+    if not woo:
+        return None
+    po = db.scalar(select(ProductionOrder).where(ProductionOrder.vp_code == woo))
+    if po is None:
+        return None
+    chain = db.scalars(
+        select(PlanningOperation)
+        .where(PlanningOperation.work_order_no == woo)
+        .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
+    ).all()
+    if not chain:
+        return None
+    statuses = [normalize_planning_operation_status(getattr(r, "status", None)) for r in chain]
+    active = [s for s in statuses if s != "cancelled"]
+    if active and all(s == "hotovo" for s in active):
+        po.status = "hotovo"
+    elif any(s == "bezi" for s in active):
+        po.status = "bezi"
+    elif any(s in {"hotovo", "ceka"} for s in active):
+        po.status = "bezi"
+    else:
+        po.status = "planned"
+    return str(po.status or "planned")
+
+
 class WorkReportCreate(BaseModel):
     planning_operation_id: int
     machine_id: int
@@ -134,6 +205,7 @@ class WorkReportCreate(BaseModel):
     qty_nok: int | None = None
     note: str | None = None
     source: str = Field(default=SOURCE_MANUAL, max_length=30)
+    use_as_completion: bool = False
 
 
 class WorkReportUpdate(BaseModel):
@@ -368,6 +440,17 @@ def create_work_report(
             status_code=409,
             detail="Pro tuto operaci už existuje otevřený výkaz — nejdřív ho uzavřete nebo upravte.",
         )
+    started_at = _normalize_runtime_dt(payload.started_at)
+    ended_at = _normalize_runtime_dt(payload.ended_at)
+    if started_at is None:
+        raise HTTPException(status_code=422, detail="started_at je povinný.")
+    if ended_at is not None and ended_at < started_at:
+        raise HTTPException(status_code=422, detail="ended_at musí být po started_at.")
+    if payload.use_as_completion and ended_at is None:
+        raise HTTPException(
+            status_code=422,
+            detail="use_as_completion=true vyžaduje uzavřený výkaz (ended_at).",
+        )
 
     if payload.employee_id is not None:
         emp = db.get(Employee, int(payload.employee_id))
@@ -387,8 +470,8 @@ def create_work_report(
         workplace_library_item_id=links["workplace_library_item_id"],
         operation_no=int(op.operation_no or 0),
         operation_name=str(op.operation_name or "")[:200],
-        started_at=payload.started_at,
-        ended_at=payload.ended_at,
+        started_at=started_at,
+        ended_at=ended_at,
         duration_min=None,
         qty_ok=payload.qty_ok,
         qty_nok=payload.qty_nok,
@@ -405,6 +488,18 @@ def create_work_report(
     if rep.ended_at:
         _close_open_pauses_for_report(db, rep, rep.ended_at)
         refresh_report_duration_min(db, rep)
+        if payload.use_as_completion:
+            # Idempotence: completed op stays completed, only ensure aggregate + planner sync.
+            if normalize_planning_operation_status(op.status) != "hotovo":
+                op.status = "hotovo"
+                op.actual_start = started_at
+                op.actual_end = ended_at
+                op.qty_ok = int(rep.qty_ok or 0)
+                op.qty_nok = int(rep.qty_nok or 0)
+                apply_kiosk_tp_stock_effect_on_operation_complete(db, op, qty_ok=int(rep.qty_ok or 0))
+            _recompute_po_status_from_chain(db, op)
+            db.flush()
+            PlanningEngineService(db).rebuild_global_schedules(date.today())
     _audit_row(
         db,
         work_report_id=rep.id,
@@ -521,6 +616,7 @@ def delete_work_report(
     rep = db.get(WorkReport, int(report_id))
     if not rep:
         raise HTTPException(status_code=404, detail="Výkaz nenalezen.")
+    op_id = int(rep.planning_operation_id) if rep.planning_operation_id is not None else None
     snap = _row_to_report(db, rep)
     rid = int(rep.id)
     _audit_row(
@@ -531,6 +627,46 @@ def delete_work_report(
         details={"snapshot": snap},
     )
     db.delete(rep)
+    db.flush()
+
+    # Deleting the last completed report for an operation must undo completion side-effects
+    # (planning status, PO aggregate, stock receipt/movement, and planner visibility).
+    if op_id is not None:
+        still_any = db.scalar(
+            select(WorkReport.id)
+            .where(WorkReport.planning_operation_id == int(op_id))
+            .limit(1)
+        )
+        still_completed = db.scalar(
+            select(WorkReport.id)
+            .where(
+                WorkReport.planning_operation_id == int(op_id),
+                WorkReport.ended_at.is_not(None),
+            )
+            .limit(1)
+        )
+        op = db.get(PlanningOperation, int(op_id))
+        should_reopen = False
+        if op is not None and still_completed is None:
+            # Primary invariant: no completed work report may leave op in completion runtime state.
+            if (
+                normalize_planning_operation_status(op.status) == "hotovo"
+                or op.actual_end is not None
+                or op.qty_ok is not None
+                or op.qty_nok is not None
+                or still_any is None
+            ):
+                should_reopen = True
+        if op is not None and should_reopen:
+            op.status = "planned"
+            op.actual_start = None
+            op.actual_end = None
+            op.qty_ok = None
+            op.qty_nok = None
+            _revert_tp_stock_effect_for_operation(db, int(op_id))
+            _recompute_po_status_from_chain(db, op)
+            db.flush()
+            PlanningEngineService(db).rebuild_global_schedules(date.today())
     db.commit()
     return {"status": "ok", "deleted_id": rid}
 

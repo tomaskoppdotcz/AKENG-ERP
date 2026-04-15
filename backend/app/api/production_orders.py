@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,6 +38,7 @@ from app.services.material_readiness import (
 )
 from app.services.material_reservation_sync import cancel_active_reservations_for_production_order
 from app.services.material_traceability_vp import vp_material_traceability_for_input
+from app.services.planning_operation_status import normalize_production_order_status
 from app.services.production_order_operation_runtime import (
     operation_nos_for_production_order,
     operation_statuses_for_production_order,
@@ -117,6 +119,65 @@ def _recompute_and_set_po_status(db: Session, po: ProductionOrder, operation_nos
     elif not po.status:
         po.status = "planned"
     return str(po.status or "planned")
+
+
+def _terminal_phase_from_operation_name(name: str | None) -> str | None:
+    """Sklad vs expedice podle názvu poslední operace TP (shoda s frontend productionOrderDetailHeader)."""
+    if not name or not str(name).strip():
+        return None
+    n = str(name).strip().lower()
+    if re.search(r"exped|expedi|balen|odesl|pick|ship", n):
+        return "expedition"
+    if re.search(r"příjem|prijem|sklad|náklad|naklad|stock|receipt", n):
+        return "stock"
+    return None
+
+
+def _completion_terminal_phase_from_last_vp_operation(
+    db: Session, po: ProductionOrder, operation_nos: list[int]
+) -> str | None:
+    if not operation_nos:
+        return None
+    last_no = max(int(x) for x in operation_nos)
+    r = db.scalar(
+        select(ProductionOrderOperation).where(
+            ProductionOrderOperation.production_order_id == int(po.id),
+            ProductionOrderOperation.operation_no == int(last_no),
+        )
+    )
+    if r is None:
+        return None
+    return _terminal_phase_from_operation_name(r.operation_name)
+
+
+def _po_aggregate_status_string(
+    po: ProductionOrder, operation_nos: list[int], all_done: bool, any_activity: bool
+) -> str:
+    """Kanonický agregovaný stav VP (planned | bezi | hotovo) — shodně v přehledu i detailu."""
+    if not operation_nos:
+        return normalize_production_order_status(po.status) or "planned"
+    if all_done:
+        return "hotovo"
+    if any_activity:
+        return "bezi"
+    return normalize_production_order_status(po.status) or "planned"
+
+
+def _overview_operational_status_and_terminal(
+    db: Session, po: ProductionOrder,
+) -> tuple[str, str | None]:
+    """
+    Stejná agregace jako GET detail (logy operací), ne jen production_orders.status v DB.
+    Druhá hodnota: stock | expedition podle názvu poslední operace při plném dokončení.
+    """
+    operation_nos = operation_nos_for_production_order(db, po)
+    if not operation_nos:
+        return (normalize_production_order_status(po.status) or "planned", None)
+    _, any_activity, all_done = operation_statuses_for_production_order(db, int(po.id), operation_nos)
+    terminal = (
+        _completion_terminal_phase_from_last_vp_operation(db, po, operation_nos) if all_done else None
+    )
+    return (_po_aggregate_status_string(po, operation_nos, all_done, any_activity), terminal)
 
 
 def _ensure_product_stock_receipt_for_done_po(db: Session, po: ProductionOrder) -> None:
@@ -280,6 +341,7 @@ def list_production_orders(
             resolved_portfolio_id = int(po.portfolio_item_id)
         elif ji is not None:
             resolved_portfolio_id = portfolio_map.get(int(ji.id))
+        op_status, completion_terminal = _overview_operational_status_and_terminal(db, po)
         out.append(
             {
                 "id": int(po.id),
@@ -290,7 +352,8 @@ def list_production_orders(
                 "quantity": int(po.quantity or 0),
                 "logistic_mode": po.logistic_mode,
                 "source_type": po.source_type,
-                "status": po.status,
+                "status": op_status,
+                "completion_terminal": completion_terminal,
                 "zakazka": job.zak_code if job is not None else None,
                 "customer_order_no": (co.customer_po_no if co is not None else None),
                 "line_no": int(ji.line_no) if ji is not None and ji.line_no is not None else None,
@@ -624,12 +687,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         st = op_status_by_no.get(int(op["operation_no"]))
         if st:
             op.update(st)
-    if all_done:
-        po_status = "hotovo"
-    elif any_activity:
-        po_status = "bezi"
-    else:
-        po_status = po.status or "planned"
+    po_status = _po_aggregate_status_string(po, operation_nos, all_done, any_activity)
 
     wf_ok_detail = workflow_record_active(po)
     mat_cov_d = evaluate_production_order_material_covered(db, po) if wf_ok_detail else False
@@ -662,6 +720,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         "is_material_released_to_production": mat_rel_d,
         "is_material_ready": mat_rel_d,
         "quantity": int(po.quantity or 0),
+        "due_date": ji.due_date.isoformat() if ji is not None and ji.due_date is not None else None,
         "technology_template": {
             "id": int(tp_template.id),
             "name": tp_template.name,

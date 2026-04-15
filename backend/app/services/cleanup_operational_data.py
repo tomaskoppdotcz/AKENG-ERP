@@ -5,14 +5,24 @@ Delete operational / transactional ERP data while preserving master data
 Uses FK-safe delete order. Intended for test DB reset and dev cleanup.
 
 Preserves machine_calendar (treated as planning/master calendar setup).
+
+Material stock cleanup modes (``material_stock_mode``):
+
+- ``preserve`` (default, operational clean): keeps all ``material_stock_movements``
+  rows; recomputes ``material_stock_items.current_qty`` from movements using the
+  same signed semantics as the stock API (prijem +qty, vydej -qty, korekce +qty).
+- ``reset`` (full test clean): deletes all material movement rows (and attachments),
+  then recomputes balances (all zero). Use when you want an empty material ledger.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+MaterialStockCleanupMode = Literal["preserve", "reset"]
 
 # Tables that use SQLite AUTOINCREMENT and should reset sequence after full wipe
 _SQLITE_SEQUENCE_TABLES = (
@@ -28,6 +38,9 @@ _SQLITE_SEQUENCE_TABLES = (
     "operation_logs",
     "kiosk_sessions",
     "kiosk_activity_logs",
+    "work_report_pauses",
+    "work_report_audit_logs",
+    "work_reports",
     "job_item_coverages",
     "product_issues",
     "product_stock_receipts",
@@ -35,6 +48,8 @@ _SQLITE_SEQUENCE_TABLES = (
     "material_reservations",
     "material_stock_reservations",
     "restock_wip_reservations",
+    "material_stock_movement_attachments",
+    "material_stock_movements",
 )
 
 
@@ -50,6 +65,9 @@ def preview_counts(db: Session) -> dict[str, int]:
         ("operation_logs", "SELECT COUNT(*) FROM operation_logs"),
         ("machine_schedule", "SELECT COUNT(*) FROM machine_schedule"),
         ("kiosk_activity_logs", "SELECT COUNT(*) FROM kiosk_activity_logs"),
+        ("work_report_pauses", "SELECT COUNT(*) FROM work_report_pauses"),
+        ("work_report_audit_logs", "SELECT COUNT(*) FROM work_report_audit_logs"),
+        ("work_reports", "SELECT COUNT(*) FROM work_reports"),
         ("kiosk_sessions", "SELECT COUNT(*) FROM kiosk_sessions"),
         ("planning_operations", "SELECT COUNT(*) FROM planning_operations"),
         ("production_order_operation_logs", "SELECT COUNT(*) FROM production_order_operation_logs"),
@@ -63,6 +81,10 @@ def preview_counts(db: Session) -> dict[str, int]:
             "WHERE production_order_id IS NOT NULL OR job_item_id IS NOT NULL",
         ),
         ("material_stock_movements_total", "SELECT COUNT(*) FROM material_stock_movements"),
+        (
+            "material_stock_movement_attachments",
+            "SELECT COUNT(*) FROM material_stock_movement_attachments",
+        ),
         ("job_item_coverages", "SELECT COUNT(*) FROM job_item_coverages"),
         ("product_issues", "SELECT COUNT(*) FROM product_issues"),
         ("product_stock_movements", "SELECT COUNT(*) FROM product_stock_movements"),
@@ -81,31 +103,78 @@ def preview_counts(db: Session) -> dict[str, int]:
     return out
 
 
-def run_cleanup_operational_data(db: Session, *, apply: bool) -> dict[str, Any]:
+_RECOMPUTE_MATERIAL_STOCK_QTY_SQL = """
+UPDATE material_stock_items SET current_qty = COALESCE((
+    SELECT SUM(
+        CASE TRIM(LOWER(COALESCE(m.movement_type, '')))
+            WHEN 'prijem' THEN m.qty
+            WHEN 'vydej' THEN -m.qty
+            ELSE m.qty
+        END
+    )
+    FROM material_stock_movements m
+    WHERE m.stock_item_id = material_stock_items.id
+), 0)
+"""
+
+
+def recompute_material_stock_current_qty_from_movements(db: Session) -> int:
     """
-    If apply=False, returns preview_counts only.
+    Set each ``material_stock_items.current_qty`` to the signed sum of its movements,
+    matching ``_movement_delta`` in ``app.api.material_stock``.
+    """
+    r = db.execute(text(_RECOMPUTE_MATERIAL_STOCK_QTY_SQL))
+    return max(0, int(r.rowcount or 0))
+
+
+def run_cleanup_operational_data(
+    db: Session,
+    *,
+    apply: bool,
+    material_stock_mode: MaterialStockCleanupMode = "preserve",
+) -> dict[str, Any]:
+    """
+    If apply=False, returns preview_counts and the chosen ``material_stock_mode``.
     If apply=True, deletes operational rows and returns deleted rowcounts per step.
     """
     if not apply:
-        return {"dry_run": True, "preview": preview_counts(db)}
+        return {
+            "dry_run": True,
+            "preview": preview_counts(db),
+            "material_stock_mode": material_stock_mode,
+        }
 
     deleted: dict[str, int] = {}
 
     try:
-        _execute_cleanup_deletes(db, deleted)
+        _execute_cleanup_deletes(db, deleted, material_stock_mode=material_stock_mode)
         db.commit()
     except Exception:
         db.rollback()
         raise
-    return {"dry_run": False, "deleted": deleted}
+    return {
+        "dry_run": False,
+        "deleted": deleted,
+        "material_stock_mode": material_stock_mode,
+    }
 
 
-def _execute_cleanup_deletes(db: Session, deleted: dict[str, int]) -> None:
+def _execute_cleanup_deletes(
+    db: Session,
+    deleted: dict[str, int],
+    *,
+    material_stock_mode: MaterialStockCleanupMode,
+) -> None:
 
     def d(label: str, sql: str) -> None:
         r = db.execute(text(sql))
         n = r.rowcount
         deleted[label] = max(0, int(n) if n is not None and n >= 0 else 0)
+
+    # Work reports (before kiosk_sessions / planning_operations — FK references)
+    d("work_report_pauses", "DELETE FROM work_report_pauses")
+    d("work_report_audit_logs", "DELETE FROM work_report_audit_logs")
+    d("work_reports", "DELETE FROM work_reports")
 
     # Planning / kiosk / schedule (no FK to orders)
     d("operation_events", "DELETE FROM operation_events")
@@ -124,20 +193,11 @@ def _execute_cleanup_deletes(db: Session, deleted: dict[str, int]) -> None:
     d("material_stock_reservations", "DELETE FROM material_stock_reservations")
     d("restock_wip_reservations", "DELETE FROM restock_wip_reservations")
 
-    # Material movements clearly tied to VP / řádek zakázky (attachments CASCADE)
-    d(
-        "material_stock_movements_operational",
-        "DELETE FROM material_stock_movements "
-        "WHERE production_order_id IS NOT NULL OR job_item_id IS NOT NULL",
-    )
-
-    r_ms = db.execute(
-        text(
-            "UPDATE material_stock_items SET current_qty = COALESCE("
-            "(SELECT SUM(qty) FROM material_stock_movements m WHERE m.stock_item_id = material_stock_items.id), 0)"
-        )
-    )
-    deleted["material_stock_items_qty_recomputed"] = max(0, int(r_ms.rowcount or 0))
+    # Material ledger: preserve (default) vs full reset — never leave unsigned SUM drift.
+    if material_stock_mode == "reset":
+        d("material_stock_movement_attachments", "DELETE FROM material_stock_movement_attachments")
+        d("material_stock_movements", "DELETE FROM material_stock_movements")
+    deleted["material_stock_items_qty_recomputed"] = recompute_material_stock_current_qty_from_movements(db)
 
     # Coverage / issues before order hierarchy
     d("job_item_coverages", "DELETE FROM job_item_coverages")

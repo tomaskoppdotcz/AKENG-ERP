@@ -286,13 +286,41 @@ export async function copyPortfolioItem(id: number, payload: PortfolioItemCreate
   return res.json();
 }
 
-/** Najde portfolio položku podle GPN (trim, přesná shoda). */
-export async function findPortfolioItemByGpn(gpn: string): Promise<PortfolioItem | null> {
-  const needle = gpn.trim();
-  if (!needle) return null;
+/** Pořadí variant pod GPN (stejné jako přehled portfolia / zakázka). */
+const LOGISTIC_MODE_ORDER: Record<string, number> = {
+  vyroba_zakaznik: 0,
+  sklad_zakaznik: 1,
+  sklad: 2,
+};
+
+/** Seřadí varianty portfolia se stejným GPN pro deterministický výběr / UI. */
+export function sortPortfolioVariantsByLogisticMode(items: PortfolioItem[]): PortfolioItem[] {
+  return [...items].sort((a, b) => {
+    const oa = LOGISTIC_MODE_ORDER[(a.logistic_mode ?? "").trim()] ?? 99;
+    const ob = LOGISTIC_MODE_ORDER[(b.logistic_mode ?? "").trim()] ?? 99;
+    if (oa !== ob) return oa - ob;
+    return a.id - b.id;
+  });
+}
+
+/** Všechny položky portfolia se shodným GPN (case-insensitive trim). */
+export async function listPortfolioItemsByGpn(gpn: string): Promise<PortfolioItem[]> {
+  const needle = gpn.trim().toLowerCase();
+  if (!needle) return [];
   const items = await getPortfolioItems();
-  const found = items.find((i) => i.gpn.trim() === needle);
-  return found ?? null;
+  return sortPortfolioVariantsByLogisticMode(
+    items.filter((i) => i.gpn.trim().toLowerCase() === needle)
+  );
+}
+
+/**
+ * Jednoznačná položka podle GPN — jen pokud existuje právě jedna varianta.
+ * Při více variantách (stejné GPN, různý logistic_mode) vrať null, ať se nevybere omylem vyroba_zakaznik.
+ */
+export async function findPortfolioItemByGpn(gpn: string): Promise<PortfolioItem | null> {
+  const rows = await listPortfolioItemsByGpn(gpn);
+  if (rows.length === 1) return rows[0];
+  return null;
 }
 
 export async function getPortfolioItemTechnology(

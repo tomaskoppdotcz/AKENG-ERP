@@ -1,5 +1,14 @@
 import { akengFetch } from "./akengFetch";
 
+/** Kalendářní úsek naplánované operace (např. konec směny + pokračování druhý den). */
+export type PlannerGanttScheduleSegment = {
+  segmentIndex: number;
+  machineId: number;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  durationMin: number;
+};
+
 export type PlannerGanttItem = {
   operationId: number;
   orderItemId: number | null;
@@ -16,9 +25,17 @@ export type PlannerGanttItem = {
   /** Následující pracoviště na VP (routing) */
   nextWorkplaceCode?: string | null;
   workplaceId?: number;
+  /** Kod stroje z DB (shoda s kioskem). */
+  machineCode?: string | null;
   status: string;
   plannedStart: string | null;
   plannedEnd: string | null;
+  /** Úplný seznam segmentů z backendu; pro Gantt buňku se často rozbalí na více řádků. */
+  scheduleSegments?: PlannerGanttScheduleSegment[];
+  /**
+   * Když je položka jeden vizuální segment rozšířeného řádku (expandPlannerGanttItemsForCells).
+   */
+  ganttSegmentIndex?: number;
   setupTimeMin: number;
   laborTimeTotalMin: number;
   totalOperationTimeMin: number;
@@ -30,9 +47,10 @@ export type PlannerGanttItem = {
 };
 
 export type PlannerGanttMachineGroup = {
+  /** Kotva řádku (MIN stroj na pracovišti) — DnD cíl; položky mají vlastní machineId. */
   machineId: number;
   machineName: string;
-  /** Řádek Gantt = pracoviště z knihovny (Settings → Pracoviště) */
+  /** Řádek Gantt = pracoviště z knihovny (Settings → Pracoviště). */
   workplaceId?: number;
   workplaceCode?: string | null;
   items: PlannerGanttItem[];
@@ -95,6 +113,8 @@ export type KioskMachine = {
   machine_id: number;
   machine_name: string;
   machine_code: string;
+  /** Sdílené pracoviště knihovny; více strojů se stejným id se v kiosk selektoru slučuje. */
+  workplace_library_item_id?: number | null;
 };
 
 export type KioskMachinesResponse = {
@@ -304,11 +324,25 @@ export async function kioskStartOperation(payload: {
   });
 }
 
-export async function kioskStopOperation(payload: {
+export async function kioskPauseOperation(payload: {
   planningOperationId: number;
   operatorName?: string;
+  pauseReason: string;
+  note?: string | null;
 }) {
-  return apiFetch(`${API_BASE}/shopfloor-kiosk/stop`, {
+  return apiFetch(`${API_BASE}/shopfloor-kiosk/pause`, {
+    method: "POST",
+    body: JSON.stringify({
+      planning_operation_id: payload.planningOperationId,
+      operator_name: payload.operatorName || null,
+      pause_reason: payload.pauseReason,
+      note: payload.note ?? null,
+    }),
+  });
+}
+
+export async function kioskResumeOperation(payload: { planningOperationId: number; operatorName?: string }) {
+  return apiFetch(`${API_BASE}/shopfloor-kiosk/resume`, {
     method: "POST",
     body: JSON.stringify({
       planning_operation_id: payload.planningOperationId,
@@ -322,6 +356,7 @@ export async function kioskFinishOperation(payload: {
   qtyOk: number;
   qtyNok: number;
   operatorName?: string;
+  note?: string | null;
 }) {
   return apiFetch(`${API_BASE}/shopfloor-kiosk/finish`, {
     method: "POST",
@@ -330,6 +365,7 @@ export async function kioskFinishOperation(payload: {
       qty_ok: payload.qtyOk,
       qty_nok: payload.qtyNok,
       operator_name: payload.operatorName || null,
+      note: payload.note ?? null,
     }),
   });
 }

@@ -8,10 +8,16 @@ import { UI } from "../styles/ui";
 import type { ErpWorkflowListFilter, OrdersOverviewOrderTypeFilter } from "../services/ordersApi";
 import {
   getProductionOrdersOverview,
+  getRestockWipReservationNotices,
   openProductionOrderPdfInNewTab,
   type ProductionOrderOverviewRow,
+  type RestockWipReservationNotice,
 } from "../services/productionOrdersApi";
-import { findPortfolioItemByGpn } from "../services/portfolioApi";
+import { listPortfolioItemsByGpn } from "../services/portfolioApi";
+import {
+  formatProductionOrderOverviewOperationalStatus,
+  isProductionOrderOverviewCompleted,
+} from "../utils/productionOrderOverviewStatus";
 
 type Props = {
   onOpenDetail: (productionOrderId: number) => void;
@@ -78,7 +84,16 @@ function isVpRowOverdue(row: ProductionOrderOverviewRow, todayIso: string): bool
 }
 
 function isVpRowDone(row: ProductionOrderOverviewRow): boolean {
-  return String(row.status ?? "").trim().toLowerCase() === "done";
+  return isProductionOrderOverviewCompleted(row);
+}
+
+function formatNoticeFulfilledAt(iso: string | null): string {
+  if (!iso || !String(iso).trim()) return "—";
+  try {
+    return new Date(iso).toLocaleString("cs-CZ", { dateStyle: "short", timeStyle: "short" });
+  } catch {
+    return iso;
+  }
 }
 
 export default function ProductionOrdersPage({
@@ -96,14 +111,21 @@ export default function ProductionOrdersPage({
   const [workflowListFilter, setWorkflowListFilter] = useState<ErpWorkflowListFilter>("active");
   const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("all");
   const [activeQuickFilters, setActiveQuickFilters] = useState<ProductionQuickFilter[]>([]);
+  const [restockNotices, setRestockNotices] = useState<RestockWipReservationNotice[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getProductionOrdersOverview(workflowListFilter)
-      .then((data) => {
-        if (!cancelled) setRows(data);
+    Promise.all([
+      getProductionOrdersOverview(workflowListFilter),
+      getRestockWipReservationNotices(20).catch(() => [] as RestockWipReservationNotice[]),
+    ])
+      .then(([data, notices]) => {
+        if (!cancelled) {
+          setRows(data);
+          setRestockNotices(notices);
+        }
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : "Nepodařilo se načíst výrobní příkazy.");
@@ -144,6 +166,71 @@ export default function ProductionOrdersPage({
         title="Výrobní příkazy"
         subtitle="Přehled všech VP napříč zákaznickými i interními zakázkami"
       />
+
+      {restockNotices.length > 0 ? (
+        <PageSection gapTop={12}>
+          <div
+            role="region"
+            aria-label="Oznámení o příjmu rezervovaného výstupu ze skladového doplnění"
+            style={{
+              ...UI.card,
+              borderRadius: 12,
+              padding: 14,
+              background: "#ecfdf5",
+              border: "1px solid #6ee7b7",
+              boxSizing: "border-box",
+            }}
+          >
+            <div style={{ fontWeight: 800, color: "#065f46", marginBottom: 10, fontSize: 14 }}>
+              Příjem rezervovaného výstupu — zákaznický VP (sklad) lze plánovat
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+              {restockNotices.map((n) => (
+                <li key={n.reservation_id} style={{ color: "#064e3b", fontSize: 13, lineHeight: 1.45 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 12px", alignItems: "baseline" }}>
+                    <span style={{ fontWeight: 700 }}>Zdroj (restock):</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenDetailInWorkspaceTab?.(n.source_production_order_id, n.source_vp_code ?? undefined);
+                        onOpenDetail(n.source_production_order_id);
+                      }}
+                      style={linkButtonReset}
+                    >
+                      {n.source_vp_code ?? `VP #${n.source_production_order_id}`}
+                    </button>
+                    <span style={{ fontWeight: 700 }}>Zákazník (sklad):</span>
+                    {n.customer_production_order_id != null ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenDetailInWorkspaceTab?.(
+                            n.customer_production_order_id!,
+                            n.customer_vp_code ?? undefined
+                          );
+                          onOpenDetail(n.customer_production_order_id!);
+                        }}
+                        style={linkButtonReset}
+                      >
+                        {n.customer_vp_code ?? `VP #${n.customer_production_order_id}`}
+                      </button>
+                    ) : (
+                      <span>—</span>
+                    )}
+                    <span style={{ color: "#047857", whiteSpace: "nowrap" }}>
+                      {formatNoticeFulfilledAt(n.fulfilled_at)}
+                    </span>
+                    {n.reserved_qty > 0 ? (
+                      <span style={{ color: "#059669" }}>({n.reserved_qty} ks)</span>
+                    ) : null}
+                  </div>
+                  <div style={{ marginTop: 4, color: "#065f46" }}>{n.user_message_cs}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </PageSection>
+      ) : null}
 
       <PageSection gapTop={16}>
         <div
@@ -286,8 +373,14 @@ export default function ProductionOrdersPage({
                               }
                               const g = row.gpn.trim();
                               if (!g) return;
-                              const item = await findPortfolioItemByGpn(g);
-                              if (item) onOpenPortfolioItemId(item.id);
+                              const variants = await listPortfolioItemsByGpn(g);
+                              if (variants.length === 1) {
+                                onOpenPortfolioItemId(variants[0].id);
+                              } else if (variants.length > 1) {
+                                window.alert(
+                                  "U tohoto GPN existuje více logistických variant v portfoliu. Otevřete správnou variantu z modulu Portfolio, nebo použijte náhled VP s navázaným portfolio_item_id."
+                                );
+                              }
                             }}
                           >
                             {row.gpn}
@@ -309,7 +402,9 @@ export default function ProductionOrdersPage({
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.quantity} ks</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{labelLogisticMode(row.logistic_mode)}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{labelSourceTypeRow(row)}</td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.status ?? "—"}</td>
+                      <td style={{ ...UI.td, whiteSpace: "nowrap", fontWeight: 800 }}>
+                        {formatProductionOrderOverviewOperationalStatus(row)}
+                      </td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
                           <span style={{ fontWeight: 800 }}>{row.zakazka ?? "—"}</span>

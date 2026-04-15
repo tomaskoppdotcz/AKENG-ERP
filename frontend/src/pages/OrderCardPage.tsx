@@ -3,7 +3,12 @@ import DetailPageHeader from "../components/DetailPageHeader";
 import SimpleModal from "../components/SimpleModal";
 import { UI } from "../styles/ui";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
-import { getPortfolioItems, portfolioVariantOptionText, type PortfolioItem } from "../services/portfolioApi";
+import {
+  getPortfolioItems,
+  portfolioVariantOptionText,
+  sortPortfolioVariantsByLogisticMode,
+  type PortfolioItem,
+} from "../services/portfolioApi";
 import {
   createProductionOrdersFromAllocation,
   createJobItem,
@@ -212,7 +217,9 @@ export default function OrderCardPage({
   const portfolioGpnMatches = useMemo(() => {
     const g = formGpn.trim().toLowerCase();
     if (!g) return [];
-    return portfolioItems.filter((p) => p.gpn.trim().toLowerCase() === g);
+    return sortPortfolioVariantsByLogisticMode(
+      portfolioItems.filter((p) => p.gpn.trim().toLowerCase() === g)
+    );
   }, [formGpn, portfolioItems]);
 
   useEffect(() => {
@@ -242,7 +249,9 @@ export default function OrderCardPage({
   const editPortfolioGpnMatches = useMemo(() => {
     const g = editFormGpn.trim().toLowerCase();
     if (!g) return [];
-    return portfolioItems.filter((p) => p.gpn.trim().toLowerCase() === g);
+    return sortPortfolioVariantsByLogisticMode(
+      portfolioItems.filter((p) => p.gpn.trim().toLowerCase() === g)
+    );
   }, [editFormGpn, portfolioItems]);
 
   useEffect(() => {
@@ -338,8 +347,13 @@ export default function OrderCardPage({
     try {
       const preview = await getAllocationPreview(customerOrderId);
       if (preview.any_needs_user_choice) {
+        const defaults: Record<number, RestockConflictStrategy> = {};
+        for (const l of preview.lines) {
+          if (!l.needs_user_choice) continue;
+          defaults[l.job_item_id] = "prefer_stock";
+        }
         setRestockPreviewSnapshot(preview);
-        setRestockChoices({});
+        setRestockChoices(defaults);
         setRestockModalOpen(true);
         return;
       }
@@ -628,16 +642,14 @@ export default function OrderCardPage({
               >
                 Stornovat zakázku
               </button>
-              {orderKind !== "internal" ? (
-                <button
-                  type="button"
-                  style={UI.buttons.secondary}
-                  onClick={handleCreateVp}
-                  disabled={vpPreviewLoading || creatingVp || !orderWorkflowActive || !canOrdersWrite}
-                >
-                  {vpPreviewLoading ? "Kontroluji alokaci…" : creatingVp ? "Vytvářím VP…" : "Vytvořit VP"}
-                </button>
-              ) : null}
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={handleCreateVp}
+                disabled={vpPreviewLoading || creatingVp || !orderWorkflowActive || !canOrdersWrite}
+              >
+                {vpPreviewLoading ? "Kontroluji sklad a výrobu…" : creatingVp ? "Vytvářím VP…" : "Vytvořit VP"}
+              </button>
               <button
                 type="button"
                 style={UI.buttons.primary}
@@ -1148,60 +1160,22 @@ export default function OrderCardPage({
                 </div>
 
                 {orderKind !== "internal" ? (
-                  <div style={{ marginTop: 16 }}>
-                    <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Návrh alokace</div>
-                    <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                        <thead>
-                          <tr style={{ background: "#f8fafc" }}>
-                            {["GPN", "Požadavek", "Skladem", "Ze skladu", "Do výroby", "Doplnění skladu"].map((h) => (
-                              <th
-                                key={h}
-                                style={{
-                                  ...UI.th,
-                                  fontSize: 13,
-                                  padding: "10px 10px",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {h}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {items.map((item) => (
-                            <tr key={`alloc-${item.job_item_id}`}>
-                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>
-                                {item.gpn}
-                              </td>
-                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
-                                {formatQty(item.required_qty ?? item.qty)} ks
-                              </td>
-                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
-                                {formatQty(item.stock_qty)} ks
-                              </td>
-                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#166534", fontWeight: 700 }}>
-                                {formatQty(item.from_stock_qty)} ks
-                              </td>
-                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#1d4ed8", fontWeight: 700 }}>
-                                {formatQty(item.to_production_qty)} ks
-                              </td>
-                              <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", color: "#b45309", fontWeight: 700 }}>
-                                {formatQty(item.restock_qty)} ks
-                              </td>
-                            </tr>
-                          ))}
-                          {items.length === 0 ? (
-                            <tr>
-                              <td colSpan={6} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
-                                Pro alokaci zatím nejsou žádné položky.
-                              </td>
-                            </tr>
-                          ) : null}
-                        </tbody>
-                      </table>
-                    </div>
+                  <div
+                    style={{
+                      marginTop: 16,
+                      padding: "12px 14px",
+                      borderRadius: 12,
+                      border: "1px solid #e2e8f0",
+                      background: "#f8fafc",
+                      fontSize: 13,
+                      color: "#475569",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <strong style={{ color: "#0f172a" }}>Výrobní příkazy</strong> se zakládají podle{" "}
+                    <strong>logistické varianty portfolia</strong> u řádku (výběr při zadání GPN / úpravě položky):{" "}
+                    <em>Sklad</em> = jen interní doplnění skladu, <em>Výroba zákazník</em> = přímá výroba pro zákazníka,{" "}
+                    <em>Sklad zákazník</em> = čerpání skladu, případně rezervace běžícího doplnění (modal) a doplnění.
                   </div>
                 ) : null}
               </>
@@ -1252,8 +1226,9 @@ export default function OrderCardPage({
       }
     >
       <p style={{ margin: "0 0 12px", fontSize: 14, color: "#334155", lineHeight: 1.5 }}>
-        U uvedených položek už běží výroba určená na <strong>doplnění skladu</strong> (stejné GPN). Zvolte, zda tuto rozpracovanou
-        výrobu přednostně použít pro zákazníka, nebo ji nechat na sklad a zakázce naplánovat samostatnou výrobu.
+        U uvedených položek už běží výroba na <strong>doplnění skladu</strong> (stejné GPN). Můžete buď nechat rozpracovanou
+        výrobu čistě na sklad, nebo <strong>rezervovat</strong> její budoucí výstup pro zákazníka — bez změny zdrojového skladového
+        VP; systém založí zákaznický tok ze skladu (Expedice) a paralelní interní doplnění skladu.
       </p>
       {vpError && restockModalOpen ? (
         <div
@@ -1275,6 +1250,7 @@ export default function OrderCardPage({
           const wip = line.restock_wip;
           const vpLabel = wip.vp_codes.length ? wip.vp_codes.join(", ") : "—";
           const choice = restockChoices[line.job_item_id];
+          const plan = line.reserve_wip_plan;
           return (
             <div
               key={line.job_item_id}
@@ -1293,9 +1269,35 @@ export default function OrderCardPage({
                 <div>
                   Ve výrobě na doplnění skladu: <strong>{formatQty(wip.quantity_open)} ks</strong> (VP: {vpLabel})
                 </div>
+                {plan ? (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "#f8fafc",
+                      border: "1px solid #e2e8f0",
+                      fontSize: 12,
+                      color: "#334155",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>Při volbě „Rezervovat WIP pro zákazníka“</div>
+                    <div>Rezervace budoucího výstupu: <strong>{formatQty(plan.reserved_qty)} ks</strong></div>
+                    <div>Zákaznický VP (sklad → zákazník, Expedice): <strong>{formatQty(plan.customer_sklad_zakaznik_qty)} ks</strong></div>
+                    <div>Nové interní doplnění skladu: <strong>{formatQty(plan.replenishment_internal_qty)} ks</strong></div>
+                    {plan.customer_vyroba_extra_qty > 0 ? (
+                      <div>
+                        Další výroba přímo pro zákazníka (nad rámec WIP):{" "}
+                        <strong>{formatQty(plan.customer_vyroba_extra_qty)} ks</strong>
+                      </div>
+                    ) : null}
+                    <div style={{ marginTop: 6 }}>Původní skladový VP zůstane beze změny (dokončí se Příjem na sklad).</div>
+                  </div>
+                ) : null}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 14 }}>
-                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: creatingVp ? "not-allowed" : "pointer" }}>
                   <input
                     type="radio"
                     name={`restock-strategy-${line.job_item_id}`}
@@ -1306,8 +1308,9 @@ export default function OrderCardPage({
                     disabled={creatingVp}
                   />
                   <span>
-                    <strong>Přednost zákazníkovi</strong> — část požadavku do výroby pokryje běžící VP na doplnění skladu;
-                    cíl doplnění skladu se navýší o totéž množství (výroba pro zákazníka se sníží).
+                    <strong>Rezervovat rozpracované kusy pro zakázku</strong> — založí se rezervace budoucího výstupu z běžícího
+                    skladového VP, zákaznický VP sklad_zakaznik (čeká na příjem na sklad) a paralelní interní doplnění skladu.
+                    Skladový výrobní VP se nemění.
                   </span>
                 </label>
                 <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>

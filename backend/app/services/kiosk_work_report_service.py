@@ -20,6 +20,7 @@ from app.services.kiosk_planner_queue import operation_on_same_planner_row_as_ma
 from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_operation_complete
 from app.services.kiosk_vp_operation_order import assert_vp_previous_operations_finished_for_kiosk_start
 from app.services.planning_engine import PlanningEngineService
+from app.services.planning_operation_status import normalize_planning_operation_status
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +183,37 @@ def _require_op_on_machine_row(db: Session, machine: Machine, op: PlanningOperat
             status_code=400,
             detail="Operace nepatří na stejný řádek Planneru jako tento stroj / pracoviště.",
         )
+
+
+def _recompute_po_status_from_planning_chain(db: Session, op: PlanningOperation) -> str | None:
+    """
+    Kiosk flow zapisuje stav do planning_operations, ne do production_order_operation_logs.
+    Proto zde dopočítáme production_orders.status z celé VP chain (work_order_no).
+    """
+    woo = (op.work_order_no or "").strip()
+    if not woo:
+        return None
+    po = db.scalar(select(ProductionOrder).where(ProductionOrder.vp_code == woo))
+    if po is None:
+        return None
+    chain = db.scalars(
+        select(PlanningOperation)
+        .where(PlanningOperation.work_order_no == woo)
+        .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
+    ).all()
+    if not chain:
+        return None
+    statuses = [normalize_planning_operation_status(getattr(r, "status", None)) for r in chain]
+    active = [s for s in statuses if s != "cancelled"]
+    if active and all(s == "hotovo" for s in active):
+        po.status = "hotovo"
+    elif any(s == "bezi" for s in active):
+        po.status = "bezi"
+    elif any(s in {"hotovo", "ceka"} for s in active):
+        po.status = "bezi"
+    else:
+        po.status = "planned"
+    return str(po.status or "planned")
 
 
 def work_report_start(
@@ -392,6 +424,7 @@ def work_report_complete(
     op.actual_end = now
     op.qty_ok = rep.qty_ok
     op.qty_nok = rep.qty_nok
+    _recompute_po_status_from_planning_chain(db, op)
 
     next_op = db.scalar(
         select(PlanningOperation)

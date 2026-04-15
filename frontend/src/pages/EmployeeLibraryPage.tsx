@@ -2,15 +2,65 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
 import {
   createEmployeeMaster,
+  deleteEmployeeMaster,
   getEmployeeSubgroups,
   getEmployeesMaster,
   updateEmployeeMaster,
+  type EmployeeListActiveFilter,
   type EmployeeMasterRow,
   type EmployeeSubgroupRow,
 } from "../services/masterLibrariesApi";
+import { normalizeCzechKeyboardReaderNumeric } from "../utils/czCardReaderNormalize";
 
 function norm(s: string) {
   return s.trim().toLowerCase();
+}
+
+const pillBase: React.CSSProperties = {
+  display: "inline-block",
+  fontSize: 11,
+  fontWeight: 700,
+  padding: "2px 8px",
+  borderRadius: 999,
+  marginRight: 4,
+  marginBottom: 4,
+  whiteSpace: "nowrap",
+};
+
+function loginMethodPills(r: EmployeeMasterRow) {
+  const items: { label: string; show: boolean }[] = [
+    { label: "Kód", show: true },
+    { label: "Čip", show: r.has_chip_login },
+    { label: "PIN", show: r.has_pin_login },
+    { label: "Sken", show: r.has_scan_login },
+ ];
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: 300, alignItems: "center" }}>
+      {items
+        .filter((x) => x.show)
+        .map((x) => (
+          <span
+            key={x.label}
+            style={{
+              ...pillBase,
+              background: "#dbeafe",
+              color: "#1e40af",
+            }}
+          >
+            {x.label}
+          </span>
+        ))}
+      <span
+        style={{
+          ...pillBase,
+          background: r.can_use_kiosk ? "#dcfce7" : "#f1f5f9",
+          color: r.can_use_kiosk ? "#166534" : "#64748b",
+        }}
+      >
+        {r.can_use_kiosk ? "Kiosk" : "Kiosk vyp."}
+      </span>
+    </div>
+  );
 }
 
 export default function EmployeeLibraryPage() {
@@ -19,6 +69,7 @@ export default function EmployeeLibraryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [activeFilter, setActiveFilter] = useState<EmployeeListActiveFilter>("all");
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -26,15 +77,32 @@ export default function EmployeeLibraryPage() {
   const [formFirst, setFormFirst] = useState("");
   const [formLast, setFormLast] = useState("");
   const [formCode, setFormCode] = useState("");
-  const [formCard, setFormCard] = useState("");
+  const [formChip, setFormChip] = useState("");
+  const [formScan, setFormScan] = useState("");
+  const [formPin, setFormPin] = useState("");
+  const [formClearPin, setFormClearPin] = useState(false);
   const [formSubgroupId, setFormSubgroupId] = useState<number | "">("");
   const [formActive, setFormActive] = useState(true);
+  const [formKiosk, setFormKiosk] = useState(true);
+  const [formPhone, setFormPhone] = useState("");
+  const [formEmail, setFormEmail] = useState("");
+  const [formStreet, setFormStreet] = useState("");
+  const [formCity, setFormCity] = useState("");
+  const [formPostal, setFormPostal] = useState("");
+  const [formCountry, setFormCountry] = useState("");
+  const [formBirth, setFormBirth] = useState("");
+  const [formJob, setFormJob] = useState("");
+  const [formRate, setFormRate] = useState("");
+  const [formNote, setFormNote] = useState("");
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [emps, sgs] = await Promise.all([getEmployeesMaster(), getEmployeeSubgroups()]);
+      const [emps, sgs] = await Promise.all([
+        getEmployeesMaster(activeFilter),
+        getEmployeeSubgroups(),
+      ]);
       setRows(emps);
       setSubgroups(sgs.filter((s) => s.is_active));
     } catch (e: unknown) {
@@ -43,7 +111,7 @@ export default function EmployeeLibraryPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeFilter]);
 
   useEffect(() => {
     loadAll();
@@ -53,18 +121,38 @@ export default function EmployeeLibraryPage() {
     const q = norm(query);
     if (!q) return rows;
     return rows.filter((r) =>
-      norm(`${r.first_name ?? ""} ${r.last_name ?? ""} ${r.name} ${r.employee_code} ${r.card_uid}`).includes(q)
+      norm(
+        `${r.first_name ?? ""} ${r.last_name ?? ""} ${r.full_name} ${r.employee_code} ${r.chip_card_uid ?? ""} ${r.scan_code ?? ""} ${r.email ?? ""}`
+      ).includes(q)
     );
   }, [rows, query]);
 
-  function openCreate() {
-    setEditingId(null);
+  function resetForm() {
     setFormFirst("");
     setFormLast("");
     setFormCode("");
-    setFormCard("");
+    setFormChip("");
+    setFormScan("");
+    setFormPin("");
+    setFormClearPin(false);
     setFormSubgroupId("");
     setFormActive(true);
+    setFormKiosk(true);
+    setFormPhone("");
+    setFormEmail("");
+    setFormStreet("");
+    setFormCity("");
+    setFormPostal("");
+    setFormCountry("");
+    setFormBirth("");
+    setFormJob("");
+    setFormRate("");
+    setFormNote("");
+  }
+
+  function openCreate() {
+    setEditingId(null);
+    resetForm();
     setShowForm(true);
     setError(null);
   }
@@ -74,9 +162,23 @@ export default function EmployeeLibraryPage() {
     setFormFirst(r.first_name ?? "");
     setFormLast(r.last_name ?? "");
     setFormCode(r.employee_code);
-    setFormCard(r.card_uid);
+    setFormChip(r.chip_card_uid ?? "");
+    setFormScan(r.scan_code ?? "");
+    setFormPin("");
+    setFormClearPin(false);
     setFormSubgroupId(r.employee_subgroup_id ?? "");
     setFormActive(r.is_active);
+    setFormKiosk(r.can_use_kiosk);
+    setFormPhone(r.phone ?? "");
+    setFormEmail(r.email ?? "");
+    setFormStreet(r.street ?? "");
+    setFormCity(r.city ?? "");
+    setFormPostal(r.postal_code ?? "");
+    setFormCountry(r.country ?? "");
+    setFormBirth(r.birth_date ? String(r.birth_date).slice(0, 10) : "");
+    setFormJob(r.job_title ?? "");
+    setFormRate(r.cost_rate_per_hour != null ? String(r.cost_rate_per_hour) : "");
+    setFormNote(r.note ?? "");
     setShowForm(true);
     setError(null);
   }
@@ -90,24 +192,54 @@ export default function EmployeeLibraryPage() {
     const first = formFirst.trim();
     const last = formLast.trim();
     const code = formCode.trim();
-    const card = formCard.trim();
     if (!first || !last) {
       setError("Vyplňte jméno a příjmení.");
       return;
     }
-    if (!code || !card) {
-      setError("Vyplňte kód zaměstnance a UID karty (pro kiosk).");
+    if (!code) {
+      setError("Vyplňte kód zaměstnance.");
       return;
     }
+    const pin = formPin.trim();
+    if (pin && pin.length < 4) {
+      setError("PIN musí mít alespoň 4 znaky.");
+      return;
+    }
+    let rate: number | null = null;
+    if (formRate.trim()) {
+      const n = Number(formRate.replace(",", "."));
+      if (Number.isNaN(n)) {
+        setError("Neplatná sazba (Kč/h).");
+        return;
+      }
+      rate = n;
+    }
+
     setSaving(true);
     setError(null);
+    const chipNorm = normalizeCzechKeyboardReaderNumeric(formChip.trim());
+    const scanNorm = normalizeCzechKeyboardReaderNumeric(formScan.trim());
     const payload = {
       first_name: first,
       last_name: last,
       employee_code: code,
-      card_uid: card,
+      chip_card_uid: chipNorm || null,
+      scan_code: scanNorm || null,
+      pin_code: pin || undefined,
+      clear_pin: editingId != null ? formClearPin : false,
+      phone: formPhone.trim() || null,
+      email: formEmail.trim() || null,
+      street: formStreet.trim() || null,
+      city: formCity.trim() || null,
+      postal_code: formPostal.trim() || null,
+      country: formCountry.trim() || null,
+      birth_date: formBirth.trim() || null,
+      job_title: formJob.trim() || null,
       employee_subgroup_id: formSubgroupId === "" ? null : Number(formSubgroupId),
       is_active: formActive,
+      can_use_kiosk: formKiosk,
+      cost_rate_per_hour: rate,
+      note: formNote.trim() || null,
     };
     try {
       if (editingId != null) {
@@ -124,12 +256,28 @@ export default function EmployeeLibraryPage() {
     }
   }
 
+  async function handleDelete(r: EmployeeMasterRow) {
+    const ok = window.confirm(`Smazat zaměstnance „${r.full_name}“? (Při historii pouze deaktivace.)`);
+    if (!ok) return;
+    setError(null);
+    try {
+      const res = await deleteEmployeeMaster(r.id);
+      if (res.status === "soft_deleted") {
+        setError(res.detail ?? "Záznam byl deaktivován (existuje historie).");
+      }
+      await loadAll();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Smazání se nezdařilo.");
+    }
+  }
+
   return (
     <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
       <div style={{ marginBottom: 10 }}>
         <div style={UI.sectionTitle}>Zaměstnanci</div>
         <div style={UI.sectionSubtitle}>
-          Záznamy pro přihlášení na kiosk (kód nebo UID karty). Jméno se použije i v přehledech.
+          Master data pro kiosk (čip, PIN, sken), náklady práce a budoucí výkazy. Kód zaměstnance lze vždy zadat na
+          kiosk.
         </div>
       </div>
 
@@ -146,9 +294,18 @@ export default function EmployeeLibraryPage() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Hledat jméno, kód, kartu…"
+          placeholder="Hledat jméno, kód, čip, sken, e-mail…"
           style={{ ...UI.inputs.base, flex: "1 1 280px", minWidth: 200, maxWidth: 480 }}
         />
+        <select
+          value={activeFilter}
+          onChange={(e) => setActiveFilter(e.target.value as EmployeeListActiveFilter)}
+          style={{ ...UI.inputs.base, minWidth: 160 }}
+        >
+          <option value="all">Všichni</option>
+          <option value="active">Pouze aktivní</option>
+          <option value="inactive">Neaktivní</option>
+        </select>
         <button type="button" style={UI.buttons.primary} onClick={openCreate}>
           Nový zaměstnanec
         </button>
@@ -177,12 +334,89 @@ export default function EmployeeLibraryPage() {
               <input value={formLast} onChange={(e) => setFormLast(e.target.value)} style={UI.inputs.base} />
             </div>
             <div>
-              <div style={UI.inputs.label}>Kód zaměstnance (login kiosk)</div>
+              <div style={UI.inputs.label}>Kód zaměstnance (kiosk)</div>
               <input value={formCode} onChange={(e) => setFormCode(e.target.value)} style={UI.inputs.base} />
             </div>
             <div>
-              <div style={UI.inputs.label}>UID karty (login kiosk)</div>
-              <input value={formCard} onChange={(e) => setFormCard(e.target.value)} style={UI.inputs.base} />
+              <div style={UI.inputs.label}>UID čipové karty</div>
+              <input
+                value={formChip}
+                onChange={(e) => setFormChip(e.target.value)}
+                onBlur={() => setFormChip((v) => normalizeCzechKeyboardReaderNumeric(v.trim()))}
+                style={UI.inputs.base}
+                placeholder="Volitelné (po opuštění pole: CZ klávesnice → číslice)"
+              />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>Skenovací kód (čárový / QR)</div>
+              <input
+                value={formScan}
+                onChange={(e) => setFormScan(e.target.value)}
+                onBlur={() => setFormScan((v) => normalizeCzechKeyboardReaderNumeric(v.trim()))}
+                style={UI.inputs.base}
+                placeholder="Volitelné"
+              />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>
+                {editingId != null ? "Nový PIN (volitelně)" : "PIN (volitelně)"}
+              </div>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={formPin}
+                onChange={(e) => setFormPin(e.target.value)}
+                style={UI.inputs.base}
+                placeholder="Min. 4 znaky; neukládá se otevřeně"
+              />
+            </div>
+            {editingId != null ? (
+              <div style={{ display: "flex", alignItems: "center", paddingTop: 20 }}>
+                <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}>
+                  <input
+                    type="checkbox"
+                    checked={formClearPin}
+                    onChange={(e) => setFormClearPin(e.target.checked)}
+                  />
+                  Odstranit PIN
+                </label>
+              </div>
+            ) : null}
+            <div>
+              <div style={UI.inputs.label}>Telefon</div>
+              <input value={formPhone} onChange={(e) => setFormPhone(e.target.value)} style={UI.inputs.base} />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>E-mail</div>
+              <input value={formEmail} onChange={(e) => setFormEmail(e.target.value)} style={UI.inputs.base} />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>Ulice</div>
+              <input value={formStreet} onChange={(e) => setFormStreet(e.target.value)} style={UI.inputs.base} />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>Město</div>
+              <input value={formCity} onChange={(e) => setFormCity(e.target.value)} style={UI.inputs.base} />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>PSČ</div>
+              <input value={formPostal} onChange={(e) => setFormPostal(e.target.value)} style={UI.inputs.base} />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>Země</div>
+              <input value={formCountry} onChange={(e) => setFormCountry(e.target.value)} style={UI.inputs.base} />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>Datum narození</div>
+              <input type="date" value={formBirth} onChange={(e) => setFormBirth(e.target.value)} style={UI.inputs.base} />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>Pracovní pozice</div>
+              <input value={formJob} onChange={(e) => setFormJob(e.target.value)} style={UI.inputs.base} />
+            </div>
+            <div>
+              <div style={UI.inputs.label}>Sazba nákladů (Kč / hod.)</div>
+              <input value={formRate} onChange={(e) => setFormRate(e.target.value)} style={UI.inputs.base} />
             </div>
             <div>
               <div style={UI.inputs.label}>Role / podskupina</div>
@@ -199,11 +433,23 @@ export default function EmployeeLibraryPage() {
                 ))}
               </select>
             </div>
-            <div style={{ display: "flex", alignItems: "center", paddingTop: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", paddingTop: 20, gap: 16, flexWrap: "wrap" }}>
               <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}>
                 <input type="checkbox" checked={formActive} onChange={(e) => setFormActive(e.target.checked)} />
                 Aktivní
               </label>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}>
+                <input type="checkbox" checked={formKiosk} onChange={(e) => setFormKiosk(e.target.checked)} />
+                Smí používat kiosk
+              </label>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <div style={UI.inputs.label}>Poznámka</div>
+              <textarea
+                value={formNote}
+                onChange={(e) => setFormNote(e.target.value)}
+                style={{ ...UI.inputs.base, minHeight: 72, width: "100%", resize: "vertical" as const }}
+              />
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -230,7 +476,7 @@ export default function EmployeeLibraryPage() {
           <table style={UI.table}>
             <thead>
               <tr style={{ background: "#f8fafc" }}>
-                {["Jméno", "Kód", "Karta", "Role", "Aktivní", "Akce"].map((h) => (
+                {["Jméno", "Kód", "Přihlášení", "Role", "Aktivní", "Akce"].map((h) => (
                   <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
                     {h}
                   </th>
@@ -240,16 +486,17 @@ export default function EmployeeLibraryPage() {
             <tbody>
               {filtered.map((r) => (
                 <tr key={r.id}>
-                  <td style={{ ...UI.td, padding: "10px 10px" }}>{r.name}</td>
+                  <td style={{ ...UI.td, padding: "10px 10px" }}>{r.full_name}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.employee_code}</td>
-                  <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontFamily: "monospace" }}>
-                    {r.card_uid}
-                  </td>
+                  <td style={{ ...UI.td, padding: "10px 10px" }}>{loginMethodPills(r)}</td>
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.subgroup_name ?? "—"}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.is_active ? "ANO" : "NE"}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
                     <button type="button" style={UI.buttons.secondary} onClick={() => openEdit(r)}>
                       Upravit
+                    </button>{" "}
+                    <button type="button" style={UI.buttons.secondary} onClick={() => handleDelete(r)}>
+                      Smazat
                     </button>
                   </td>
                 </tr>
@@ -257,7 +504,7 @@ export default function EmployeeLibraryPage() {
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={6} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
-                    Žádní zaměstnanci — vytvořte nejdříve role v záložce „Role zaměstnanců“.
+                    Žádní zaměstnanci — upravte filtr nebo vytvořte záznam.
                   </td>
                 </tr>
               ) : null}

@@ -3,18 +3,22 @@ import { useDroppable } from "@dnd-kit/core";
 import type { PlannerGanttItem } from "../services/plannerApi";
 import { plannerGanttBarColor } from "../utils/plannerGanttStatus";
 import { PlannerGanttStackedBar } from "./PlannerGanttStackedBar";
+import { ganttCellItemKey } from "./plannerGanttDayUtils";
 
 function ColumnDropSpacer({
   machineId,
   day,
   queuePosition,
+  droppableId,
 }: {
   machineId: number;
   day: string;
   queuePosition: number;
+  /** Musí být unikátní v rámci DndContext (více řádků stejné operace = stejné qp). */
+  droppableId: string;
 }) {
   const { isOver, setNodeRef } = useDroppable({
-    id: `slot-${machineId}-day-${day}-qp-${queuePosition}`,
+    id: droppableId,
     data: {
       type: "queue-slot",
       machineId,
@@ -46,7 +50,7 @@ export type PlannerGanttDayColumnProps = {
   rowMinHeight: number;
   items: PlannerGanttItem[];
   globalOrder: PlannerGanttItem[];
-  activeDragItemId: number | null;
+  activeDragItemKey: string | null;
   onSelect: (item: PlannerGanttItem) => void;
   stackGapPx: number;
   cellPadPx: number;
@@ -61,7 +65,7 @@ export function PlannerGanttDayColumn({
   rowMinHeight,
   items,
   globalOrder,
-  activeDragItemId,
+  activeDragItemKey,
   onSelect,
   stackGapPx,
   cellPadPx,
@@ -90,19 +94,40 @@ export function PlannerGanttDayColumn({
       ) : (
         items.map((item, idx) => {
           const gIdx = gIndex(item.operationId);
+          const prev = idx > 0 ? items[idx - 1] : null;
+          const sameOpAsPrev = prev && prev.operationId === item.operationId;
+          const showSpacerBefore =
+            idx === 0 ||
+            (prev && !sameOpAsPrev);
+          const qpBefore = gIdx + 1;
+          const qpAfterPrev =
+            prev != null ? gIndex(prev.operationId) + 2 : gIdx + 2;
+
           return (
-            <React.Fragment key={item.operationId}>
-              {idx === 0 ? (
-                <ColumnDropSpacer machineId={machineId} day={day} queuePosition={gIdx + 1} />
-              ) : null}
+            <React.Fragment key={ganttCellItemKey(item)}>
+              {showSpacerBefore ? (
+                <ColumnDropSpacer
+                  machineId={machineId}
+                  day={day}
+                  queuePosition={idx === 0 ? qpBefore : qpAfterPrev}
+                  droppableId={`slot-${machineId}-day-${day}-before-${ganttCellItemKey(item)}`}
+                />
+              ) : (
+                <div style={{ minHeight: 5, height: 5, flexShrink: 0 }} aria-hidden />
+              )}
               <PlannerGanttStackedBar
                 item={item}
-                isDragging={activeDragItemId === item.operationId}
+                isDragging={activeDragItemKey === ganttCellItemKey(item)}
                 onSelect={onSelect}
                 barColor={plannerGanttBarColor(item.status)}
                 minBlockHeight={minBlockHeight}
               />
-              <ColumnDropSpacer machineId={machineId} day={day} queuePosition={gIdx + 2} />
+              <ColumnDropSpacer
+                machineId={machineId}
+                day={day}
+                queuePosition={gIdx + 2}
+                droppableId={`slot-${machineId}-day-${day}-after-${ganttCellItemKey(item)}`}
+              />
             </React.Fragment>
           );
         })

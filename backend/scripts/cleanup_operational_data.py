@@ -9,6 +9,10 @@ Use --dry-run for preview counts only.
 Does NOT delete: portfolio, technology templates, material library, machines,
 workplaces, employees, master libraries, machine_calendar,
 material_stock_items / product_stock_items rows.
+
+Material ledger (default --material-stock preserve): keeps all material movements and
+recomputes signed balances. Use --material-stock reset for a full wipe of movements
+and zeroed on-hand qty (test DB).
 """
 
 from __future__ import annotations
@@ -42,6 +46,14 @@ def main() -> None:
         help="Backward-compatible alias; cleanup is applied by default.",
     )
     parser.add_argument("--json", action="store_true", help="Print result as JSON.")
+    parser.add_argument(
+        "--material-stock",
+        choices=("preserve", "reset"),
+        default="preserve",
+        dest="material_stock_mode",
+        help="preserve: keep material movements, recompute signed qty (default). "
+        "reset: delete all material movements + zero balances.",
+    )
     args = parser.parse_args()
 
     db = SessionLocal()
@@ -49,15 +61,26 @@ def main() -> None:
         if args.dry_run:
             prev = preview_counts(db)
             if args.json:
-                print(json.dumps({"dry_run": True, "preview": prev}, indent=2, ensure_ascii=False))
+                print(
+                    json.dumps(
+                        {
+                            "dry_run": True,
+                            "material_stock_mode": args.material_stock_mode,
+                            "preview": prev,
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                )
             else:
                 print("=== DRY RUN (no deletes) — row counts that would be affected ===\n")
+                print(f"  material_stock_mode: {args.material_stock_mode}\n")
                 for k, v in sorted(prev.items()):
                     print(f"  {k}: {v}")
                 print("\nRun without --dry-run to delete operational data.")
             return
 
-        out = run_cleanup_operational_data(db, apply=True)
+        out = run_cleanup_operational_data(db, apply=True, material_stock_mode=args.material_stock_mode)
         if args.json:
             print(json.dumps(out, indent=2, ensure_ascii=False))
         else:

@@ -8,6 +8,7 @@ import {
 } from "../services/materialRequirementsApi";
 import { getProductionOrdersOverview, type ProductionOrderOverviewRow } from "../services/productionOrdersApi";
 import { getOrdersOverview, type OrdersOverviewRow } from "../services/ordersApi";
+import { formatProductionOrderOverviewOperationalStatus } from "../utils/productionOrderOverviewStatus";
 
 export type DashboardPageProps = {
   onOpenProductionOrder?: (productionOrderId: number, title?: string) => void;
@@ -182,10 +183,7 @@ function StateBadge({ label, tone }: { label: string; tone: "warn" | "ok" | "mut
 
 function formatPoStatusLine(po: ProductionOrderOverviewRow | null | undefined): string | null {
   if (!po) return null;
-  const wf = po.workflow_status?.trim();
-  const st = po.status?.trim();
-  if (wf && st) return `${wf} · ${st}`;
-  return wf || st || null;
+  return formatProductionOrderOverviewOperationalStatus(po);
 }
 
 function materialReleasedLabel(released: boolean | null | undefined): string | null {

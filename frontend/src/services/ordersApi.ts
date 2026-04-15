@@ -32,8 +32,9 @@ export type OrdersOverviewResponse = {
 export type OrdersOverviewOrderTypeFilter = "customer" | "internal" | "all";
 
 export type CustomerOrderCreatePayload = {
-  customer_id: number;
+  customer_id: number | null;
   customer_po_no: string;
+  order_type: "customer" | "internal";
   order_date: string;
   requested_ship_date: string | null;
   note: string | null;
@@ -208,12 +209,24 @@ export type AllocationPreviewLine = {
   from_stock_qty: number;
   to_production_qty: number;
   restock_qty: number;
+  /** sklad_zakaznik: min. doplnění + náhrada za hotové zboží pro zákazníka */
+  internal_replenishment_qty?: number;
   restock_wip: {
     quantity_open: number;
     production_order_ids: number[];
     vp_codes: string[];
   };
   needs_user_choice: boolean;
+  /** logistic_mode navázané portfolio položky řádku (backend). */
+  line_logistic_mode?: string | null;
+  /** Náhled počtů pro volbu „rezervovat WIP pro zákazníka“ (skladový VP se nemění). */
+  reserve_wip_plan?: {
+    reserved_qty: number;
+    customer_sklad_zakaznik_qty: number;
+    replenishment_internal_qty: number;
+    customer_vyroba_extra_qty: number;
+    stock_restock_vp_unchanged: boolean;
+  } | null;
 };
 
 export type AllocationPreviewResponse = {

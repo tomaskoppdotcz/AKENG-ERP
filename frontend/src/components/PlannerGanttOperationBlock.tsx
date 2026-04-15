@@ -18,13 +18,18 @@ function formatPlanInstant(iso: string | null | undefined): string {
 /** Tooltip — kompletní detail (název operace, časy, materiál, …). */
 export function plannerGanttHoverDetails(item: PlannerGanttItem): string {
   const mat = item.materialReady ? "Materiál: připraven" : "Materiál: čeká na vydání";
+  const segs = item.scheduleSegments;
+  const segHint =
+    segs && segs.length > 1
+      ? `Úsek ${(item.ganttSegmentIndex ?? 0) + 1} z ${segs.length} · `
+      : "";
   return [
     item.operationName,
     `Operace č. ${item.operationNo} · WP: ${item.workplaceCode || item.machineName}`,
     `VP: ${item.workOrderNo ?? "—"}`,
     `GPN: ${item.gpn ?? "—"}`,
     `Další WP: ${item.nextWorkplaceCode ?? "—"}`,
-    `Plán: ${formatPlanInstant(item.plannedStart)} → ${formatPlanInstant(item.plannedEnd)}`,
+    `${segHint}Plán (úsek): ${formatPlanInstant(item.plannedStart)} → ${formatPlanInstant(item.plannedEnd)}`,
     `Časy: setup ${item.setupTimeMin} min · práce ${item.laborTimeTotalMin} min · celkem ${item.totalOperationTimeMin} min`,
     `Qty: ${item.qty}`,
     mat,

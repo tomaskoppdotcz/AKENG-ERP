@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { akengFetch } from "../services/akengFetch";
+import { normalizeCzechKeyboardReaderNumeric } from "../utils/czCardReaderNormalize";
 
 const API_BASE = "http://127.0.0.1:8001";
 const KIOSK_CODE = "KIOSK_CTX_BETA_800";
@@ -38,14 +39,25 @@ export default function KioskPage() {
     const data: QueueResponse = await res.json();
     setMachineName(data.machine.name);
     setEmployeeName(data.employee?.name ?? "");
-    setQueue(data.queue ?? []);
+    const q = data.queue ?? [];
+    setQueue(q);
+    const runningStatuses = new Set(["bezi", "running"]);
+    const live = q.find((x) => runningStatuses.has(String(x.status || "").toLowerCase()));
+    setRunningOp((prev) => {
+      if (live) return live;
+      if (prev && q.some((x) => x.planning_operation_id === prev.planning_operation_id)) return prev;
+      return null;
+    });
   }
 
   async function loginCard(cardUid: string) {
     const res = await akengFetch(`${API_BASE}/kiosk/login-card`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kiosk_code: KIOSK_CODE, card_uid: cardUid }),
+      body: JSON.stringify({
+        kiosk_code: KIOSK_CODE,
+        card_uid: normalizeCzechKeyboardReaderNumeric(cardUid.trim()),
+      }),
     });
 
     if (!res.ok) {
@@ -64,6 +76,12 @@ export default function KioskPage() {
     if (!queue.length) return;
 
     const first = queue[0];
+    const runningStatuses = new Set(["bezi", "running"]);
+    const already = queue.find((x) => runningStatuses.has(String(x.status || "").toLowerCase()));
+    if (already) {
+      setRunningOp(already);
+      return;
+    }
 
     const res = await akengFetch(`${API_BASE}/kiosk/start-operation`, {
       method: "POST",

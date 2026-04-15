@@ -1,5 +1,45 @@
 import type { PlannerGanttItem } from "../services/plannerApi";
 
+/** Stabilní klíč pro řádek buňky (operace může mít více segmentů). */
+export function ganttCellItemKey(item: PlannerGanttItem): string {
+  const s = item.ganttSegmentIndex ?? 0;
+  return `${item.operationId}-${s}`;
+}
+
+/**
+ * Pro vykreslení Gantt buňky: jedna API položka → jeden nebo více řádků (segmentů).
+ * Zachová `scheduleSegments` pro detail panel.
+ */
+export function expandPlannerGanttItemsForCells(items: PlannerGanttItem[]): PlannerGanttItem[] {
+  const out: PlannerGanttItem[] = [];
+  for (const item of items) {
+    const segs = item.scheduleSegments;
+    if (!segs?.length) {
+      out.push({ ...item, ganttSegmentIndex: 0 });
+      continue;
+    }
+    if (segs.length === 1) {
+      const s = segs[0];
+      out.push({
+        ...item,
+        plannedStart: s.plannedStart ?? item.plannedStart,
+        plannedEnd: s.plannedEnd ?? item.plannedEnd,
+        ganttSegmentIndex: s.segmentIndex,
+      });
+      continue;
+    }
+    for (const s of segs) {
+      out.push({
+        ...item,
+        plannedStart: s.plannedStart ?? item.plannedStart,
+        plannedEnd: s.plannedEnd ?? item.plannedEnd,
+        ganttSegmentIndex: s.segmentIndex,
+      });
+    }
+  }
+  return out;
+}
+
 /** Lokální kalendářní den operace (YYYY-MM-DD) z plannedStart. */
 export function plannerItemStartDayKey(iso: string): string {
   const t = new Date(iso);
@@ -17,7 +57,8 @@ export function sortItemsInDayCell(a: PlannerGanttItem, b: PlannerGanttItem): nu
   const qa = a.queuePosition ?? 999999;
   const qb = b.queuePosition ?? 999999;
   if (qa !== qb) return qa - qb;
-  return a.operationId - b.operationId;
+  if (a.operationId !== b.operationId) return a.operationId - b.operationId;
+  return (a.ganttSegmentIndex ?? 0) - (b.ganttSegmentIndex ?? 0);
 }
 
 /** Globální pořadí na stroji (stejné kritérium jako buňka). */

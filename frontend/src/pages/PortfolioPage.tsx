@@ -43,6 +43,26 @@ function logisticLabel(mode: string | null | undefined): string {
   return "Výroba zákazník";
 }
 
+/** Pořadí variant pod jedním GPN: výroba → sklad zákazník → sklad (interní). */
+const LOGISTIC_MODE_SORT: Record<string, number> = {
+  vyroba_zakaznik: 0,
+  sklad_zakaznik: 1,
+  sklad: 2,
+};
+
+function sortPortfolioItemsByLogisticMode(a: PortfolioItem, b: PortfolioItem): number {
+  const oa = LOGISTIC_MODE_SORT[(a.logistic_mode ?? "").trim()] ?? 99;
+  const ob = LOGISTIC_MODE_SORT[(b.logistic_mode ?? "").trim()] ?? 99;
+  if (oa !== ob) return oa - ob;
+  return a.id - b.id;
+}
+
+function allSame<T>(items: PortfolioItem[], pick: (i: PortfolioItem) => T): boolean {
+  if (items.length <= 1) return true;
+  const first = pick(items[0]);
+  return items.every((i) => pick(i) === first);
+}
+
 function formatCzk(value: number | null | undefined): string {
   if (value == null) return "—";
   return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
@@ -62,6 +82,7 @@ export default function PortfolioPage({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [hoveredId, setHoveredId] = useState<number | null>(null);
+  const [expandedGpnKeys, setExpandedGpnKeys] = useState<Set<string>>(() => new Set());
   const [showForm, setShowForm] = useState(false);
   /** Režim úpravy existující položky (null = nová položka nebo kopie). */
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -196,6 +217,40 @@ export default function PortfolioPage({
     );
   }, [items, query]);
 
+  const portfolioGpnGroups = useMemo(() => {
+    const map = new Map<string, PortfolioItem[]>();
+    for (const item of filtered) {
+      const gpnRaw = (item.gpn ?? "").trim();
+      const gpnKey = gpnRaw.toLowerCase() || "—";
+      const key = `${item.customer_id}\0${gpnKey}`;
+      const arr = map.get(key);
+      if (arr) arr.push(item);
+      else map.set(key, [item]);
+    }
+    const groups: { key: string; items: PortfolioItem[] }[] = [];
+    for (const [key, rawItems] of map) {
+      groups.push({ key, items: [...rawItems].sort(sortPortfolioItemsByLogisticMode) });
+    }
+    groups.sort((a, b) => {
+      const ca = (a.items[0].customer_name ?? "").toLowerCase();
+      const cb = (b.items[0].customer_name ?? "").toLowerCase();
+      if (ca !== cb) return ca.localeCompare(cb, "cs");
+      const ga = (a.items[0].gpn ?? "").trim().toLowerCase();
+      const gb = (b.items[0].gpn ?? "").trim().toLowerCase();
+      return ga.localeCompare(gb, "cs");
+    });
+    return groups;
+  }, [filtered]);
+
+  function togglePortfolioGpnGroup(key: string) {
+    setExpandedGpnKeys((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
+  }
+
   const customerSelectHasCurrent = useMemo(() => {
     const id = Number(formCustomerId);
     if (!formCustomerId.trim() || !Number.isFinite(id) || id <= 0) return true;
@@ -204,19 +259,21 @@ export default function PortfolioPage({
 
   const kpi = useMemo(() => {
     const celkemPolozek = filtered.length;
-    const skupiny = new Set(filtered.map((i) => i.group_id).filter((v): v is number => v != null)).size;
+    const skupinyPortfolio = new Set(filtered.map((i) => i.group_id).filter((v): v is number => v != null)).size;
+    const skupinyGpn = portfolioGpnGroups.length;
     const sTechnologii = filtered.filter((i) => i.active_template_id != null).length;
     const bezTechnologie = filtered.filter((i) => i.active_template_id == null).length;
     const revize = "A / B / C";
 
     return [
       { label: "Celkem položek", value: String(celkemPolozek) },
-      { label: "Skupiny", value: String(skupiny) },
+      { label: "Skupiny GPN (řádky)", value: String(skupinyGpn) },
+      { label: "Skupiny portfolia", value: String(skupinyPortfolio) },
       { label: "Revize", value: revize },
       { label: "S technologií", value: String(sTechnologii) },
       { label: "Bez technologie", value: String(bezTechnologie) },
     ] as const;
-  }, [filtered]);
+  }, [filtered, portfolioGpnGroups.length]);
 
   const customerIdOptions = useMemo(
     () => Array.from(new Set(items.map((i) => i.customer_id))).sort((a, b) => a - b),
@@ -370,7 +427,7 @@ export default function PortfolioPage({
         <div
           style={{
             ...UI.summaryTilesGridSix,
-            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+            gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
             minWidth: 0,
             width: "100%",
           }}
@@ -562,6 +619,7 @@ export default function PortfolioPage({
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
+                    <th style={{ ...UI.th, width: 44, fontSize: 13, padding: "10px 6px" }} aria-label="Rozbalit varianty" />
                     {[
                       "GPN",
                       "Scan kód",
@@ -583,75 +641,184 @@ export default function PortfolioPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((item) => (
-                    <tr
-                      key={item.id}
-                      onClick={() => {
-                        if (onOpenItemInWorkspaceTab) onOpenItemInWorkspaceTab(item);
-                        else onOpenItemDetail?.(item);
-                      }}
-                      onMouseEnter={() => setHoveredId(item.id)}
-                      onMouseLeave={() => setHoveredId((id) => (id === item.id ? null : id))}
-                      style={{ cursor: "pointer", background: hoveredId === item.id ? "#eff6ff" : "#fff" }}
-                    >
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{dash(item.gpn)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.scan_code)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px" }}>{dash(item.name)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.customer_name)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.group_name)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.drawing_no)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.revision)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(item.material_default)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{logisticLabel(item.logistic_mode)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatCzk(item.sale_price_per_piece)}</td>
-                      <td
-                        style={{
-                          ...UI.td,
-                          padding: "10px 10px",
-                          whiteSpace: "nowrap",
-                          fontWeight: 900,
-                          color: item.active_template_id != null ? "#15803d" : "#dc2626",
-                        }}
-                      >
-                        {item.active_template_id != null ? "ANO" : "NE"}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button
-                          type="button"
-                          style={UI.buttons.secondary}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openCopyForm(item);
-                          }}
-                        >
-                          Kopírovat
-                        </button>
-                        <button
-                          type="button"
-                          style={UI.buttons.secondary}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openEditForm(item);
-                          }}
-                        >
-                          Upravit
-                        </button>
-                        <button
-                          type="button"
-                          style={UI.buttons.secondary}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(item.id);
-                          }}
-                        >
-                          Smazat
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {portfolioGpnGroups.map((g) => {
+                    const exp = expandedGpnKeys.has(g.key);
+                    const first = g.items[0];
+                    const variantSummary = g.items.map((i) => logisticLabel(i.logistic_mode)).join(" · ");
+                    const nameCell =
+                      g.items.length > 1 && !allSame(g.items, (i) => (i.name ?? "").trim())
+                        ? `${dash(first.name)} (+${g.items.length} variant)`
+                        : dash(first.name);
+                    const drawingCell = allSame(g.items, (i) => (i.drawing_no ?? "").trim())
+                      ? dash(first.drawing_no)
+                      : "různé";
+                    const revCell = allSame(g.items, (i) => (i.revision ?? "").trim())
+                      ? dash(first.revision)
+                      : "různé";
+                    const matCell = allSame(g.items, (i) => (i.material_default ?? "").trim())
+                      ? dash(first.material_default)
+                      : "různé";
+                    const priceCell = allSame(g.items, (i) => i.sale_price_per_piece)
+                      ? formatCzk(first.sale_price_per_piece)
+                      : "různé";
+                    const allTp = g.items.every((i) => i.active_template_id != null);
+                    const anyTp = g.items.some((i) => i.active_template_id != null);
+                    return (
+                      <React.Fragment key={g.key}>
+                        <tr style={{ background: "#f8fafc", borderLeft: "4px solid #0ea5e9" }}>
+                          <td style={{ ...UI.td, padding: "8px 6px", verticalAlign: "middle" }}>
+                            <button
+                              type="button"
+                              style={UI.buttons.secondary}
+                              onClick={() => togglePortfolioGpnGroup(g.key)}
+                              aria-expanded={exp}
+                              title={exp ? "Sbalit varianty logistiky" : "Rozbalit varianty logistiky"}
+                            >
+                              {exp ? "▼" : "▶"}
+                            </button>
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                            {dash(first.gpn)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", color: "#64748b" }}>
+                            {g.items.length > 1 ? `${g.items.length}×` : dash(first.scan_code)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px" }}>{nameCell}</td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                            {dash(first.customer_name)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(first.group_name)}</td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{drawingCell}</td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{revCell}</td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{matCell}</td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontSize: 12, fontWeight: 700 }}>
+                            {variantSummary}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{priceCell}</td>
+                          <td
+                            style={{
+                              ...UI.td,
+                              padding: "10px 10px",
+                              whiteSpace: "nowrap",
+                              fontWeight: 900,
+                              color: allTp ? "#15803d" : anyTp ? "#ca8a04" : "#dc2626",
+                            }}
+                          >
+                            {allTp ? "ANO" : anyTp ? "ČÁST." : "NE"}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", color: "#64748b", fontSize: 12 }}>
+                            Rozbalte řádek
+                          </td>
+                        </tr>
+                        {exp ? (
+                          <tr>
+                            <td colSpan={13} style={{ ...UI.td, background: "#fff", padding: 12 }}>
+                              <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8, color: "#0f172a" }}>
+                                Varianty logistiky (stejné GPN a zákazník)
+                              </div>
+                              <div style={{ overflowX: "auto" }}>
+                                <table style={{ ...UI.table, width: "100%" }}>
+                                  <thead>
+                                    <tr style={{ background: "#f1f5f9" }}>
+                                      {[
+                                        "Logistický režim",
+                                        "Scan kód",
+                                        "Název",
+                                        "Skupina",
+                                        "Výkres",
+                                        "Revize",
+                                        "Materiál",
+                                        "Prodejní cena / ks",
+                                        "Technologie",
+                                        "Akce",
+                                      ].map((h) => (
+                                        <th key={h} style={{ ...UI.th, fontSize: 11 }}>
+                                          {h}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {g.items.map((item) => (
+                                      <tr
+                                        key={item.id}
+                                        onClick={() => {
+                                          if (onOpenItemInWorkspaceTab) onOpenItemInWorkspaceTab(item);
+                                          else onOpenItemDetail?.(item);
+                                        }}
+                                        onMouseEnter={() => setHoveredId(item.id)}
+                                        onMouseLeave={() => setHoveredId((id) => (id === item.id ? null : id))}
+                                        style={{
+                                          cursor: "pointer",
+                                          background: hoveredId === item.id ? "#eff6ff" : "#fff",
+                                        }}
+                                      >
+                                        <td style={{ ...UI.td, fontWeight: 800, whiteSpace: "nowrap" }}>
+                                          {logisticLabel(item.logistic_mode)}
+                                        </td>
+                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.scan_code)}</td>
+                                        <td style={UI.td}>{dash(item.name)}</td>
+                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.group_name)}</td>
+                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.drawing_no)}</td>
+                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.revision)}</td>
+                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.material_default)}</td>
+                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{formatCzk(item.sale_price_per_piece)}</td>
+                                        <td
+                                          style={{
+                                            ...UI.td,
+                                            whiteSpace: "nowrap",
+                                            fontWeight: 900,
+                                            color: item.active_template_id != null ? "#15803d" : "#dc2626",
+                                          }}
+                                        >
+                                          {item.active_template_id != null ? "ANO" : "NE"}
+                                        </td>
+                                        <td
+                                          style={{
+                                            ...UI.td,
+                                            whiteSpace: "nowrap",
+                                            display: "flex",
+                                            gap: 6,
+                                            flexWrap: "wrap",
+                                          }}
+                                          onClick={(e) => e.stopPropagation()}
+                                        >
+                                          <button
+                                            type="button"
+                                            style={UI.buttons.secondary}
+                                            onClick={() => openCopyForm(item)}
+                                          >
+                                            Kopírovat
+                                          </button>
+                                          <button
+                                            type="button"
+                                            style={UI.buttons.secondary}
+                                            onClick={() => openEditForm(item)}
+                                          >
+                                            Upravit
+                                          </button>
+                                          <button
+                                            type="button"
+                                            style={UI.buttons.secondary}
+                                            onClick={() => handleDelete(item.id)}
+                                          >
+                                            Smazat
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={12} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td colSpan={13} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                         Žádné výsledky.
                       </td>
                     </tr>

@@ -2,6 +2,7 @@ import React from "react";
 import { useDraggable } from "@dnd-kit/core";
 import type { PlannerGanttItem } from "../services/plannerApi";
 import { PlannerGanttOperationBlock, plannerGanttHoverDetails } from "./PlannerGanttOperationBlock";
+import { ganttCellItemKey } from "./plannerGanttDayUtils";
 
 export type PlannerGanttStackedBarProps = {
   item: PlannerGanttItem;
@@ -20,7 +21,7 @@ export function PlannerGanttStackedBar({
   minBlockHeight,
 }: PlannerGanttStackedBarProps) {
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
-    id: `op-${item.operationId}`,
+    id: `op-${ganttCellItemKey(item)}`,
     data: {
       type: "planning-operation",
       item,

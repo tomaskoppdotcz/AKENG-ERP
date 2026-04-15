@@ -1,11 +1,12 @@
 import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from app.models.master_data import Machine
 from app.models.planning import PlanningOperation, MachineCalendar, MachineSchedule, PlanningScheduleSegment
 from app.models.orders import ProductionOrder
 from app.models.technology_library import TechnologyTemplate
@@ -53,6 +54,81 @@ _RESERVE_WINDOW_NAME_KEYS = (
 # Nelze automaticky vložit do kapacity před manufacturing_deadline / expedition — další běh plánovače zkusí znovu.
 SCHEDULING_LATE_STATUS = "scheduling_late"
 
+# Okno machine_calendar, které musí existovat, aby _place_one_operation nezačínalo až „prvním existujícím“ dnem v DB.
+PLANNING_CALENDAR_HORIZON_DAYS = 420
+_DEFAULT_CALENDAR_SHIFT_START_MINUTES = 6 * 60
+
+
+def ensure_machine_calendar_horizon_for_planning(
+    db: Session,
+    *,
+    from_date: date,
+    machine_ids: set[int],
+    horizon_days: int = PLANNING_CALENDAR_HORIZON_DAYS,
+) -> int:
+    """
+    Doplní chybějící řádky machine_calendar pro [from_date, from_date+horizon] u daných strojů.
+
+    Bez toho _get_machine_days vrací první řádek až za dírou (např. až zítra) a plánovač začíná
+    další den v 06:00 i při volné kapacitě dnes — uživatel musel ručně přegenerovat kalendář.
+
+    Existující řádky se NEPŘEPISUJÍ (available_minutes / shift_start zůstávají; šablony řeší
+    apply_shift_templates_to_calendar_window při změně kapacity).
+    """
+    if not machine_ids:
+        return 0
+    mid_list = sorted(int(x) for x in machine_ids)
+    to_date = from_date + timedelta(days=max(0, int(horizon_days)))
+    machines = {
+        int(m.id): m
+        for m in db.scalars(select(Machine).where(Machine.id.in_(mid_list))).all()
+    }
+    existing: set = set()
+    for mid, cal_d in db.execute(
+        select(MachineCalendar.machine_id, MachineCalendar.calendar_date).where(
+            MachineCalendar.machine_id.in_(mid_list),
+            MachineCalendar.calendar_date >= from_date,
+            MachineCalendar.calendar_date <= to_date,
+        )
+    ).all():
+        existing.add((int(mid), cal_d))
+
+    added = 0
+    d = from_date
+    while d <= to_date:
+        for mid in mid_list:
+            if (mid, d) in existing:
+                continue
+            m = machines.get(mid)
+            avail_default = int(getattr(m, "default_shift_minutes", None) or 450) if m is not None else 450
+            db.add(
+                MachineCalendar(
+                    machine_id=mid,
+                    calendar_date=d,
+                    available_minutes=avail_default,
+                    shift_start_minutes=_DEFAULT_CALENDAR_SHIFT_START_MINUTES,
+                    planned_minutes=0,
+                    maintenance_minutes=0,
+                    reserved_minutes=0,
+                    is_working_day=bool(avail_default > 0),
+                    is_machine_available=True,
+                    note=None,
+                )
+            )
+            existing.add((mid, d))
+            added += 1
+        d += timedelta(days=1)
+    if added:
+        db.flush()
+        logger.info(
+            "[planning_engine] ensure_machine_calendar_horizon added=%s window=%s..%s machines=%s",
+            added,
+            from_date.isoformat(),
+            to_date.isoformat(),
+            len(mid_list),
+        )
+    return added
+
 
 def _chain_terminal_completed(status: str | None) -> bool:
     return planning_operation_status_is_terminal(status)
@@ -92,6 +168,18 @@ class PlanningEngineService:
 
     def _combine_shift_start(self, d: date) -> datetime:
         return datetime.combine(d, time(hour=6, minute=0))
+
+    @staticmethod
+    def _normalize_runtime_dt(value: datetime | None) -> datetime | None:
+        """
+        Canonical planner/runtime datetime: naive UTC.
+        Accept both timezone-aware and naive values and normalize before comparisons.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
 
     def _shift_start_datetime(self, day: MachineCalendar) -> datetime:
         """Začátek směny pro řádek kalendáře; NULL shift_start_minutes = legacy 06:00."""
@@ -269,7 +357,7 @@ class PlanningEngineService:
         buf: timedelta,
     ) -> datetime:
         """Posune řetězec VP o konec operace (+ mezioperační buffer). Používá actual_end, jinak planned_end."""
-        end = op.actual_end or op.planned_end
+        end = self._normalize_runtime_dt(op.actual_end or op.planned_end)
         if end is None:
             return chain_cursor
         return max(chain_cursor, end + buf)
@@ -282,7 +370,7 @@ class PlanningEngineService:
         for op in ordered:
             if not _chain_terminal_completed(op.status):
                 continue
-            end = op.actual_end or op.planned_end
+            end = self._normalize_runtime_dt(op.actual_end or op.planned_end)
             if end is None:
                 continue
             cand = end + buf
@@ -493,6 +581,7 @@ class PlanningEngineService:
 
             if current_pointer is None:
                 current_pointer = shift_start + timedelta(minutes=planned)
+            earliest_inside_shift = shift_start <= earliest_start < shift_end
             if not op_has_started:
                 current_pointer = max(current_pointer, earliest_start)
             wc_floor = self._earliest_wall_clock_floor_for_calendar_day(day.calendar_date, day)
@@ -502,8 +591,7 @@ class PlanningEngineService:
             if (
                 wc_floor is not None
                 and shift_end > shift_start
-                and earliest_start.date() == day.calendar_date
-                and earliest_start < shift_end
+                and earliest_inside_shift
                 and wc_floor >= shift_end
             ):
                 wc_floor = None
@@ -514,6 +602,10 @@ class PlanningEngineService:
                 current_pointer = None
                 continue
 
+            # Pokud earliest_start leží uvnitř směny, nesmí nás wall-clock floor vytlačit za konec směny
+            # a způsobit přeskočení dne při dostupné dnešní kapacitě.
+            if current_pointer >= shift_end and not op_has_started and earliest_inside_shift:
+                current_pointer = max(shift_start, earliest_start)
             if current_pointer >= shift_end:
                 day_index += 1
                 current_pointer = None
@@ -711,6 +803,11 @@ class PlanningEngineService:
             flush=True,
         )
 
+        machine_ids_for_calendar = {int(o.machine_id) for o in all_ops if o.machine_id is not None}
+        ensure_machine_calendar_horizon_for_planning(
+            self.db, from_date=from_date, machine_ids=machine_ids_for_calendar
+        )
+
         protect_ids = [int(o.id) for o in all_ops if _shopfloor_active(o.status)]
         if protect_ids:
             self.db.execute(
@@ -746,6 +843,9 @@ class PlanningEngineService:
             if not _shopfloor_active(op.status) or op.machine_id is None:
                 continue
             end = op.actual_end or op.planned_end
+            if end is None:
+                continue
+            end = self._normalize_runtime_dt(end)
             if end is None:
                 continue
             mid = int(op.machine_id)
@@ -823,6 +923,8 @@ class PlanningEngineService:
                 if _shopfloor_active(op.status):
                     end = op.actual_end or op.planned_end
                     chain_cursor = self._bump_chain_cursor_after_op_end(chain_cursor, op, buf=buf)
+                    if end is not None:
+                        end = self._normalize_runtime_dt(end)
                     if end is not None:
                         mid_a = int(op.machine_id)
                         machine_next[mid_a] = max(machine_next.get(mid_a, floor), end)

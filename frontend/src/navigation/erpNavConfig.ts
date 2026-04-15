@@ -42,6 +42,7 @@ export const ERP_NAV_GROUPS: ErpNavGroup[] = [
     label: "Výroba",
     items: [
       { label: "Výrobní příkazy", moduleKey: "Výroba", tabTitle: "Výrobní příkazy" },
+      { label: "Výkazy práce", moduleKey: "Výroba výkazy", tabTitle: "Výkazy práce" },
       { label: "Kiosk", moduleKey: "Kiosk" },
     ],
   },
@@ -68,6 +69,7 @@ export const ERP_NAV_GROUPS: ErpNavGroup[] = [
     label: "Kmenová data",
     items: [
       { label: "Pracoviště", moduleKey: "Pracoviště", tabTitle: "Pracoviště" },
+      { label: "Zaměstnanci", moduleKey: "Zaměstnanci", tabTitle: "Zaměstnanci" },
       { label: "Knihovna operací", moduleKey: "Knihovna operací", tabTitle: "Knihovna operací" },
       { label: "Stroje", moduleKey: "Stroje", tabTitle: "Stroje" },
       { label: "Sklady", moduleKey: "Sklad lokace", tabTitle: "Sklady" },

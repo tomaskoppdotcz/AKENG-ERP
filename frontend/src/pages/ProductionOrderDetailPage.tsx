@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
-import ProductionOrderLocationContext from "../components/ProductionOrderLocationContext";
 import SimpleModal from "../components/SimpleModal";
 import { UI } from "../styles/ui";
-import { buildProductionOrderLocationSummary } from "../utils/productionOrderLocationUi";
+import { buildProductionOrderDetailHeaderModel, vpHeaderBadgeStyle } from "../utils/productionOrderDetailHeader";
 import {
   getProductionOrderDetail,
   openProductionOrderPdfInNewTab,
@@ -42,29 +41,17 @@ type Props = {
   onPreviewPortfolioById?: (portfolioItemId: number) => void;
 };
 
-function labelLogisticMode(v: string | null | undefined): string {
-  if (!v) return "—";
-  if (v === "sklad") return "Sklad";
-  if (v === "sklad_zakaznik") return "Sklad -> zákazník";
-  if (v === "vyroba_zakaznik") return "Výroba -> zákazník";
-  return v;
-}
-
-function labelSourceType(v: string | null | undefined): string {
-  if (!v) return "—";
-  if (v === "stock_allocation") return "Ze skladu";
-  if (v === "order_allocation") return "Výroba pro zakázku";
-  if (v === "restock_allocation") return "Doplnění skladu";
-  return v;
-}
-
-function labelOrderType(v: string | null | undefined): string {
-  return v === "internal" ? "Interní zakázka" : "Zakázka";
-}
-
 function isBusinessWorkflowActive(status: string | null | undefined): boolean {
   const s = String(status ?? "").trim().toLowerCase();
   return !s || s === "active";
+}
+
+/** Log-derived operation progress; canonical planned | bezi | hotovo. */
+function labelVpOperationProgress(st: string | null | undefined): string {
+  const s = String(st ?? "").trim().toLowerCase();
+  if (s === "hotovo") return "Hotovo";
+  if (s === "bezi") return "Běží";
+  return "Naplánováno";
 }
 
 export default function ProductionOrderDetailPage({
@@ -96,6 +83,7 @@ export default function ProductionOrderDetailPage({
   const canProductionExecute = canPerformAction(erpRole, "production.execute");
   const canProductionStorno = canPerformAction(erpRole, "production.storno");
   const canStockMutate = canPerformAction(erpRole, "stock.mutate");
+  const poWorkflowActive = isBusinessWorkflowActive(data?.workflow_status);
 
   async function loadDetail() {
     setLoading(true);
@@ -226,31 +214,7 @@ export default function ProductionOrderDetailPage({
     );
   }
 
-  const poWorkflowActive = isBusinessWorkflowActive(data.workflow_status);
-  const locationSummary = useMemo(
-    () => buildProductionOrderLocationSummary(data.operations),
-    [data.operations]
-  );
-  const summary: Array<[string, string]> = [
-    ["VP", data.vp_code],
-    [labelOrderType(data.order_type), data.zakazka ?? "—"],
-    ["Číslo objednávky", data.customer_order_no?.trim() ? data.customer_order_no : "—"],
-    ["Řádek", data.line_no != null ? String(data.line_no) : "—"],
-    ["GPN", data.gpn ?? "—"],
-    ["Název", data.description ?? "—"],
-    ["Portfolio varianta", data.portfolio_item_name ? `${data.portfolio_item_name} (ID ${data.portfolio_item_id})` : "—"],
-    ["Logistický režim", labelLogisticMode(data.logistic_mode)],
-    [
-      "Typ zdroje",
-      data.restock_redirected_from_internal
-        ? `${labelSourceType(data.source_type)} · Přesměrováno ze skladu`
-        : labelSourceType(data.source_type),
-    ],
-    ["Stav VP", data.status ?? "—"],
-    ["Workflow", data.workflow_status?.trim() ? data.workflow_status : "active"],
-    ["Množství", `${data.quantity} ks`],
-  ];
-  const zakazkaTileLabel = labelOrderType(data.order_type);
+  const headerModel = buildProductionOrderDetailHeaderModel(data);
 
   return (
     <div style={UI.container}>
@@ -272,9 +236,51 @@ export default function ProductionOrderDetailPage({
               </div>
             ) : null
           }
-          title="Detail výrobního příkazu"
-          subtitle="Karta VP a navázaný technologický postup"
-          context={<ProductionOrderLocationContext summary={locationSummary} />}
+          title={
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10 }}>
+              <span style={UI.pageTitle}>Výrobní příkaz</span>
+              <span style={{ fontSize: 22, fontWeight: 1000, color: "#334155" }}>{data.vp_code}</span>
+            </div>
+          }
+          subtitle={headerModel.headlineSentence}
+          headerAside={
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+              <span style={vpHeaderBadgeStyle(headerModel.mainStatusTone)}>{headerModel.mainStatusLabel}</span>
+              <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a", letterSpacing: "0.02em" }}>
+                Postup: {headerModel.progressLine}
+              </div>
+            </div>
+          }
+          context={
+            <div>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: "#64748b",
+                  marginBottom: 10,
+                  letterSpacing: "0.06em",
+                }}
+              >
+                POLOHA VE V\u00ddROB\u011b
+              </div>
+              <div style={UI.detailPageHeaderContextGrid}>
+                {(
+                  [
+                    ["Pracoviště (kde je díl)", headerModel.workplaceWherePartIs],
+                    ["Aktuální operace", headerModel.currentOperationLine],
+                    ["Následující operace", headerModel.nextOperationLine],
+                    ["Poté", headerModel.afterNextLine],
+                  ] as const
+                ).map(([label, val]) => (
+                  <div key={label}>
+                    <div style={UI.statLabel}>{label}</div>
+                    <div style={UI.statValue}>{val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          }
           actions={
             <>
               <button
@@ -332,35 +338,80 @@ export default function ProductionOrderDetailPage({
             </>
           }
           summaryTiles={
-            <div style={UI.summaryTilesGrid}>
-              {summary.map(([k, v]) => (
-                <div key={k} style={{ ...UI.summaryTile, flex: "1 1 220px" }}>
-                  <div style={UI.summaryTileLabel}>{k}</div>
-                  <div style={{ ...UI.summaryTileValue, fontSize: 18 }}>
-                    {k === "GPN" &&
-                    data.portfolio_item_id != null &&
-                    onOpenPortfolioItemId &&
-                    v !== "—" ? (
-                      <button type="button" style={linkButtonReset} onClick={() => onOpenPortfolioItemId(data.portfolio_item_id!)}>
-                        {v}
-                      </button>
-                    ) : k === zakazkaTileLabel &&
-                      data.customer_order_id != null &&
-                      onOpenCustomerOrderCard &&
-                      v !== "—" ? (
-                      <button
-                        type="button"
-                        style={linkButtonReset}
-                        onClick={() => onOpenCustomerOrderCard(data.customer_order_id!)}
-                      >
-                        {v}
-                      </button>
-                    ) : (
-                      v
-                    )}
-                  </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 18, width: "100%" }}>
+              <div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 900,
+                    color: "#64748b",
+                    marginBottom: 10,
+                    letterSpacing: "0.06em",
+                  }}
+                >
+                  IDENTIFIKACE A OBJEDNÁVKA
                 </div>
-              ))}
+                <div
+                  style={{
+                    ...UI.detailPageHeaderContextGrid,
+                    gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))",
+                  }}
+                >
+                  {headerModel.rowIdentifiers.map((row) => (
+                    <div key={row.key} style={{ minWidth: 0 }}>
+                      <div style={UI.summaryTileLabel}>{row.label}</div>
+                      <div style={{ ...UI.summaryTileValue, fontSize: 17 }}>
+                        {row.key === "gpn" &&
+                        data.portfolio_item_id != null &&
+                        onOpenPortfolioItemId &&
+                        row.value !== "—" ? (
+                          <button
+                            type="button"
+                            style={linkButtonReset}
+                            onClick={() => onOpenPortfolioItemId(data.portfolio_item_id!)}
+                          >
+                            {row.value}
+                          </button>
+                        ) : row.key === "zakazka" &&
+                          data.customer_order_id != null &&
+                          onOpenCustomerOrderCard &&
+                          row.value !== "—" ? (
+                          <button
+                            type="button"
+                            style={linkButtonReset}
+                            onClick={() => onOpenCustomerOrderCard(data.customer_order_id!)}
+                          >
+                            {row.value}
+                          </button>
+                        ) : (
+                          row.value
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 900,
+                    color: "#64748b",
+                    marginBottom: 10,
+                    letterSpacing: "0.06em",
+                  }}
+                >
+                  PORTFOLIO A ZDROJ
+                </div>
+                <div style={UI.detailPageHeaderContextGrid}>
+                  {headerModel.rowSource.map((row) => (
+                    <div key={row.key} style={{ minWidth: 0 }}>
+                      <div style={UI.summaryTileLabel}>{row.label}</div>
+                      <div style={{ ...UI.summaryTileValue, fontSize: 17 }}>{row.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           }
         />
@@ -405,9 +456,7 @@ export default function ProductionOrderDetailPage({
                       <td style={UI.td}>{op.workplace_name ?? "—"}</td>
                       <td style={UI.td}>{op.setup_time_min}</td>
                       <td style={UI.td}>{op.run_min_per_piece}</td>
-                      <td style={UI.td}>
-                        {op.operation_status === "done" ? "done" : op.operation_status === "in_progress" ? "in_progress" : "planned"}
-                      </td>
+                      <td style={UI.td}>{labelVpOperationProgress(op.operation_status)}</td>
                       <td style={UI.td}>
                         OK {op.reported_ok_qty_total ?? 0} / NOK {op.reported_nok_qty_total ?? 0} / {op.reported_minutes_total ?? 0} min
                       </td>

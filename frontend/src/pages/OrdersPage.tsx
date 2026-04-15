@@ -111,6 +111,7 @@ export default function OrdersPage(_props: Props) {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [formOrderType, setFormOrderType] = useState<"customer" | "internal">("customer");
   const [formCustomerId, setFormCustomerId] = useState("");
   const [formCustomerPoNo, setFormCustomerPoNo] = useState("");
   const [formOrderDate, setFormOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -206,6 +207,7 @@ export default function OrdersPage(_props: Props) {
   function openCreateForm() {
     setShowCreateForm(true);
     setCreateError(null);
+    setFormOrderType("customer");
     const firstActive = customers.find((c) => c.is_active) ?? customers[0];
     setFormCustomerId(firstActive ? String(firstActive.id) : "");
     setFormCustomerPoNo("");
@@ -215,13 +217,14 @@ export default function OrdersPage(_props: Props) {
   }
 
   async function handleCreateOrder() {
+    const orderType = formOrderType;
     const customerId = Number(formCustomerId);
     const poNo = formCustomerPoNo.trim();
-    if (!Number.isFinite(customerId) || customerId <= 0) {
+    if (orderType === "customer" && (!Number.isFinite(customerId) || customerId <= 0)) {
       setCreateError("Vyberte zákazníka.");
       return;
     }
-    if (!poNo) {
+    if (orderType === "customer" && !poNo) {
       setCreateError("Vyplňte číslo objednávky zákazníka.");
       return;
     }
@@ -233,8 +236,9 @@ export default function OrdersPage(_props: Props) {
     setCreateError(null);
     try {
       const created = await createCustomerOrder({
-        customer_id: customerId,
+        customer_id: orderType === "customer" ? customerId : null,
         customer_po_no: poNo,
+        order_type: orderType,
         order_date: formOrderDate,
         requested_ship_date: formShipDate.trim() || null,
         note: formNote.trim() || null,
@@ -263,7 +267,6 @@ export default function OrdersPage(_props: Props) {
               type="button"
               style={UI.buttons.primary}
               onClick={openCreateForm}
-              disabled={customersLoading || customers.length === 0}
             >
               Nová zakázka
             </button>
@@ -313,6 +316,14 @@ export default function OrdersPage(_props: Props) {
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Nová zakázka</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
               <div>
+                <div style={UI.inputs.label}>Typ zakázky</div>
+                <select value={formOrderType} onChange={(e) => setFormOrderType(e.target.value as "customer" | "internal")} style={UI.inputs.base}>
+                  <option value="customer">Zákaznická</option>
+                  <option value="internal">Interní</option>
+                </select>
+              </div>
+              {formOrderType === "customer" ? (
+                <div>
                 <div style={UI.inputs.label}>Zákazník</div>
                 <select
                   value={formCustomerId}
@@ -327,9 +338,10 @@ export default function OrdersPage(_props: Props) {
                     </option>
                   ))}
                 </select>
-              </div>
+                </div>
+              ) : null}
               <div>
-                <div style={UI.inputs.label}>Číslo objednávky zákazníka</div>
+                <div style={UI.inputs.label}>{formOrderType === "customer" ? "Číslo objednávky zákazníka" : "Interní reference (volitelné)"}</div>
                 <input value={formCustomerPoNo} onChange={(e) => setFormCustomerPoNo(e.target.value)} style={UI.inputs.base} />
               </div>
               <div>

@@ -266,27 +266,74 @@ export async function updateEmployeeSubgroup(
 
 export type EmployeeMasterRow = {
   id: number;
+  employee_code: string;
   first_name: string | null;
   last_name: string | null;
+  full_name: string;
   name: string;
-  employee_code: string;
-  card_uid: string;
+  phone: string | null;
+  email: string | null;
+  street: string | null;
+  city: string | null;
+  postal_code: string | null;
+  country: string | null;
+  birth_date: string | null;
+  job_title: string | null;
+  is_active: boolean;
+  can_use_kiosk: boolean;
+  cost_rate_per_hour: number | null;
+  note: string | null;
+  chip_card_uid: string | null;
+  card_uid: string | null;
+  scan_code: string | null;
+  pin_is_set: boolean;
+  has_chip_login: boolean;
+  has_pin_login: boolean;
+  has_scan_login: boolean;
   employee_subgroup_id: number | null;
   subgroup_name: string | null;
-  is_active: boolean;
 };
 
 export type EmployeeMasterPayload = {
   first_name: string;
   last_name: string;
   employee_code: string;
-  card_uid: string;
+  chip_card_uid?: string | null;
+  card_uid?: string | null;
+  scan_code?: string | null;
+  pin_code?: string | null;
+  clear_pin?: boolean;
+  phone?: string | null;
+  email?: string | null;
+  street?: string | null;
+  city?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
+  birth_date?: string | null;
+  job_title?: string | null;
   employee_subgroup_id: number | null;
   is_active: boolean;
+  can_use_kiosk: boolean;
+  cost_rate_per_hour: number | null;
+  note?: string | null;
 };
 
-export async function getEmployeesMaster(): Promise<EmployeeMasterRow[]> {
-  const res = await akengFetch(`${API_BASE}/master-data/employees`);
+export type EmployeeListActiveFilter = "all" | "active" | "inactive";
+
+export async function getEmployeesMaster(
+  active: EmployeeListActiveFilter = "all"
+): Promise<EmployeeMasterRow[]> {
+  const u = new URL(`${API_BASE}/master-data/employees`);
+  if (active !== "all") u.searchParams.set("active", active);
+  const res = await akengFetch(u.toString());
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se načíst zaměstnance."));
+  }
+  return res.json();
+}
+
+export async function getEmployeeMaster(id: number): Promise<EmployeeMasterRow> {
+  const res = await akengFetch(`${API_BASE}/master-data/employees/${id}`);
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst zaměstnance."));
   }
@@ -316,6 +363,29 @@ export async function updateEmployeeMaster(
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se upravit zaměstnance."));
+  }
+  return res.json();
+}
+
+export async function patchEmployeeMasterActive(
+  id: number,
+  is_active: boolean
+): Promise<EmployeeMasterRow> {
+  const res = await akengFetch(`${API_BASE}/master-data/employees/${id}/active`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_active }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se změnit stav zaměstnance."));
+  }
+  return res.json();
+}
+
+export async function deleteEmployeeMaster(id: number): Promise<{ status: string; detail?: string }> {
+  const res = await akengFetch(`${API_BASE}/master-data/employees/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Nepodařilo se smazat zaměstnance."));
   }
   return res.json();
 }
