@@ -406,6 +406,7 @@ def _run_pause(
     note: str | None,
 ) -> dict:
     session = _get_active_session(db, kiosk.id)
+    emp = db.get(Employee, int(session.employee_id))
     machine = db.get(Machine, int(kiosk.machine_id))
     if not machine:
         raise HTTPException(status_code=404, detail="Stroj pro kiosk nenalezen.")
@@ -419,6 +420,7 @@ def _run_pause(
         op,
         machine=machine,
         employee_id=int(session.employee_id),
+        operator_display=emp.name if emp else None,
         pause_reason=merged_reason,
         note=note,
         source=SOURCE_PC_KIOSK,
@@ -434,6 +436,7 @@ def _run_pause(
 
 def _run_resume(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
     session = _get_active_session(db, kiosk.id)
+    emp = db.get(Employee, int(session.employee_id))
     machine = db.get(Machine, int(kiosk.machine_id))
     if not machine:
         raise HTTPException(status_code=404, detail="Stroj pro kiosk nenalezen.")
@@ -446,6 +449,7 @@ def _run_resume(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
         op,
         machine=machine,
         employee_id=int(session.employee_id),
+        operator_display=emp.name if emp else None,
         source=SOURCE_PC_KIOSK,
         actor=f"employee:{session.employee_id}",
     )
@@ -455,6 +459,7 @@ def _run_resume(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
 
 def _run_done(kiosk: Kiosk, planning_operation_id: int, qty_ok: int, qty_nok: int, note: str | None, db: Session) -> dict:
     session = _get_active_session(db, kiosk.id)
+    emp = db.get(Employee, int(session.employee_id))
     machine = db.get(Machine, int(kiosk.machine_id))
     if not machine:
         raise HTTPException(status_code=404, detail="Stroj pro kiosk nenalezen.")
@@ -467,6 +472,7 @@ def _run_done(kiosk: Kiosk, planning_operation_id: int, qty_ok: int, qty_nok: in
         op,
         machine=machine,
         employee_id=int(session.employee_id),
+        operator_display=emp.name if emp else None,
         qty_ok=int(qty_ok or 0),
         qty_nok=int(qty_nok or 0),
         note=note,

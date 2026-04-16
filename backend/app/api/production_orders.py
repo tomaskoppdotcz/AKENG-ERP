@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -28,6 +28,7 @@ from app.models.portfolio import (
     PortfolioTechnologyTemplateMaterial,
     PortfolioTechnologyTemplateOperation,
 )
+from app.models.planning import PlanningOperation
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.restock_wip_reservation import RestockWipReservation
 from app.services.business_workflow import WORKFLOW_STATUS_CANCELLED, workflow_active_sql, workflow_record_active
@@ -43,6 +44,9 @@ from app.services.production_order_operation_runtime import (
     operation_nos_for_production_order,
     operation_statuses_for_production_order,
 )
+from app.services.planning_engine import PlanningEngineService
+from app.services.planning_operation_status import normalize_planning_operation_status
+from app.services.vp_operation_generator import regenerate_single_production_order_from_tp
 
 # Rezervace materiálu z TP se synchronizují z orders (vytvoření/úprava VP, řádky zakázky) a z portfolio (vstupy TP).
 # Tento modul nemění portfolio ani množství VP tak, aby bylo potřeba zde spouštět přepočet rezervací.
@@ -259,7 +263,10 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
         .where(PortfolioTechnologyTemplateOperation.template_id == int(tpl.id))
         .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc(), PortfolioTechnologyTemplateOperation.id.asc())
     ).all()
-    tp_op_nos = {int(op.operation_no) for op in tpl_ops}
+    normalized_tpl_ops: list[tuple[int, PortfolioTechnologyTemplateOperation]] = [
+        ((idx + 1) * 10, op) for idx, op in enumerate(tpl_ops)
+    ]
+    tp_op_nos = {int(no) for no, _ in normalized_tpl_ops}
     stale_rows = db.scalars(
         select(ProductionOrderOperation).where(
             ProductionOrderOperation.production_order_id == int(po.id)
@@ -269,11 +276,11 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
         if int(stale.operation_no) not in tp_op_nos:
             db.delete(stale)
     db.flush()
-    for op in tpl_ops:
+    for effective_no, op in normalized_tpl_ops:
         ex = db.scalar(
             select(ProductionOrderOperation).where(
                 ProductionOrderOperation.production_order_id == int(po.id),
-                ProductionOrderOperation.operation_no == int(op.operation_no),
+                ProductionOrderOperation.operation_no == int(effective_no),
             )
         )
         if ex is None:
@@ -285,7 +292,7 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
                     wname = wp_lib.name
             row = ProductionOrderOperation(
                 production_order_id=int(po.id),
-                operation_no=int(op.operation_no),
+                operation_no=int(effective_no),
                 operation_name=op.operation_name,
                 workplace_name=wname,
                 workplace_library_item_id=int(wid) if wid is not None else None,
@@ -293,6 +300,10 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
             db.add(row)
             db.flush()
             row.scan_code = production_order_operation_scan_code_for_id(int(row.id))
+        else:
+            # Keep VP operation scans aligned with current TP order and continuous numbering (10,20,30,...).
+            if int(ex.operation_no) != int(effective_no):
+                ex.operation_no = int(effective_no)
 
 
 @router.get("")
@@ -474,6 +485,41 @@ def storno_production_order(
     db.commit()
     db.refresh(po)
     return {"status": "ok", "production_order_id": int(po.id)}
+
+
+@router.post("/{production_order_id}/regenerate-from-tp")
+def regenerate_one_production_order_from_tp(
+    production_order_id: int,
+    db: Session = Depends(get_db),
+    _rbac: None = Depends(require_action("production.execute")),
+):
+    po = db.get(ProductionOrder, int(production_order_id))
+    if po is None:
+        raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    if not workflow_record_active(po):
+        raise HTTPException(status_code=409, detail="Výrobní příkaz je stornován.")
+
+    ops = db.scalars(
+        select(PlanningOperation).where(PlanningOperation.work_order_no == (po.vp_code or "").strip())
+    ).all()
+    has_completed = any(normalize_planning_operation_status(o.status) == "hotovo" for o in ops)
+    has_running = any(normalize_planning_operation_status(o.status) == "bezi" for o in ops)
+    if has_completed or has_running:
+        raise HTTPException(
+            status_code=409,
+            detail="Nelze přegenerovat VP: obsahuje dokončené nebo běžící operace. Nejprve je vraťte do plánovaného stavu.",
+        )
+
+    out = regenerate_single_production_order_from_tp(db, po)
+    planner_rows = PlanningEngineService(db).rebuild_global_schedules(date.today())
+    db.commit()
+    return {
+        "status": "ok",
+        "production_order_id": int(po.id),
+        "vp_code": po.vp_code,
+        "regenerate": out,
+        "planner_rows": len(planner_rows),
+    }
 
 
 @router.post("/{production_order_id}/receive-to-stock")

@@ -21,7 +21,7 @@ import unicodedata
 from datetime import datetime
 from typing import Literal
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.scan_code import product_stock_scan_code_for_id
@@ -29,6 +29,7 @@ from app.models.master_data import Machine
 from app.models.master_libraries import WorkplaceLibraryItem
 from app.models.orders import ProductionOrder
 from app.models.planning import PlanningOperation
+from app.models.portfolio import PortfolioItem
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.services.business_workflow import workflow_record_active
 from app.services.restock_wip_reservation_fulfillment import fulfill_restock_wip_reservations_after_source_receipt
@@ -166,6 +167,50 @@ def _resolve_target_portfolio_item_id(db: Session, po: ProductionOrder, op: Plan
     return None
 
 
+def _resolve_receipt_portfolio_item_id(db: Session, po: ProductionOrder, op: PlanningOperation) -> int | None:
+    """
+    For product receipt (Příjem sklad), prefer a portfolio variant that already has an active stock card
+    for the same real product (GPN/customer), ideally logistic_mode='sklad'.
+    This prevents splitting finished-goods stock across sibling portfolio variants.
+    """
+    base_pid = _resolve_target_portfolio_item_id(db, po, op)
+    base_item = db.get(PortfolioItem, int(base_pid)) if base_pid is not None else None
+    gpn_norm = _normalize_gpn(op.gpn or po.gpn or (base_item.gpn if base_item is not None else ""))
+    if not gpn_norm:
+        return base_pid
+
+    q = (
+        select(ProductStockItem.portfolio_item_id)
+        .join(PortfolioItem, PortfolioItem.id == ProductStockItem.portfolio_item_id)
+        .where(
+            ProductStockItem.is_active.is_(True),
+            func.lower(func.trim(PortfolioItem.gpn)) == gpn_norm.lower(),
+        )
+    )
+    if base_item is not None:
+        q = q.where(PortfolioItem.customer_id == int(base_item.customer_id))
+    # Prefer sklad variant first, then deterministic by portfolio id.
+    q = q.order_by(
+        (PortfolioItem.logistic_mode == "sklad").desc(),
+        PortfolioItem.id.asc(),
+        ProductStockItem.id.asc(),
+    )
+    preferred_pid = db.scalars(q).first()
+    if preferred_pid is not None:
+        resolved = int(preferred_pid)
+        if base_pid is not None and int(base_pid) != resolved:
+            logger.info(
+                "[kiosk_tp_stock] receipt_portfolio_override planning_op_id=%s vp=%s base_portfolio_item_id=%s resolved_portfolio_item_id=%s gpn=%s",
+                int(op.id),
+                (po.vp_code or ""),
+                int(base_pid),
+                resolved,
+                gpn_norm,
+            )
+        return resolved
+    return base_pid
+
+
 def _load_active_product_stock_items_for_portfolio(
     db: Session, portfolio_item_id: int | None
 ) -> list[ProductStockItem]:
@@ -186,12 +231,37 @@ def _load_active_product_stock_items_for_portfolio(
 def _pick_product_stock_item_for_tp_effect(rows: list[ProductStockItem], *, prijem: bool) -> ProductStockItem | None:
     if not rows:
         return None
-    narrowed = rows
+    if len(rows) == 1:
+        return rows[0]
+
     if prijem:
-        non_exp = [r for r in narrowed if not _is_expedice_location(r.location)]
-        if non_exp:
-            narrowed = non_exp
-    return sorted(narrowed, key=lambda r: int(r.id))[0]
+        # Příjem sklad: při více kartách stejného portfolio_item_id preferuj kartu s lokaci,
+        # pak deterministicky nejnižší id. Nezakládej novou, pokud aspoň jedna aktivní existuje.
+        with_location = [r for r in rows if (r.location or "").strip()]
+        pool = with_location if with_location else rows
+        return sorted(pool, key=lambda r: int(r.id))[0]
+
+    # Výdej: zachovej deterministický výběr nejnižšího id.
+    return sorted(rows, key=lambda r: int(r.id))[0]
+
+
+def _debug_card_candidates(
+    *,
+    stage: str,
+    kind: StockEffectKind,
+    planning_operation_id: int,
+    portfolio_item_id: int,
+    rows: list[ProductStockItem],
+) -> None:
+    logger.info(
+        "[kiosk_tp_stock] card_candidates stage=%s kind=%s planning_op_id=%s portfolio_item_id=%s count=%s ids=%s",
+        stage,
+        kind,
+        planning_operation_id,
+        portfolio_item_id,
+        len(rows),
+        [int(r.id) for r in rows],
+    )
 
 
 def apply_kiosk_tp_stock_effect_on_operation_complete(
@@ -241,7 +311,11 @@ def apply_kiosk_tp_stock_effect_on_operation_complete(
         )
         return {"stock_effect": kind, "skipped": True, "reason": "workflow_inactive"}
 
-    target_portfolio_item_id = _resolve_target_portfolio_item_id(db, po, op)
+    target_portfolio_item_id = (
+        _resolve_receipt_portfolio_item_id(db, po, op)
+        if kind == "product_prijem"
+        else _resolve_target_portfolio_item_id(db, po, op)
+    )
     if target_portfolio_item_id is None:
         logger.warning(
             "[kiosk_tp_stock] skip effect=%s planning_op_id=%s: missing portfolio_item_id link",
@@ -271,10 +345,31 @@ def apply_kiosk_tp_stock_effect_on_operation_complete(
     gpn = (op.gpn or po.gpn or "").strip()
 
     stock_rows = _load_active_product_stock_items_for_portfolio(db, target_portfolio_item_id)
+    _debug_card_candidates(
+        stage="initial_lookup",
+        kind=kind,
+        planning_operation_id=int(op.id),
+        portfolio_item_id=int(target_portfolio_item_id),
+        rows=stock_rows,
+    )
     stock = _pick_product_stock_item_for_tp_effect(
         stock_rows,
         prijem=(kind == "product_prijem"),
     )
+    if stock is None:
+        # Hard anti-dup guard: re-query immediately before create; if any active card exists, always reuse it.
+        stock_rows = _load_active_product_stock_items_for_portfolio(db, target_portfolio_item_id)
+        _debug_card_candidates(
+            stage="pre_create_guard",
+            kind=kind,
+            planning_operation_id=int(op.id),
+            portfolio_item_id=int(target_portfolio_item_id),
+            rows=stock_rows,
+        )
+        stock = _pick_product_stock_item_for_tp_effect(
+            stock_rows,
+            prijem=(kind == "product_prijem"),
+        )
     if stock is None:
         loc = None
         note = "Auto-created from kiosk TP stock operation (Příjem sklad — žádná existující karta)."
@@ -285,6 +380,12 @@ def apply_kiosk_tp_stock_effect_on_operation_complete(
                 target_portfolio_item_id,
             )
             return {"stock_effect": kind, "skipped": True, "reason": "no_stock_card_for_vydej"}
+        logger.warning(
+            "[kiosk_tp_stock] creating_card kind=%s planning_op_id=%s portfolio_item_id=%s reason=no_active_card_found",
+            kind,
+            int(op.id),
+            int(target_portfolio_item_id),
+        )
         stock = ProductStockItem(
             portfolio_item_id=int(target_portfolio_item_id),
             location=loc,
@@ -297,6 +398,15 @@ def apply_kiosk_tp_stock_effect_on_operation_complete(
         db.add(stock)
         db.flush()
         stock.scan_code = product_stock_scan_code_for_id(int(stock.id))
+    else:
+        logger.info(
+            "[kiosk_tp_stock] reusing_card kind=%s planning_op_id=%s portfolio_item_id=%s stock_item_id=%s location=%s",
+            kind,
+            int(op.id),
+            int(target_portfolio_item_id),
+            int(stock.id),
+            (stock.location or ""),
+        )
 
     if kind == "product_prijem":
         stock.current_qty = float(stock.current_qty or 0) + qty

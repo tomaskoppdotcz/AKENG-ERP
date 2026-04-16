@@ -6,6 +6,7 @@ import { buildProductionOrderDetailHeaderModel, vpHeaderBadgeStyle } from "../ut
 import {
   getProductionOrderDetail,
   openProductionOrderPdfInNewTab,
+  regenerateProductionOrderFromTp,
   receiveFinishedGoodsToStock,
   reportProductionOrderOperation,
   startProductionOrderOperation,
@@ -78,18 +79,34 @@ export default function ProductionOrderDetailPage({
   const [receiveMessage, setReceiveMessage] = useState<string | null>(null);
   const [receiveError, setReceiveError] = useState<string | null>(null);
   const [stornoBusy, setStornoBusy] = useState(false);
+  const [regenerateBusy, setRegenerateBusy] = useState(false);
+  const [regenerateMessage, setRegenerateMessage] = useState<string | null>(null);
+  const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
 
   const erpRole = useMemo(() => readStoredErpRole(), []);
   const canProductionExecute = canPerformAction(erpRole, "production.execute");
   const canProductionStorno = canPerformAction(erpRole, "production.storno");
   const canStockMutate = canPerformAction(erpRole, "stock.mutate");
   const poWorkflowActive = isBusinessWorkflowActive(data?.workflow_status);
+  const regenerateBlockedByProgress = useMemo(() => {
+    if (!data) return false;
+    return data.operations.some((op) => {
+      const st = String(op.operation_status ?? "").trim().toLowerCase();
+      return st === "bezi" || st === "hotovo";
+    });
+  }, [data]);
+  const regenerateDisabled =
+    !poWorkflowActive || regenerateBusy || !canProductionExecute || regenerateBlockedByProgress;
 
   async function loadDetail() {
     setLoading(true);
     setError(null);
-    const r = await getProductionOrderDetail(productionOrderId);
-    setData(r);
+    try {
+      const r = await getProductionOrderDetail(productionOrderId);
+      setData(r);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -100,9 +117,6 @@ export default function ProductionOrderDetailPage({
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : "Nepodařilo se načíst detail VP.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -188,6 +202,22 @@ export default function ProductionOrderDetailPage({
       setReceiveError(e instanceof Error ? e.message : "Příjem se nepodařil.");
     } finally {
       setReceiveBusy(false);
+    }
+  }
+
+  async function handleRegenerateFromTp() {
+    setRegenerateBusy(true);
+    setRegenerateMessage(null);
+    setOpActionError(null);
+    try {
+      const out = await regenerateProductionOrderFromTp(productionOrderId);
+      setRegenerateConfirmOpen(false);
+      setRegenerateMessage(`VP ${out.vp_code}: operace úspěšně přegenerovány z TP.`);
+      await loadDetail();
+    } catch (e: unknown) {
+      setOpActionError(e instanceof Error ? e.message : "Přegenerování z TP se nezdařilo.");
+    } finally {
+      setRegenerateBusy(false);
     }
   }
 
@@ -332,6 +362,19 @@ export default function ProductionOrderDetailPage({
               >
                 {stornoBusy ? "Stornuji…" : "Stornovat VP"}
               </button>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                disabled={regenerateDisabled}
+                title={
+                  regenerateDisabled
+                    ? "Přegenerování není dostupné pro rozpracovaný nebo uzavřený výrobní příkaz."
+                    : undefined
+                }
+                onClick={() => setRegenerateConfirmOpen(true)}
+              >
+                {regenerateBusy ? "Přegenerovávám…" : "Přegenerovat z TP"}
+              </button>
               <button onClick={onBack} style={UI.buttonSecondary}>
                 Zpět na výrobní příkazy
               </button>
@@ -428,6 +471,25 @@ export default function ProductionOrderDetailPage({
             }}
           >
             {receiveMessage}
+          </div>
+        ) : null}
+        {regenerateMessage ? (
+          <div
+            style={{
+              ...UI.card,
+              borderRadius: 12,
+              background: "#ecfeff",
+              border: "1px solid #67e8f9",
+              color: "#155e75",
+              fontWeight: 700,
+            }}
+          >
+            {regenerateMessage}
+          </div>
+        ) : null}
+        {regenerateDisabled ? (
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: -6 }}>
+            Přegenerování není dostupné pro rozpracovaný nebo uzavřený výrobní příkaz.
           </div>
         ) : null}
 
@@ -687,6 +749,37 @@ export default function ProductionOrderDetailPage({
               />
             </label>
             {receiveError ? <div style={{ color: "#b91c1c", fontWeight: 700 }}>{receiveError}</div> : null}
+          </div>
+        </SimpleModal>
+        <SimpleModal
+          title="Přegenerovat operace z TP?"
+          open={regenerateConfirmOpen}
+          onClose={() => !regenerateBusy && setRegenerateConfirmOpen(false)}
+          footer={
+            <>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                disabled={regenerateBusy}
+                onClick={() => setRegenerateConfirmOpen(false)}
+              >
+                Zrušit
+              </button>
+              <button
+                type="button"
+                style={UI.buttons.primary}
+                disabled={regenerateBusy}
+                onClick={() => void handleRegenerateFromTp()}
+              >
+                {regenerateBusy ? "Přegenerovávám…" : "Přegenerovat"}
+              </button>
+            </>
+          }
+        >
+          <div style={{ fontSize: 13, color: "#334155", lineHeight: 1.45 }}>
+            Tato akce znovu vytvoří operace výrobního příkazu podle aktuálního technologického postupu.
+            Dojde také k přepočtu plánovacích operací a plánu pro tento VP. Pokud už jsou na VP
+            rozpracované nebo odvedené operace, akce může být zablokována.
           </div>
         </SimpleModal>
       </div>

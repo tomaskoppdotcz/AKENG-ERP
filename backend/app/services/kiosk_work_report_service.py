@@ -65,7 +65,7 @@ def _audit(
             action=action,
             actor=(actor or None),
             details_json=json.dumps(details or {}, ensure_ascii=False, default=str),
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(),
         )
     )
 
@@ -167,12 +167,12 @@ def _maybe_operation_event(
             machine_id=int(machine_id),
             employee_id=int(employee_id),
             event_type=event_type,
-            event_time=datetime.utcnow(),
+            event_time=datetime.now(),
             qty_ok=qty_ok,
             qty_nok=qty_nok,
             reason=reason,
             note=note,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(),
         )
     )
 
@@ -233,7 +233,7 @@ def work_report_start(
 
     ensure_planning_operation_material_ready_for_start(db, op)
 
-    now = datetime.utcnow()
+    now = datetime.now()
     open_rep = _get_open_report(db, op.id)
     if open_rep:
         if _get_open_pause(db, open_rep.id):
@@ -241,7 +241,7 @@ def work_report_start(
                 status_code=409,
                 detail="Operace je v přestávce — použijte Pokračovat (resume).",
             )
-        now_idem = datetime.utcnow()
+        now_idem = datetime.now()
         op.status = "bezi"
         if op.actual_start is None:
             op.actual_start = now_idem
@@ -299,6 +299,7 @@ def work_report_pause(
     *,
     machine: Machine,
     employee_id: int | None,
+    operator_display: str | None,
     pause_reason: str,
     note: str | None,
     source: str,
@@ -311,7 +312,13 @@ def work_report_pause(
         raise HTTPException(status_code=409, detail="Neexistuje otevřený výkaz — nejdřív START.")
     if _get_open_pause(db, rep.id):
         raise HTTPException(status_code=409, detail="Přestávka už je otevřená.")
-    now = datetime.utcnow()
+    effective_employee_id = int(employee_id) if employee_id is not None else (int(rep.employee_id) if rep.employee_id is not None else None)
+    incoming_operator = (operator_display or "").strip() or None
+    if rep.employee_id is None and effective_employee_id is not None:
+        rep.employee_id = int(effective_employee_id)
+    if incoming_operator and not (rep.operator_display or "").strip():
+        rep.operator_display = incoming_operator
+    now = datetime.now()
     p = WorkReportPause(
         work_report_id=rep.id,
         pause_start=now,
@@ -325,7 +332,7 @@ def work_report_pause(
         db,
         op=op,
         machine_id=machine.id,
-        employee_id=employee_id,
+        employee_id=effective_employee_id,
         event_type="pause",
         reason=reason,
         note=note,
@@ -351,6 +358,7 @@ def work_report_resume(
     *,
     machine: Machine,
     employee_id: int | None,
+    operator_display: str | None,
     source: str,
     actor: str | None = None,
 ) -> dict[str, Any]:
@@ -362,9 +370,15 @@ def work_report_resume(
     open_p = _get_open_pause(db, rep.id)
     if not open_p:
         raise HTTPException(status_code=409, detail="Není otevřená přestávka.")
-    now = datetime.utcnow()
+    effective_employee_id = int(employee_id) if employee_id is not None else (int(rep.employee_id) if rep.employee_id is not None else None)
+    incoming_operator = (operator_display or "").strip() or None
+    if rep.employee_id is None and effective_employee_id is not None:
+        rep.employee_id = int(effective_employee_id)
+    if incoming_operator and not (rep.operator_display or "").strip():
+        rep.operator_display = incoming_operator
+    now = datetime.now()
     open_p.pause_end = now
-    _maybe_operation_event(db, op=op, machine_id=machine.id, employee_id=employee_id, event_type="resume")
+    _maybe_operation_event(db, op=op, machine_id=machine.id, employee_id=effective_employee_id, event_type="resume")
     op.status = "bezi"
     rep.updated_at = now
     rep.updated_by = actor
@@ -385,6 +399,7 @@ def work_report_complete(
     *,
     machine: Machine,
     employee_id: int | None,
+    operator_display: str | None,
     qty_ok: int,
     qty_nok: int,
     note: str | None,
@@ -395,7 +410,13 @@ def work_report_complete(
     rep = _get_open_report(db, op.id)
     if not rep:
         raise HTTPException(status_code=409, detail="Neexistuje otevřený výkaz — nelze dokončit bez START.")
-    now = datetime.utcnow()
+    effective_employee_id = int(employee_id) if employee_id is not None else (int(rep.employee_id) if rep.employee_id is not None else None)
+    incoming_operator = (operator_display or "").strip() or None
+    if rep.employee_id is None and effective_employee_id is not None:
+        rep.employee_id = int(effective_employee_id)
+    if incoming_operator and not (rep.operator_display or "").strip():
+        rep.operator_display = incoming_operator
+    now = datetime.now()
     open_p = _get_open_pause(db, rep.id)
     if open_p:
         open_p.pause_end = now
@@ -413,7 +434,7 @@ def work_report_complete(
         db,
         op=op,
         machine_id=machine.id,
-        employee_id=employee_id,
+        employee_id=effective_employee_id,
         event_type="done",
         qty_ok=rep.qty_ok,
         qty_nok=rep.qty_nok,

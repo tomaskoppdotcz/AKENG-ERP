@@ -1,7 +1,7 @@
 import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -172,14 +172,14 @@ class PlanningEngineService:
     @staticmethod
     def _normalize_runtime_dt(value: datetime | None) -> datetime | None:
         """
-        Canonical planner/runtime datetime: naive UTC.
+        Canonical planner/runtime datetime: local naive wall-clock.
         Accept both timezone-aware and naive values and normalize before comparisons.
         """
         if value is None:
             return None
         if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
             return value
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.replace(tzinfo=None)
 
     def _shift_start_datetime(self, day: MachineCalendar) -> datetime:
         """Začátek směny pro řádek kalendáře; NULL shift_start_minutes = legacy 06:00."""

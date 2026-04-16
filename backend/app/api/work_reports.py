@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -56,7 +56,7 @@ def _audit_row(
             action=action,
             actor=actor,
             details_json=json.dumps(details or {}, ensure_ascii=False, default=str),
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(),
         )
     )
 
@@ -129,13 +129,14 @@ def _close_open_pauses_for_report(db: Session, rep: WorkReport, end_time: dateti
 
 def _normalize_runtime_dt(value: datetime | None) -> datetime | None:
     """
-    Canonical runtime/report datetime: naive UTC.
+    Canonical runtime/report datetime: local naive wall-clock.
     """
     if value is None:
         return None
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
         return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    # UI/runtime in ERP expects local wall-clock; keep local time and drop tzinfo.
+    return value.replace(tzinfo=None)
 
 
 def _movement_delta(movement_type: str, qty: float) -> float:
@@ -458,7 +459,7 @@ def create_work_report(
             raise HTTPException(status_code=404, detail="Zaměstnanec nenalezen.")
 
     links = resolve_report_links(db, op)
-    now = datetime.utcnow()
+    now = datetime.now()
     rep = WorkReport(
         employee_id=payload.employee_id,
         operator_display=(payload.operator_display or None),
@@ -590,7 +591,7 @@ def update_work_report(
     else:
         rep.duration_min = None
 
-    rep.updated_at = datetime.utcnow()
+    rep.updated_at = datetime.now()
     rep.updated_by = actor
 
     after = _row_to_report(db, rep)
@@ -683,7 +684,7 @@ def create_pause(
     if not rep:
         raise HTTPException(status_code=404, detail="Výkaz nenalezen.")
     reason = validate_pause_reason(payload.pause_reason)
-    now = datetime.utcnow()
+    now = datetime.now()
     p = WorkReportPause(
         work_report_id=rep.id,
         pause_start=payload.pause_start,
@@ -740,7 +741,7 @@ def update_pause(
     if p.pause_end and p.pause_start and p.pause_end < p.pause_start:
         raise HTTPException(status_code=422, detail="pause_end musí být po pause_start.")
 
-    now = datetime.utcnow()
+    now = datetime.now()
     rep.updated_at = now
     rep.updated_by = actor
     if rep.ended_at:
@@ -773,7 +774,7 @@ def delete_pause(
         raise HTTPException(status_code=404, detail="Přestávka nenalezena.")
     snap = _row_to_pause(p)
     db.delete(p)
-    now = datetime.utcnow()
+    now = datetime.now()
     rep.updated_at = now
     rep.updated_by = actor
     if rep.ended_at:

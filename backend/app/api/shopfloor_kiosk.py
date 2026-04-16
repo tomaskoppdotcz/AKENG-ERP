@@ -151,7 +151,7 @@ def pause_operation(
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-    emp_id, _ = _resolve_shopfloor_operator(db, payload.operator_name)
+    emp_id, disp = _resolve_shopfloor_operator(db, payload.operator_name)
     actor = resolve_shopfloor_actor(payload.operator_name, emp_id)
     machine = _machine_for_shopfloor_op(db, op)
     r = work_report_pause(
@@ -159,6 +159,7 @@ def pause_operation(
         op,
         machine=machine,
         employee_id=emp_id,
+        operator_display=disp,
         pause_reason=payload.pause_reason,
         note=payload.note,
         source=SOURCE_SHOPFLOOR_KIOSK,
@@ -185,7 +186,7 @@ def resume_operation(
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-    emp_id, _ = _resolve_shopfloor_operator(db, payload.operator_name)
+    emp_id, disp = _resolve_shopfloor_operator(db, payload.operator_name)
     actor = resolve_shopfloor_actor(payload.operator_name, emp_id)
     machine = _machine_for_shopfloor_op(db, op)
     r = work_report_resume(
@@ -193,6 +194,7 @@ def resume_operation(
         op,
         machine=machine,
         employee_id=emp_id,
+        operator_display=disp,
         source=SOURCE_SHOPFLOOR_KIOSK,
         actor=actor,
     )
@@ -217,7 +219,7 @@ def finish_operation(
     op = db.get(PlanningOperation, payload.planning_operation_id)
     if not op:
         raise HTTPException(status_code=404, detail="Planning operation not found")
-    emp_id, _ = _resolve_shopfloor_operator(db, payload.operator_name)
+    emp_id, disp = _resolve_shopfloor_operator(db, payload.operator_name)
     actor = resolve_shopfloor_actor(payload.operator_name, emp_id)
     machine = _machine_for_shopfloor_op(db, op)
     r = work_report_complete(
@@ -225,6 +227,7 @@ def finish_operation(
         op,
         machine=machine,
         employee_id=emp_id,
+        operator_display=disp,
         qty_ok=int(payload.qty_ok or 0),
         qty_nok=int(payload.qty_nok or 0),
         note=payload.note,

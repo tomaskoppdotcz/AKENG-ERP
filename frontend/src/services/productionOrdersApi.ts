@@ -201,6 +201,25 @@ export async function stornoProductionOrder(productionOrderId: number): Promise<
   }
 }
 
+export async function regenerateProductionOrderFromTp(
+  productionOrderId: number
+): Promise<{ status: string; production_order_id: number; vp_code: string; planner_rows: number }> {
+  const res = await akengFetch(`${API_BASE}/production-orders/${productionOrderId}/regenerate-from-tp`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    let message = "Přegenerování VP z TP se nepodařilo.";
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === "string") message = data.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
+  }
+  return res.json();
+}
+
 export type ProductionOperationReportPayload = {
   ok_qty: number;
   nok_qty: number;

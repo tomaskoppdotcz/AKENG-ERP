@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
+from app.core.scan_code import production_order_operation_scan_code_for_id
 from app.models.master_data import Machine
 from app.services.workplace_scheduling_anchor import get_or_create_scheduling_machine_for_workplace
 from app.models.orders import JobItem, ProductionOrder, ProductionOrderOperation
@@ -18,7 +19,10 @@ from app.models.portfolio import PortfolioTechnologyTemplate, PortfolioTechnolog
 from app.models.technology_library import TechnologyTemplate
 from app.models.planning import PlanningOperation, MachineSchedule, PlanningScheduleSegment
 from app.services.business_workflow import workflow_record_active
-from app.services.planning_operation_status import planning_operation_status_is_protected_for_queue_normalize
+from app.services.planning_operation_status import (
+    normalize_planning_operation_status,
+    planning_operation_status_is_protected_for_queue_normalize,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +235,107 @@ def _planning_qty_for_vp(po: ProductionOrder, job_item: JobItem) -> int:
     return max(q, 0)
 
 
+def _regenerate_blocked_by_running_ops(ops: list[PlanningOperation]) -> bool:
+    """
+    Regenerate must be blocked only for truly running operations.
+    Historical terminal statuses (hotovo/cancelled) must not prevent TP rebuild.
+    """
+    for op in ops:
+        st = normalize_planning_operation_status(op.status)
+        if st == "bezi":
+            return True
+    return False
+
+
+def _normalized_operation_specs_for_vp(
+    db: Session,
+    *,
+    po: ProductionOrder,
+    job_item: JobItem,
+) -> list[dict[str, Any]]:
+    """
+    Current canonical routing for VP regenerate, renumbered in steps of 10.
+    Source priority: active portfolio TP, fallback technology_library by GPN.
+    """
+    pid = int(po.portfolio_item_id) if po.portfolio_item_id is not None else None
+    if pid is None:
+        cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
+        if "portfolio_item_id" in cols:
+            row = db.execute(
+                text("SELECT portfolio_item_id FROM job_items WHERE id = :id"),
+                {"id": int(job_item.id)},
+            ).fetchone()
+            if row is not None and row[0] is not None:
+                pid = int(row[0])
+
+    specs: list[dict[str, Any]] = []
+    tpl = _select_active_portfolio_tp(db, pid)
+    if tpl is not None:
+        ops = db.scalars(
+            select(PortfolioTechnologyTemplateOperation)
+            .where(PortfolioTechnologyTemplateOperation.template_id == int(tpl.id))
+            .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc(), PortfolioTechnologyTemplateOperation.id.asc())
+        ).all()
+        for idx, op in enumerate(ops, start=1):
+            specs.append(
+                {
+                    "operation_no": idx * 10,
+                    "operation_name": op.operation_name,
+                    "workplace_name": op.workplace,
+                    "workplace_library_item_id": int(op.workplace_library_item_id)
+                    if op.workplace_library_item_id is not None
+                    else None,
+                }
+            )
+        return specs
+
+    template = db.scalar(select(TechnologyTemplate).where(TechnologyTemplate.gpn == job_item.gpn))
+    if template is None:
+        return []
+    ops = sorted(template.operations, key=lambda x: (int(x.operation_no or 0), int(x.id)))
+    for idx, op in enumerate(ops, start=1):
+        specs.append(
+            {
+                "operation_no": idx * 10,
+                "operation_name": op.operation_name,
+                "workplace_name": getattr(op, "workplace", None),
+                "workplace_library_item_id": int(op.workplace_library_item_id)
+                if getattr(op, "workplace_library_item_id", None) is not None
+                else None,
+            }
+        )
+    return specs
+
+
+def _rebuild_production_order_operation_rows_from_current_tp(
+    db: Session,
+    *,
+    po: ProductionOrder,
+    job_item: JobItem,
+) -> int:
+    specs = _normalized_operation_specs_for_vp(db, po=po, job_item=job_item)
+    db.execute(
+        delete(ProductionOrderOperation).where(
+            ProductionOrderOperation.production_order_id == int(po.id)
+        )
+    )
+    db.flush()
+    created = 0
+    for spec in specs:
+        row = ProductionOrderOperation(
+            production_order_id=int(po.id),
+            operation_no=int(spec["operation_no"]),
+            operation_name=str(spec.get("operation_name") or ""),
+            workplace_name=spec.get("workplace_name"),
+            workplace_library_item_id=spec.get("workplace_library_item_id"),
+        )
+        db.add(row)
+        db.flush()
+        row.scan_code = production_order_operation_scan_code_for_id(int(row.id))
+        created += 1
+    return created
+
+
 def _create_planning_ops_from_portfolio_tp(
     db: Session,
     *,
@@ -248,9 +353,9 @@ def _create_planning_ops_from_portfolio_tp(
         .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc(), PortfolioTechnologyTemplateOperation.id.asc())
     ).all()
 
-    resolved: list[tuple[PortfolioTechnologyTemplateOperation, Machine]] = []
+    resolved: list[tuple[int, PortfolioTechnologyTemplateOperation, Machine]] = []
     skipped: list[dict] = []
-    for op in op_rows:
+    for idx, op in enumerate(op_rows, start=1):
         machine = _resolve_machine_for_portfolio_template_op(db, op)
         if machine is None:
             machine = _resolve_machine_from_vp_order_operation(db, po, op)
@@ -263,7 +368,8 @@ def _create_planning_ops_from_portfolio_tp(
                 }
             )
             continue
-        resolved.append((op, machine))
+        effective_no = idx * 10
+        resolved.append((effective_no, op, machine))
 
     if not resolved:
         return {
@@ -275,14 +381,14 @@ def _create_planning_ops_from_portfolio_tp(
             "reason": "no_machine_for_any_operation",
         }
 
-    first_no = min(int(x[0].operation_no) for x in resolved)
+    first_no = 10
     created = 0
-    for op, machine in resolved:
+    for effective_no, op, machine in resolved:
         setup = float(op.setup_min or 0)
         run_piece = float(op.run_min_per_piece or 0)
         total_labor = run_piece * float(qty_pl)
         total_time = setup + total_labor
-        st = "ready" if int(op.operation_no) == first_no else "waiting_release"
+        st = "ready" if int(effective_no) == first_no else "waiting_release"
         wp_fk = None
         if op.workplace_library_item_id is not None:
             wp_fk = int(op.workplace_library_item_id)
@@ -294,7 +400,7 @@ def _create_planning_ops_from_portfolio_tp(
             work_order_no=vp_code,
             gpn=gpn,
             operation_name=op.operation_name,
-            operation_no=int(op.operation_no),
+            operation_no=int(effective_no),
             machine_id=int(machine.id),
             workplace_library_item_id=wp_fk,
             qty=qty_pl,
@@ -344,7 +450,7 @@ def _create_planning_ops_from_portfolio_tp(
         "vp_id": int(po.id),
         "vp_code": vp_code,
         "skipped": skipped,
-        "first_ready_operation_no": first_no,
+        "first_ready_operation_no": int(first_no),
         "queue_normalize": norm,
         "planning_operation_ids": planning_ids,
     }
@@ -362,9 +468,10 @@ def _create_planning_ops_from_technology_library(
     qty_pl = _planning_qty_for_vp(po, job_item)
     input_diameter = _extract_diameter_from_template(template)
 
-    resolved: list[tuple] = []
+    resolved: list[tuple[int, Any, Machine]] = []
     skipped: list[dict] = []
-    for op in sorted(template.operations, key=lambda x: (int(x.operation_no or 0), int(x.id))):
+    ordered_ops = sorted(template.operations, key=lambda x: (int(x.operation_no or 0), int(x.id)))
+    for idx, op in enumerate(ordered_ops, start=1):
         wid = getattr(op, "workplace_library_item_id", None)
         if wid is None:
             skipped.append(
@@ -385,7 +492,8 @@ def _create_planning_ops_from_technology_library(
                 }
             )
             continue
-        resolved.append((op, machine))
+        effective_no = idx * 10
+        resolved.append((effective_no, op, machine))
 
     if not resolved:
         return {
@@ -397,12 +505,12 @@ def _create_planning_ops_from_technology_library(
             "reason": "no_machine_for_any_operation",
         }
 
-    first_no = min(int(x[0].operation_no) for x in resolved)
+    first_no = 10
     created = 0
-    for op, machine in resolved:
+    for effective_no, op, machine in resolved:
         total_labor = float(op.labor_time_per_piece_min or 0) * float(qty_pl)
         total_time = float(op.setup_time_min or 0) + total_labor
-        st = "ready" if int(op.operation_no) == first_no else "waiting_release"
+        st = "ready" if int(effective_no) == first_no else "waiting_release"
         wp_fk = getattr(op, "workplace_library_item_id", None)
         if wp_fk is None:
             wp_fk = machine.workplace_library_item_id
@@ -414,7 +522,7 @@ def _create_planning_ops_from_technology_library(
             work_order_no=vp_code,
             gpn=gpn,
             operation_name=op.operation_name,
-            operation_no=int(op.operation_no),
+            operation_no=int(effective_no),
             machine_id=int(machine.id),
             workplace_library_item_id=int(wp_fk),
             qty=qty_pl,
@@ -464,7 +572,7 @@ def _create_planning_ops_from_technology_library(
         "vp_id": int(po.id),
         "vp_code": vp_code,
         "skipped": skipped,
-        "first_ready_operation_no": first_no,
+        "first_ready_operation_no": int(first_no),
         "queue_normalize": norm,
         "planning_operation_ids": planning_ids,
     }
@@ -605,7 +713,7 @@ def generate_operations_from_vp(db: Session):
 
 def regenerate_operations_from_tp(db: Session):
     """
-    Smaže existující planning_operations VP (bez chráněných stavů) a znovu je vytvoří stejnou
+    Smaže existující VP operation rows + planning_operations VP (bez chráněných stavů) a znovu je vytvoří stejnou
     cestou jako při vzniku VP: portfolio TP (kanonický postup), jinak technology_library.
     Dříve se zde vždy brala jen technology_library — mohla obsahovat jiný počet kroků než portfolio TP
     (např. další logistické operace) a plánovač tak neodpovídal řádnému TP výrobku.
@@ -627,16 +735,18 @@ def regenerate_operations_from_tp(db: Session):
 
         ops = db.scalars(select(PlanningOperation).where(PlanningOperation.work_order_no == vp.vp_code)).all()
 
-        has_protected = any(planning_operation_status_is_protected_for_queue_normalize(op.status) for op in ops)
-        if has_protected:
+        blocked_running = _regenerate_blocked_by_running_ops(ops)
+        if blocked_running:
             changed.append(
                 {
                     "vp": vp.vp_code,
                     "gpn": job_item.gpn,
-                    "status": "SKIPPED - protected operation exists",
+                    "status": "SKIPPED - running operation exists",
                 }
             )
             continue
+
+        vp_ops_created = _rebuild_production_order_operation_rows_from_current_tp(db, po=vp, job_item=job_item)
 
         op_ids = [op.id for op in ops]
         if op_ids:
@@ -646,10 +756,57 @@ def regenerate_operations_from_tp(db: Session):
             db.flush()
 
         info = ensure_planning_operations_for_production_order(db, vp)
-        row = {"vp": vp.vp_code, "gpn": job_item.gpn, "regenerate": True, **info}
+        row = {
+            "vp": vp.vp_code,
+            "gpn": job_item.gpn,
+            "regenerate": True,
+            "production_order_operations_rebuilt": int(vp_ops_created),
+            **info,
+        }
         changed.append(row)
         if info.get("created", 0) and not info.get("skipped"):
             logger.info("[planning_bridge] regenerate_vp vp_code=%s created=%s source=%s", vp.vp_code, info.get("created"), info.get("source"))
 
     db.commit()
     return changed
+
+
+def regenerate_single_production_order_from_tp(db: Session, po: ProductionOrder) -> dict[str, Any]:
+    """
+    Rebuild one VP from current TP:
+    - rewrite production_order_operations with normalized numbering (10,20,30,...)
+    - recreate planning_operations for this VP
+    Caller handles transaction/commit and optional planner rebuild.
+    """
+    if po is None:
+        return {"status": "SKIPPED - no_po"}
+    if not workflow_record_active(po):
+        return {"vp": po.vp_code, "status": "SKIPPED - workflow_inactive"}
+    if bool(getattr(po, "blocked_until_reserved_stock_receipt", False)):
+        return {"vp": po.vp_code, "status": "SKIPPED - blocked_reserved_stock"}
+
+    job_item = db.get(JobItem, po.job_item_id)
+    if not job_item:
+        return {"vp": po.vp_code, "status": "SKIPPED - no_job_item"}
+
+    ops = db.scalars(select(PlanningOperation).where(PlanningOperation.work_order_no == po.vp_code)).all()
+    if _regenerate_blocked_by_running_ops(ops):
+        return {"vp": po.vp_code, "gpn": job_item.gpn, "status": "SKIPPED - running operation exists"}
+
+    vp_ops_created = _rebuild_production_order_operation_rows_from_current_tp(db, po=po, job_item=job_item)
+
+    op_ids = [op.id for op in ops]
+    if op_ids:
+        db.execute(delete(PlanningScheduleSegment).where(PlanningScheduleSegment.planning_operation_id.in_(op_ids)))
+        db.execute(delete(MachineSchedule).where(MachineSchedule.planning_operation_id.in_(op_ids)))
+        db.execute(delete(PlanningOperation).where(PlanningOperation.id.in_(op_ids)))
+        db.flush()
+
+    info = ensure_planning_operations_for_production_order(db, po)
+    return {
+        "vp": po.vp_code,
+        "gpn": job_item.gpn,
+        "regenerate": True,
+        "production_order_operations_rebuilt": int(vp_ops_created),
+        **info,
+    }
