@@ -14,6 +14,12 @@ import {
   updateProductStockItem,
   type ProductStockItem,
 } from "../services/productStockApi";
+import TableLayoutModal from "../components/overview/TableLayoutModal";
+import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
+import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
+import type { TableColumnDef } from "../overview/tableLayoutMerge";
+import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
+import { formatOverviewQtyWithUnit } from "../overview/overviewMetricsFormat";
 
 type Props = {
   /** Klik na řádek — otevře detail v pracovní záložce. */
@@ -28,6 +34,19 @@ function dashScan(v: string | null | undefined): string {
   const t = (v ?? "").trim();
   return t ? t : "—";
 }
+
+const PRODUCT_STOCK_TABLE_DEFAULTS: readonly TableColumnDef[] = [
+  { key: "scan_code", label: "Scan kód", defaultWidth: 120 },
+  { key: "gpn", label: "GPN", defaultWidth: 120 },
+  { key: "name", label: "Název", defaultWidth: 200 },
+  { key: "location", label: "Lokace", defaultWidth: 160 },
+  { key: "qty", label: "Stav (ks)", defaultWidth: 120 },
+  { key: "min_qty", label: "Min. zásoba (ks)", defaultWidth: 130 },
+  { key: "unit", label: "Jednotka", defaultWidth: 90 },
+  { key: "actions", label: "Akce", defaultWidth: 280 },
+] as const;
+
+const STOCK_COL_LABELS: Record<string, string> = Object.fromEntries(PRODUCT_STOCK_TABLE_DEFAULTS.map((c) => [c.key, c.label]));
 
 export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
   const [rows, setRows] = useState<ProductStockItem[]>([]);
@@ -161,6 +180,44 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
     });
   }, [rows, query, customerFilter, locations]);
 
+  const tb = usePersistedTableLayout("product_stock_table", PRODUCT_STOCK_TABLE_DEFAULTS);
+
+  const stockSummary = useMemo(() => {
+    const sumQty = filtered.reduce((s, r) => s + (Number.isFinite(r.current_qty) ? r.current_qty : 0), 0);
+    return [
+      { label: "Položek ve skladu", value: String(rows.length) },
+      { label: "Po filtru", value: String(filtered.length) },
+      { label: "Součet stavu (ks)", value: sumQty.toLocaleString("cs-CZ", { maximumFractionDigits: 0 }) },
+    ] as const;
+  }, [rows.length, filtered]);
+
+  const sortedFiltered = useMemo(
+    () =>
+      sortRowsWithConfig(filtered, tb.sort, (row, key) => {
+        switch (key) {
+          case "scan_code":
+            return row.scan_code ?? "";
+          case "gpn":
+            return row.portfolio_gpn;
+          case "name":
+            return row.portfolio_name;
+          case "location":
+            return row.location ?? "";
+          case "qty":
+            return row.current_qty;
+          case "min_qty":
+            return row.min_qty ?? -1;
+          case "unit":
+            return row.unit ?? "";
+          case "actions":
+            return row.id;
+          default:
+            return "";
+        }
+      }),
+    [filtered, tb.sort],
+  );
+
   function parseOptionalNumber(value: string): number | null {
     const t = value.trim().replace(",", ".");
     if (!t) return null;
@@ -252,6 +309,71 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
 
   const unitLabel = "ks";
 
+  function renderStockCell(key: string, row: ProductStockItem): React.ReactNode {
+    switch (key) {
+      case "scan_code":
+        return dashScan(row.scan_code);
+      case "gpn":
+        return row.portfolio_gpn;
+      case "name":
+        return row.portfolio_name;
+      case "location":
+        return row.location?.trim()
+          ? (() => {
+              const loc = locations.find((x) => x.code === row.location);
+              return loc ? `${loc.code} — ${loc.name}` : row.location;
+            })()
+          : "—";
+      case "qty":
+        return formatOverviewQtyWithUnit(row.current_qty, row.unit ?? unitLabel);
+      case "min_qty":
+        return row.min_qty == null ? "—" : formatOverviewQtyWithUnit(row.min_qty, row.unit ?? unitLabel);
+      case "unit":
+        return row.unit?.trim() ? row.unit : "—";
+      case "actions":
+        return (
+          <span onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              style={UI.buttons.primary}
+              onClick={(e) => {
+                e.stopPropagation();
+                setIssueRow(row);
+                setIssueQty(row.current_qty > 0 ? String(row.current_qty) : "1");
+                setIssueJobItemId("");
+                setIssueCustomerOrderId("");
+                setIssueError(null);
+              }}
+            >
+              Vydat výrobek
+            </button>
+            <button
+              type="button"
+              style={UI.buttons.secondary}
+              onClick={(e) => {
+                e.stopPropagation();
+                openEdit(row);
+              }}
+            >
+              Upravit
+            </button>
+            <button
+              type="button"
+              style={UI.buttons.secondary}
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleDelete(row);
+              }}
+            >
+              Smazat
+            </button>
+          </span>
+        );
+      default:
+        return "—";
+    }
+  }
+
   return (
     <>
       <PageContainer style={{ paddingTop: 10 }}>
@@ -273,10 +395,30 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
           }
         />
 
-        <PageSection>
-          <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
+        <div style={UI.summaryTilesGridOuter}>
+          <div style={UI.summaryTilesGridThree}>
+            {stockSummary.map((t) => (
+              <div key={t.label} style={UI.summaryTile}>
+                <div style={UI.summaryTileLabel}>{t.label}</div>
+                <div style={UI.summaryTileValue}>{t.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <PageSection gapTop={16}>
+          <div style={UI.overviewMainCard}>
           {showForm ? (
-            <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+            <div
+              style={{
+                ...UI.card,
+                padding: 12,
+                margin: 16,
+                marginBottom: 0,
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+              }}
+            >
               <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>
                 {editingId == null ? "Nová skladová karta" : "Upravit skladovou kartu"}
               </div>
@@ -348,55 +490,68 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
             </div>
           ) : null}
 
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12 }}>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Hledat"
-              style={{ ...UI.inputs.base, minWidth: 200, flex: "1 1 200px" }}
-            />
-            {customerOptions.length > 0 ? (
-              <select
-                value={customerFilter}
-                onChange={(e) => setCustomerFilter(e.target.value)}
-                style={{ ...UI.inputs.base, minWidth: 200 }}
-              >
-                <option value="">Všichni zákazníci</option>
-                {customerOptions.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            ) : null}
+          <div style={UI.overviewCardHeaderBand}>
+            <div style={UI.overviewSecondaryFilterRow}>
+              <OverviewSloupceButton onClick={() => tb.openPanel()} disabled={loading} />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Hledat"
+                style={{ ...UI.inputs.base, minWidth: 200, flex: "1 1 240px" }}
+              />
+              {customerOptions.length > 0 ? (
+                <select
+                  value={customerFilter}
+                  onChange={(e) => setCustomerFilter(e.target.value)}
+                  style={{ ...UI.inputs.base, minWidth: 200, flex: "0 1 260px" }}
+                >
+                  <option value="">Všichni zákazníci</option>
+                  {customerOptions.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
           </div>
 
-          {loading ? <div style={UI.sectionSubtitle}>Načítám…</div> : null}
-          {error ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 8 }}>{error}</div> : null}
+          <div style={UI.overviewCardBody}>
+          {loading ? <div style={{ ...UI.overviewStateLoading, padding: "0 0 12px" }}>Načítám…</div> : null}
+          {error ? <div style={{ ...UI.overviewStateError, padding: "0 0 12px" }}>{error}</div> : null}
+          {tb.loadError ? <div style={UI.overviewStateWarn}>{tb.loadError}</div> : null}
 
-          {!loading && !error ? (
-            <div style={{ overflowX: "auto" }}>
+          {!loading && !error && rows.length === 0 ? (
+            <div style={UI.overviewEmptyInCard}>Zatím žádné skladové položky. Vytvořte novou skladovou kartu.</div>
+          ) : null}
+
+          {!loading && !error && rows.length > 0 ? (
+            <div style={UI.overviewTableWrap}>
               <table style={UI.table}>
                 <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    {[
-                      "Scan kód",
-                      "GPN",
-                      "Název",
-                      "Lokace",
-                      `Stav (${unitLabel})`,
-                      `Min. zásoba (${unitLabel})`,
-                      "Jednotka",
-                      "Akce",
-                    ].map((h) => (
-                      <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {h}
+                  <tr style={UI.overviewTableHeadRow}>
+                    {tb.visibleColumns.map((col) => (
+                      <th
+                        key={col.key}
+                        style={{
+                          ...UI.th,
+                          fontSize: 13,
+                          padding: `${tb.cellPaddingPx}px`,
+                          whiteSpace: "nowrap",
+                          width: col.width ?? undefined,
+                        }}
+                      >
+                        {col.key === "qty"
+                          ? `Stav (${unitLabel})`
+                          : col.key === "min_qty"
+                            ? `Min. zásoba (${unitLabel})`
+                            : col.label}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((row) => (
+                  {sortedFiltered.map((row) => (
                     <tr
                       key={row.id}
                       onClick={() => onOpenStockInWorkspaceTab(row)}
@@ -404,65 +559,27 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
                       onMouseLeave={() => setHoverId((id) => (id === row.id ? null : id))}
                       style={{ cursor: "pointer", background: hoverId === row.id ? "#eff6ff" : "#fff" }}
                     >
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dashScan(row.scan_code)}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{row.portfolio_gpn}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px" }}>{row.portfolio_name}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {row.location?.trim()
-                          ? (() => {
-                              const loc = locations.find((x) => x.code === row.location);
-                              return loc ? `${loc.code} — ${loc.name}` : row.location;
-                            })()
-                          : "—"}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {row.current_qty} {row.unit || unitLabel}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {row.min_qty == null ? "—" : `${row.min_qty} ${row.unit || unitLabel}`}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.unit?.trim() ? row.unit : "—"}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button
-                          type="button"
-                          style={UI.buttons.primary}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setIssueRow(row);
-                            setIssueQty(row.current_qty > 0 ? String(row.current_qty) : "1");
-                            setIssueJobItemId("");
-                            setIssueCustomerOrderId("");
-                            setIssueError(null);
+                      {tb.visibleColumns.map((col) => (
+                        <td
+                          key={col.key}
+                          style={{
+                            ...UI.td,
+                            padding: `${tb.cellPaddingPx}px`,
+                            whiteSpace: col.key === "name" ? "normal" : "nowrap",
+                            fontWeight: col.key === "gpn" ? 800 : undefined,
                           }}
                         >
-                          Vydat výrobek
-                        </button>
-                        <button
-                          type="button"
-                          style={UI.buttons.secondary}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openEdit(row);
-                          }}
-                        >
-                          Upravit
-                        </button>
-                        <button
-                          type="button"
-                          style={UI.buttons.secondary}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(row);
-                          }}
-                        >
-                          Smazat
-                        </button>
-                      </td>
+                          {renderStockCell(col.key, row)}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={8} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td
+                        colSpan={Math.max(1, tb.visibleColumns.length)}
+                        style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}
+                      >
                         Žádné výsledky.
                       </td>
                     </tr>
@@ -472,6 +589,25 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
             </div>
           ) : null}
           </div>
+          </div>
+        <TableLayoutModal
+          open={tb.panelOpen}
+          title="Sloupce — sklad výrobků"
+          columns={tb.columns}
+          onColumnsChange={tb.setColumns}
+          sort={tb.sort}
+          onSortChange={tb.setSort}
+          sortableKeys={tb.sortableKeys}
+          columnLabels={STOCK_COL_LABELS}
+          density={tb.density}
+          onDensityChange={tb.setDensity}
+          onCancel={tb.closePanelCancel}
+          onSave={() => void tb.savePanel()}
+          onResetLocal={tb.resetLocalToDefaults}
+          onResetAndSave={() => void tb.resetAndSave()}
+          saving={tb.saving}
+          errorMessage={tb.saveError}
+        />
         </PageSection>
       </PageContainer>
 

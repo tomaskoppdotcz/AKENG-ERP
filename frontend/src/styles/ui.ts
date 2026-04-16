@@ -468,5 +468,83 @@ export const UI = {
     padding: 16,
     boxShadow: "0 10px 24px rgba(180,83,9,0.08)",
   },
+
+  /**
+   * Hlavní přehledové stránky (Zakázky, VP, Výkresy, Sklad výrobků) — jedna „karta“ s pásem filtrů a tělem tabulky.
+   */
+  overviewMainCard: {
+    background: "#ffffff",
+    border: "1px solid #dbe2ea",
+    borderRadius: 14,
+    padding: 0,
+    overflow: "hidden" as const,
+    width: "100%",
+    boxSizing: "border-box" as const,
+  },
+  overviewCardHeaderBand: {
+    padding: "16px 16px 14px",
+    borderBottom: "1px solid #e2e8f0",
+  },
+  overviewCardBody: {
+    padding: 16,
+  },
+  overviewTableWrap: {
+    overflowX: "auto" as const,
+    width: "100%",
+  },
+  overviewTableHeadRow: {
+    background: "#f8fafc",
+  },
+  overviewStateLoading: {
+    padding: "14px 16px",
+    color: "#64748b",
+    fontWeight: 700,
+    fontSize: 14,
+  },
+  overviewStateError: {
+    padding: "14px 16px",
+    color: "#991b1b",
+    fontWeight: 700,
+    fontSize: 14,
+  },
+  overviewStateWarn: {
+    padding: "0 16px 10px",
+    color: "#b45309",
+    fontWeight: 600,
+    fontSize: 13,
+  },
+  overviewEmptyInCard: {
+    textAlign: "center" as const,
+    color: "#64748b",
+    fontWeight: 700,
+    padding: "28px 16px",
+    border: "1px solid #e2e8f0",
+    borderRadius: 12,
+    background: "#f8fafc",
+    fontSize: 14,
+  },
+  /** Druhý řádek filtrů (fulltext) pod OverviewPrimaryFilterRow — stejné mezery jako chips řádek. */
+  overviewSecondaryFilterRow: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 10,
+    alignItems: "center",
+    marginTop: 12,
+    marginBottom: 0,
+  },
+  overviewSloupceButton: {
+    minWidth: 108,
+    flexShrink: 0,
+  },
+  /** Tři KPI vedle sebe (sklad výrobků); zúží se na mobilu díky minmax. */
+  summaryTilesGridThree: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 12,
+    alignItems: "stretch",
+    minWidth: 0,
+    width: "100%",
+    boxSizing: "border-box" as const,
+  },
 };
 

@@ -17,7 +17,7 @@ export default function PageHeader({ title, subtitle, actions, style }: PageHead
   return (
     <div style={{ ...UI.pageHeaderRow, ...style }}>
       <div style={{ minWidth: 0, flex: "1 1 220px" }}>
-        {typeof title === "string" ? <div style={UI.sectionTitle}>{title}</div> : title}
+        {typeof title === "string" ? <div style={UI.pageTitle}>{title}</div> : title}
         {subtitle != null ? (
           typeof subtitle === "string" ? (
             <div style={UI.sectionSubtitle}>{subtitle}</div>

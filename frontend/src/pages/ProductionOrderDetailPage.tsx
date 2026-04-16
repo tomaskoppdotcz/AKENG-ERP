@@ -55,6 +55,33 @@ function labelVpOperationProgress(st: string | null | undefined): string {
   return "Naplánováno";
 }
 
+function formatPlanningPhaseCs(phase: string | null | undefined): string {
+  const s = String(phase ?? "").trim().toLowerCase();
+  if (s === "hotovo") return "Hotovo";
+  if (s === "bezi") return "Běží";
+  if (s === "planned") return "Naplánováno";
+  return (phase || "").trim() ? String(phase) : "—";
+}
+
+function formatDetailPercent(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  return `${Number(v)} %`;
+}
+
+function formatDetailLaborCzk(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  if (Number(v) <= 0) return "0 Kč";
+  try {
+    return new Intl.NumberFormat("cs-CZ", {
+      style: "currency",
+      currency: "CZK",
+      maximumFractionDigits: 0,
+    }).format(Number(v));
+  } catch {
+    return `${Math.round(Number(v))} Kč`;
+  }
+}
+
 export default function ProductionOrderDetailPage({
   productionOrderId,
   onBack,
@@ -458,6 +485,58 @@ export default function ProductionOrderDetailPage({
             </div>
           }
         />
+
+        <div style={{ ...UI.card, borderRadius: 14 }}>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>Provozní metriky</div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+              gap: 14,
+            }}
+          >
+            <div>
+              <div style={UI.statLabel}>Vykázaný čas</div>
+              <div style={UI.statValue}>{Math.round(Number(data.reported_time_min ?? 0))} min</div>
+            </div>
+            <div>
+              <div style={UI.statLabel}>Náklad práce</div>
+              <div style={UI.statValue}>{formatDetailLaborCzk(data.direct_labor_cost)}</div>
+            </div>
+            <div>
+              <div style={UI.statLabel}>Hotovo</div>
+              <div style={UI.statValue}>{formatDetailPercent(data.completion_percent)}</div>
+            </div>
+            <div>
+              <div style={UI.statLabel}>Výkonnost</div>
+              <div style={UI.statValue}>{formatDetailPercent(data.performance_percent)}</div>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, fontWeight: 600 }}>
+                Plánovaný čas (planning_operations) / vykázaný čas (work_reports)
+              </div>
+            </div>
+          </div>
+          {(data.current_location || data.current_phase) && (
+            <div
+              style={{
+                marginTop: 14,
+                paddingTop: 14,
+                borderTop: "1px solid #e2e8f0",
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={UI.statLabel}>Poloha (běžící operace)</div>
+                <div style={UI.statValue}>{data.current_location?.trim() ? data.current_location : "—"}</div>
+              </div>
+              <div>
+                <div style={UI.statLabel}>Fáze VP</div>
+                <div style={UI.statValue}>{formatPlanningPhaseCs(data.current_phase)}</div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {receiveMessage ? (
           <div

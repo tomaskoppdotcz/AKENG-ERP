@@ -1,5 +1,6 @@
 import React, { FormEvent, useState } from "react";
 import { ERP_ROLE_OPTIONS, type ErpRole } from "../auth/rbac";
+import { setUiActorIdentifier } from "../auth/uiActor";
 import { UI } from "../styles/ui";
 
 type Props = {
@@ -23,6 +24,7 @@ export default function LoginPage({ onLogin }: Props) {
     setError(null);
     const role: ErpRole | null =
       roleChoice && ERP_ROLE_OPTIONS.some((o) => o.value === roleChoice) ? (roleChoice as ErpRole) : null;
+    setUiActorIdentifier(usernameOrEmail.trim() || "default");
     onLogin(role);
   }
 

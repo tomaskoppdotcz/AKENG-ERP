@@ -12,8 +12,18 @@ import {
   type ProductionOrderRow,
 } from "../services/ordersApi";
 import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilterRow";
+import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
 import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
 import { buildErpUrl } from "../utils/erpDeepLink";
+import TableLayoutModal from "../components/overview/TableLayoutModal";
+import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
+import type { TableColumnDef } from "../overview/tableLayoutMerge";
+import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
+import {
+  formatOverviewMoneyKc0,
+  formatOverviewPercentAsShown,
+  formatOverviewReportedMinutes,
+} from "../overview/overviewMetricsFormat";
 
 type DrawingItem = {
   zakazka: string;
@@ -33,6 +43,10 @@ type DrawingItem = {
   order_type: string;
   faze_vyroby: string;
   postup: string;
+  reported_time_min?: number;
+  direct_labor_cost?: number;
+  completion_percent?: number | null;
+  performance_percent?: number | null;
 };
 
 function rowWorkflowActive(itemWf: string | null | undefined, orderWf: string | null | undefined): boolean {
@@ -93,6 +107,27 @@ function formatVpCodes(codes: string[]): string {
   if (cleaned.length <= 2) return cleaned.join(", ");
   return `${cleaned[0]}, ${cleaned[1]} +${cleaned.length - 2}`;
 }
+
+const DRAWINGS_TABLE_DEFAULTS: readonly TableColumnDef[] = [
+  { key: "zakazka", label: "Zakázka", defaultWidth: 140 },
+  { key: "line_no", label: "Řádek", defaultWidth: 72 },
+  { key: "gpn", label: "GPN", defaultWidth: 120 },
+  { key: "popis", label: "Popis", defaultWidth: 180 },
+  { key: "material", label: "Materiál", defaultWidth: 100 },
+  { key: "mnozstvi", label: "Množství", defaultWidth: 100 },
+  { key: "termin", label: "Termín", defaultWidth: 110 },
+  { key: "reported", label: "Vykázaný čas", defaultWidth: 110 },
+  { key: "completion", label: "Hotovo", defaultWidth: 90 },
+  { key: "labor", label: "Náklad práce", defaultWidth: 120 },
+  { key: "performance", label: "Výkonnost", defaultWidth: 100 },
+  { key: "faze", label: "Fáze výroby", defaultWidth: 160 },
+  { key: "postup", label: "Postup", defaultWidth: 100 },
+  { key: "vp", label: "VP", defaultWidth: 200 },
+  { key: "stav", label: "Stav", defaultWidth: 90 },
+  { key: "new_window", label: "Nové okno", defaultWidth: 110 },
+] as const;
+
+const DRAWINGS_COL_LABELS: Record<string, string> = Object.fromEntries(DRAWINGS_TABLE_DEFAULTS.map((c) => [c.key, c.label]));
 
 /** VP typy navázané na řádek zakázky (včetně interního doplnění skladu). */
 const VP_SOURCE_FOR_DRAWINGS_ROW = new Set(["stock_allocation", "order_allocation", "restock_allocation"]);
@@ -175,6 +210,10 @@ export default function DrawingsPage({
             order_type: otRaw === "internal" ? "internal" : "customer",
             faze_vyroby: (row.production_phase_label ?? "—").trim() || "—",
             postup: (row.production_progress_label ?? "—").trim() || "—",
+            reported_time_min: row.reported_time_min,
+            direct_labor_cost: row.direct_labor_cost,
+            completion_percent: row.completion_percent ?? null,
+            performance_percent: row.performance_percent ?? null,
           };
         });
         setRows(mapped);
@@ -218,6 +257,59 @@ export default function DrawingsPage({
     });
   }, [rowsByOrderType, activeFilters]);
 
+  const tb = usePersistedTableLayout("drawings_table", DRAWINGS_TABLE_DEFAULTS);
+
+  const sortedFilteredRows = useMemo(
+    () =>
+      sortRowsWithConfig(filteredRows, tb.sort, (row, key) => {
+        switch (key) {
+          case "zakazka":
+            return row.zakazka;
+          case "line_no":
+            return row.line_no ?? -1;
+          case "gpn":
+            return row.gpn;
+          case "popis":
+            return row.popis;
+          case "material":
+            return row.material;
+          case "mnozstvi":
+            return row.mnozstvi;
+          case "termin":
+            return row.termin;
+          case "reported":
+            return row.reported_time_min != null && Number.isFinite(Number(row.reported_time_min))
+              ? Number(row.reported_time_min)
+              : -1;
+          case "completion":
+            return row.completion_percent != null && Number.isFinite(Number(row.completion_percent))
+              ? Number(row.completion_percent)
+              : -1;
+          case "labor":
+            return row.direct_labor_cost != null && Number.isFinite(Number(row.direct_labor_cost))
+              ? Number(row.direct_labor_cost)
+              : -1;
+          case "performance":
+            return row.performance_percent != null && Number.isFinite(Number(row.performance_percent))
+              ? Number(row.performance_percent)
+              : -1;
+          case "faze":
+            return row.faze_vyroby;
+          case "postup":
+            return row.postup;
+          case "vp":
+            return row.vp;
+          case "stav":
+            return row.stav;
+          case "new_window":
+            return row.job_item_id;
+          default:
+            return "";
+        }
+      }),
+    [filteredRows, tb.sort],
+  );
+
   const kpi = useMemo(() => {
     const celkemPolozek = rows.length;
     const celkemKusu = rows.reduce((sum, row) => {
@@ -236,6 +328,150 @@ export default function DrawingsPage({
       { label: "K expedici", value: String(kExpedici) },
     ] as const;
   }, [rows]);
+
+  function renderDrawingCell(key: string, row: DrawingItem): React.ReactNode {
+    switch (key) {
+      case "zakazka":
+        return (
+          <span onClick={(e) => e.stopPropagation()}>
+            {row.customer_order_id != null && (onOpenCustomerOrderInWorkspaceTab || onOpenCustomerOrderCard) ? (
+              <button
+                type="button"
+                style={{ ...linkBtn, fontWeight: 900, color: "#0f172a" }}
+                onClick={() => {
+                  const id = row.customer_order_id!;
+                  if (onOpenCustomerOrderInWorkspaceTab) onOpenCustomerOrderInWorkspaceTab(id, row.zakazka);
+                  else onOpenCustomerOrderCard?.(id);
+                }}
+              >
+                {row.zakazka}
+              </button>
+            ) : (
+              <span style={{ fontWeight: 900 }}>{row.zakazka}</span>
+            )}
+          </span>
+        );
+      case "line_no":
+        return row.line_no ?? "—";
+      case "gpn":
+        return (
+          <span onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              style={{ ...linkBtn, fontWeight: 800 }}
+              onClick={() => {
+                if (row.portfolio_item_id != null && onOpenPortfolioInWorkspaceTab) {
+                  onOpenPortfolioInWorkspaceTab(row.portfolio_item_id);
+                  return;
+                }
+                if (row.portfolio_item_id != null && onOpenPortfolioItemId) {
+                  onOpenPortfolioItemId(row.portfolio_item_id);
+                  return;
+                }
+                onOpenPortfolioSearch?.(row.gpn);
+              }}
+            >
+              {row.gpn}
+            </button>
+            {row.portfolio_item_id != null && onPreviewPortfolioById ? (
+              <button
+                type="button"
+                style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+                onClick={() => onPreviewPortfolioById(row.portfolio_item_id!)}
+              >
+                Náhled
+              </button>
+            ) : null}
+          </span>
+        );
+      case "popis":
+        return row.popis;
+      case "material":
+        return row.material;
+      case "mnozstvi":
+        return row.mnozstvi;
+      case "termin":
+        return row.termin;
+      case "reported":
+        return formatOverviewReportedMinutes(row.reported_time_min);
+      case "completion":
+        return (
+          <span style={{ fontWeight: 1000, color: "#2563eb" }}>
+            {formatOverviewPercentAsShown(row.completion_percent)}
+          </span>
+        );
+      case "labor":
+        return formatOverviewMoneyKc0(row.direct_labor_cost);
+      case "performance":
+        return formatOverviewPercentAsShown(row.performance_percent);
+      case "faze":
+        return row.faze_vyroby;
+      case "postup":
+        return row.postup;
+      case "vp":
+        return (
+          <span
+            onClick={(e) => e.stopPropagation()}
+            style={{ color: row.vp !== "—" ? "#15803d" : "#64748b", fontWeight: 700 }}
+          >
+            {row.vpLinks.length > 0 ? (
+              <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                {row.vpLinks.map((vp, i) => (
+                  <span key={vp.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {i > 0 ? <span style={{ color: "#94a3b8" }}>·</span> : null}
+                    <button
+                      type="button"
+                      style={{ ...linkBtn, color: "#15803d", fontWeight: 800 }}
+                      disabled={!onOpenProductionOrderDetail && !onOpenProductionOrderInWorkspaceTab}
+                      onClick={() => {
+                        if (onOpenProductionOrderInWorkspaceTab) {
+                          onOpenProductionOrderInWorkspaceTab(vp.id, vp.vp_code);
+                        } else {
+                          onOpenProductionOrderDetail?.(vp.id);
+                        }
+                      }}
+                    >
+                      {vp.vp_code}
+                    </button>
+                    {onPreviewProductionOrderById ? (
+                      <button
+                        type="button"
+                        style={{ ...UI.buttons.secondary, padding: "2px 6px", fontSize: 11 }}
+                        onClick={() => onPreviewProductionOrderById(vp.id)}
+                      >
+                        Náhled
+                      </button>
+                    ) : null}
+                  </span>
+                ))}
+              </span>
+            ) : (
+              row.vp
+            )}
+          </span>
+        );
+      case "stav":
+        return (
+          <span style={{ fontWeight: 900, color: row.stav === "Storno" ? "#991b1b" : undefined }}>{row.stav}</span>
+        );
+      case "new_window":
+        return (
+          <span onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              style={{ ...UI.buttons.secondary, padding: "4px 8px", fontSize: 12 }}
+              onClick={() =>
+                window.open(buildErpUrl({ view: "orderItem", jobItemId: row.job_item_id, source: "drawings" }), "_blank")
+              }
+            >
+              Nové okno
+            </button>
+          </span>
+        );
+      default:
+        return "—";
+    }
+  }
 
   return (
     <PageContainer style={{ paddingTop: 10 }}>
@@ -294,18 +530,10 @@ export default function DrawingsPage({
 
       {activeSubtab === "Přehled" ? (
         <PageSection gapTop={16}>
-          <div
-            style={{
-              ...UI.card,
-              padding: 0,
-              borderRadius: 14,
-              width: "100%",
-              boxSizing: "border-box",
-              overflow: "hidden",
-            }}
-          >
-            <div style={{ padding: 16, paddingBottom: 14, borderBottom: "1px solid #e2e8f0" }}>
+          <div style={UI.overviewMainCard}>
+            <div style={UI.overviewCardHeaderBand}>
               <OverviewPrimaryFilterRow
+                leading={<OverviewSloupceButton onClick={() => tb.openPanel()} disabled={loading} />}
                 loading={loading}
                 typPrehleduOptions={OVERVIEW_ORDER_TYPE_OPTIONS}
                 typPrehleduActiveId={overviewOrderType}
@@ -338,52 +566,39 @@ export default function DrawingsPage({
               />
             </div>
 
-            <div style={{ padding: 16 }}>
-            {loading ? <div style={UI.sectionSubtitle}>Načítám výkresy…</div> : null}
-            {error ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{error}</div> : null}
+            <div style={UI.overviewCardBody}>
+            {loading ? <div style={{ ...UI.overviewStateLoading, padding: "0 0 12px" }}>Načítám výkresy…</div> : null}
+            {error ? <div style={{ ...UI.overviewStateError, padding: "0 0 12px" }}>{error}</div> : null}
+            {tb.loadError ? <div style={UI.overviewStateWarn}>{tb.loadError}</div> : null}
             {!loading && !error && rows.length === 0 ? (
-              <div
-                style={{
-                  textAlign: "center",
-                  color: "#64748b",
-                  fontWeight: 700,
-                  padding: "24px 12px",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 12,
-                  background: "#f8fafc",
-                }}
-              >
+              <div style={UI.overviewEmptyInCard}>
                 Žádné položky v tomto režimu. Zkuste „Vše“ nebo „Stornované“, případně vytvořte zakázku a řádky v modulu Zakázky.
               </div>
             ) : null}
 
             {!loading && !error && rows.length > 0 ? (
-            <div style={{ overflowX: "auto" }}>
+            <div style={UI.overviewTableWrap}>
               <table style={UI.table}>
                 <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    {[
-                      "Zakázka",
-                      "Řádek",
-                      "GPN",
-                      "Popis",
-                      "Materiál",
-                      "Množství",
-                      "Termín",
-                      "Fáze výroby",
-                      "Postup",
-                      "VP",
-                      "Stav",
-                      "Nové okno",
-                    ].map((h) => (
-                      <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {h}
+                  <tr style={UI.overviewTableHeadRow}>
+                    {tb.visibleColumns.map((col) => (
+                      <th
+                        key={col.key}
+                        style={{
+                          ...UI.th,
+                          fontSize: 13,
+                          padding: `${tb.cellPaddingPx}px`,
+                          whiteSpace: "nowrap",
+                          width: col.width ?? undefined,
+                        }}
+                      >
+                        {col.label}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row) => (
+                  {sortedFilteredRows.map((row) => (
                     <tr
                       key={`${row.zakazka}-${row.job_item_id}`}
                       role="button"
@@ -406,130 +621,32 @@ export default function DrawingsPage({
                         background: hoveredRow === row.job_item_id ? "#eff6ff" : "#fff",
                       }}
                     >
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                        {row.customer_order_id != null && (onOpenCustomerOrderInWorkspaceTab || onOpenCustomerOrderCard) ? (
-                          <button
-                            type="button"
-                            style={{ ...linkBtn, fontWeight: 900, color: "#0f172a" }}
-                            onClick={() => {
-                              const id = row.customer_order_id!;
-                              if (onOpenCustomerOrderInWorkspaceTab) onOpenCustomerOrderInWorkspaceTab(id, row.zakazka);
-                              else onOpenCustomerOrderCard?.(id);
-                            }}
-                          >
-                            {row.zakazka}
-                          </button>
-                        ) : (
-                          <span style={{ fontWeight: 900 }}>{row.zakazka}</span>
-                        )}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {row.line_no ?? "—"}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                        <button
-                          type="button"
-                          style={{ ...linkBtn, fontWeight: 800 }}
-                          onClick={() => {
-                            if (row.portfolio_item_id != null && onOpenPortfolioInWorkspaceTab) {
-                              onOpenPortfolioInWorkspaceTab(row.portfolio_item_id);
-                              return;
-                            }
-                            if (row.portfolio_item_id != null && onOpenPortfolioItemId) {
-                              onOpenPortfolioItemId(row.portfolio_item_id);
-                              return;
-                            }
-                            onOpenPortfolioSearch?.(row.gpn);
+                      {tb.visibleColumns.map((col) => (
+                        <td
+                          key={col.key}
+                          style={{
+                            ...UI.td,
+                            padding: `${tb.cellPaddingPx}px`,
+                            whiteSpace:
+                              col.key === "popis" || col.key === "material" || col.key === "faze" ? "normal" : "nowrap",
+                            maxWidth: col.key === "faze" ? 220 : undefined,
+                            fontSize: col.key === "faze" ? 12 : undefined,
+                            fontWeight:
+                              col.key === "faze" ? 600 : col.key === "postup" ? 700 : undefined,
+                            color: col.key === "faze" ? "#334155" : col.key === "postup" ? "#475569" : undefined,
                           }}
                         >
-                          {row.gpn}
-                        </button>
-                        {row.portfolio_item_id != null && onPreviewPortfolioById ? (
-                          <button
-                            type="button"
-                            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
-                            onClick={() => onPreviewPortfolioById(row.portfolio_item_id!)}
-                          >
-                            Náhled
-                          </button>
-                        ) : null}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px" }}>{row.popis}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px" }}>{row.material}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.mnozstvi}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.termin}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", maxWidth: 220, fontSize: 12, fontWeight: 600, color: "#334155" }}>
-                        {row.faze_vyroby}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 700, color: "#475569" }}>
-                        {row.postup}
-                      </td>
-                      <td
-                        style={{ ...UI.td, padding: "10px 10px", color: row.vp !== "—" ? "#15803d" : "#64748b", fontWeight: 700 }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {row.vpLinks.length > 0 ? (
-                          <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                            {row.vpLinks.map((vp, i) => (
-                              <span key={vp.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                                {i > 0 ? <span style={{ color: "#94a3b8" }}>·</span> : null}
-                                <button
-                                  type="button"
-                                  style={{ ...linkBtn, color: "#15803d", fontWeight: 800 }}
-                                  disabled={!onOpenProductionOrderDetail && !onOpenProductionOrderInWorkspaceTab}
-                                  onClick={() => {
-                                    if (onOpenProductionOrderInWorkspaceTab) {
-                                      onOpenProductionOrderInWorkspaceTab(vp.id, vp.vp_code);
-                                    } else {
-                                      onOpenProductionOrderDetail?.(vp.id);
-                                    }
-                                  }}
-                                >
-                                  {vp.vp_code}
-                                </button>
-                                {onPreviewProductionOrderById ? (
-                                  <button
-                                    type="button"
-                                    style={{ ...UI.buttons.secondary, padding: "2px 6px", fontSize: 11 }}
-                                    onClick={() => onPreviewProductionOrderById(vp.id)}
-                                  >
-                                    Náhled
-                                  </button>
-                                ) : null}
-                              </span>
-                            ))}
-                          </span>
-                        ) : (
-                          row.vp
-                        )}
-                      </td>
-                      <td
-                        style={{
-                          ...UI.td,
-                          padding: "10px 10px",
-                          whiteSpace: "nowrap",
-                          fontWeight: 900,
-                          color: row.stav === "Storno" ? "#991b1b" : undefined,
-                        }}
-                      >
-                        {row.stav}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                        <button
-                          type="button"
-                          style={{ ...UI.buttons.secondary, padding: "4px 8px", fontSize: 12 }}
-                          onClick={() =>
-                            window.open(buildErpUrl({ view: "orderItem", jobItemId: row.job_item_id, source: "drawings" }), "_blank")
-                          }
-                        >
-                          Nové okno
-                        </button>
-                      </td>
+                          {renderDrawingCell(col.key, row)}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={12} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                      <td
+                        colSpan={Math.max(1, tb.visibleColumns.length)}
+                        style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}
+                      >
                         Žádné výsledky.
                       </td>
                     </tr>
@@ -540,6 +657,24 @@ export default function DrawingsPage({
             ) : null}
             </div>
           </div>
+        <TableLayoutModal
+          open={tb.panelOpen}
+          title="Sloupce — výkresy"
+          columns={tb.columns}
+          onColumnsChange={tb.setColumns}
+          sort={tb.sort}
+          onSortChange={tb.setSort}
+          sortableKeys={tb.sortableKeys}
+          columnLabels={DRAWINGS_COL_LABELS}
+          density={tb.density}
+          onDensityChange={tb.setDensity}
+          onCancel={tb.closePanelCancel}
+          onSave={() => void tb.savePanel()}
+          onResetLocal={tb.resetLocalToDefaults}
+          onResetAndSave={() => void tb.resetAndSave()}
+          saving={tb.saving}
+          errorMessage={tb.saveError}
+        />
         </PageSection>
       ) : (
         <PageSection gapTop={16}>

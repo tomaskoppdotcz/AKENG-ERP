@@ -19,6 +19,8 @@ export const overviewPrimaryFilterRowStyle: React.CSSProperties = {
 export type OverviewFilterChipOption = { id: string; label: string };
 
 type Props = {
+  /** Např. tlačítko „Sloupce“ — vždy před „Typ přehledu:“ (jednotná pozice napříč přehledy). */
+  leading?: React.ReactNode;
   loading?: boolean;
   typPrehleduOptions: OverviewFilterChipOption[];
   typPrehleduActiveId: string;
@@ -33,6 +35,7 @@ type Props = {
 };
 
 export default function OverviewPrimaryFilterRow({
+  leading,
   loading,
   typPrehleduOptions,
   typPrehleduActiveId,
@@ -45,6 +48,7 @@ export default function OverviewPrimaryFilterRow({
 }: Props) {
   return (
     <div style={{ ...overviewPrimaryFilterRowStyle, ...rowStyle }}>
+      {leading}
       <span style={overviewPrimaryFilterLabelStyle}>Typ přehledu:</span>
       {typPrehleduOptions.map(({ id, label }) => {
         const active = typPrehleduActiveId === id;

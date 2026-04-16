@@ -4,7 +4,7 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import not_, or_, select, text
+from sqlalchemy import func, not_, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_action
@@ -31,6 +31,7 @@ from app.models.portfolio import (
 from app.models.planning import PlanningOperation
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.restock_wip_reservation import RestockWipReservation
+from app.models.work_report import WorkReport
 from app.services.business_workflow import WORKFLOW_STATUS_CANCELLED, workflow_active_sql, workflow_record_active
 from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
 from app.services.material_readiness import (
@@ -46,6 +47,7 @@ from app.services.production_order_operation_runtime import (
 )
 from app.services.planning_engine import PlanningEngineService
 from app.services.planning_operation_status import normalize_planning_operation_status
+from app.services.vp_operational_metrics import vp_operational_metrics_map, vp_operational_metrics_single
 from app.services.vp_operation_generator import regenerate_single_production_order_from_tp
 
 # Rezervace materiálu z TP se synchronizují z orders (vytvoření/úprava VP, řádky zakázky) a z portfolio (vstupy TP).
@@ -152,6 +154,93 @@ def _completion_terminal_phase_from_last_vp_operation(
     if r is None:
         return None
     return _terminal_phase_from_operation_name(r.operation_name)
+
+
+def _vp_detail_operation_status_from_planning(planning_status: str | None) -> str:
+    """Kanonicalizace pro UI (hlavička + tabulka): planning → stejné slovníky jako dříve u logů."""
+    s = normalize_planning_operation_status(planning_status)
+    if s == "hotovo":
+        return "hotovo"
+    if s == "bezi":
+        return "bezi"
+    return "planned"
+
+
+def _work_report_totals_by_planning_operation_ids(
+    db: Session, planning_ids: list[int]
+) -> dict[int, dict[str, int]]:
+    if not planning_ids:
+        return {}
+    rows = db.execute(
+        select(
+            WorkReport.planning_operation_id,
+            func.coalesce(func.sum(WorkReport.qty_ok), 0),
+            func.coalesce(func.sum(WorkReport.qty_nok), 0),
+            func.coalesce(func.sum(func.coalesce(WorkReport.duration_min, 0.0)), 0.0),
+        )
+        .where(WorkReport.planning_operation_id.in_(planning_ids))
+        .group_by(WorkReport.planning_operation_id)
+    ).all()
+    out: dict[int, dict[str, int]] = {}
+    for r in rows:
+        pid = int(r[0])
+        out[pid] = {
+            "reported_ok_qty_total": int(r[1] or 0),
+            "reported_nok_qty_total": int(r[2] or 0),
+            "reported_minutes_total": int(round(float(r[3] or 0.0))),
+        }
+    return out
+
+
+def _aggregate_vp_status_from_merged_operations(po: ProductionOrder, operations: list[dict]) -> str:
+    """Agregovaný stav VP ze sjednocených operation_status na řádcích (planning + případný fallback log)."""
+    nos = [int(op["operation_no"]) for op in operations]
+    if not nos:
+        return normalize_production_order_status(po.status) or "planned"
+
+    def _canon(st: str | None) -> str:
+        x = (st or "planned").strip().lower()
+        if x in ("hotovo", "done", "finished", "complete", "completed"):
+            return "hotovo"
+        if x in ("bezi", "running", "in_progress", "started"):
+            return "bezi"
+        return "planned"
+
+    st_vals = [_canon(op.get("operation_status")) for op in operations]
+    all_done = all(v == "hotovo" for v in st_vals)
+    any_activity = any(v in ("bezi", "hotovo") for v in st_vals)
+    return _po_aggregate_status_string(po, nos, all_done, any_activity)
+
+
+def _completion_percent_from_operations(operations: list[dict]) -> float | None:
+    if not operations:
+        return None
+    done = 0
+    for op in operations:
+        st = (op.get("operation_status") or "planned").strip().lower()
+        if st in ("hotovo", "done", "finished", "complete", "completed"):
+            done += 1
+    return round(100.0 * float(done) / float(len(operations)), 1)
+
+
+def _current_phase_from_operations(operations: list[dict]) -> str | None:
+    if not operations:
+        return None
+
+    def _canon(st: str | None) -> str:
+        x = (st or "planned").strip().lower()
+        if x in ("hotovo", "done", "finished", "complete", "completed"):
+            return "hotovo"
+        if x in ("bezi", "running", "in_progress", "started"):
+            return "bezi"
+        return "planned"
+
+    st_vals = [_canon(op.get("operation_status")) for op in operations]
+    if all(s == "hotovo" for s in st_vals):
+        return "hotovo"
+    if any(s == "bezi" for s in st_vals):
+        return "bezi"
+    return "planned"
 
 
 def _po_aggregate_status_string(
@@ -339,6 +428,8 @@ def list_production_orders(
     co_by_id = {int(c.id): c for c in customer_orders}
     desc_map, portfolio_map = _job_item_optional_map(db, job_item_ids)
 
+    metrics_by_id = vp_operational_metrics_map(db, rows)
+
     out: list[dict] = []
     for po in rows:
         wf_ok = workflow_record_active(po)
@@ -353,6 +444,7 @@ def list_production_orders(
         elif ji is not None:
             resolved_portfolio_id = portfolio_map.get(int(ji.id))
         op_status, completion_terminal = _overview_operational_status_and_terminal(db, po)
+        mm = metrics_by_id.get(int(po.id)) or {}
         out.append(
             {
                 "id": int(po.id),
@@ -381,6 +473,10 @@ def list_production_orders(
                 "blocked_until_reserved_stock_receipt": bool(
                     getattr(po, "blocked_until_reserved_stock_receipt", False)
                 ),
+                "reported_time_min": int(mm.get("reported_time_min") or 0),
+                "direct_labor_cost": float(mm.get("direct_labor_cost") or 0.0),
+                "completion_percent": mm.get("completion_percent"),
+                "performance_percent": mm.get("performance_percent"),
             }
         )
     return {"items": out}
@@ -660,14 +756,15 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
             .where(PortfolioTechnologyTemplateOperation.template_id == int(tp_template.id))
             .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc(), PortfolioTechnologyTemplateOperation.id.asc())
         ).all()
-        for op in op_rows:
-            operation_nos.append(int(op.operation_no))
+        for idx, op in enumerate(op_rows):
+            effective_no = (idx + 1) * 10
+            operation_nos.append(int(effective_no))
             op_lib = db.get(OperationLibraryItem, op.operation_library_item_id) if op.operation_library_item_id is not None else None
             wp_lib = db.get(WorkplaceLibraryItem, op.workplace_library_item_id) if op.workplace_library_item_id is not None else None
             operations.append(
                 {
                     "id": int(op.id),
-                    "operation_no": int(op.operation_no),
+                    "operation_no": int(effective_no),
                     "operation_name": op_lib.name if op_lib is not None else op.operation_name,
                     "workplace_library_item_id": op.workplace_library_item_id,
                     "workplace_name": wp_lib.name if wp_lib is not None else op.workplace,
@@ -677,8 +774,8 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
                     "outsourcing": bool(op.outsourcing),
                     "note": op.note,
                     "operation_scan_code": (
-                        op_scan_by_no[int(op.operation_no)].scan_code
-                        if int(op.operation_no) in op_scan_by_no
+                        op_scan_by_no[int(effective_no)].scan_code
+                        if int(effective_no) in op_scan_by_no
                         else None
                     ),
                 }
@@ -728,16 +825,58 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
                 )
             inputs.append(inp_row)
 
-    op_status_by_no, any_activity, all_done = operation_statuses_for_production_order(db, int(po.id), operation_nos)
+    log_status_by_no: dict[int, dict] = {}
+    if operation_nos:
+        log_status_by_no, _, _ = operation_statuses_for_production_order(db, int(po.id), operation_nos)
+
+    planning_by_no: dict[int, PlanningOperation] = {}
+    vp_code = (po.vp_code or "").strip()
+    if vp_code:
+        for prow in db.scalars(
+            select(PlanningOperation)
+            .where(PlanningOperation.work_order_no == vp_code)
+            .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
+        ).all():
+            planning_by_no[int(prow.operation_no)] = prow
+
+    wr_by_planning = _work_report_totals_by_planning_operation_ids(
+        db, [int(p.id) for p in planning_by_no.values()]
+    )
+
     for op in operations:
-        st = op_status_by_no.get(int(op["operation_no"]))
-        if st:
-            op.update(st)
-    po_status = _po_aggregate_status_string(po, operation_nos, all_done, any_activity)
+        no = int(op["operation_no"])
+        pl = planning_by_no.get(no)
+        if pl is not None:
+            op["operation_status"] = _vp_detail_operation_status_from_planning(pl.status)
+            op["started_at"] = pl.actual_start.isoformat() if pl.actual_start else None
+            op["last_reported_at"] = (
+                pl.actual_end.isoformat()
+                if pl.actual_end is not None
+                and normalize_planning_operation_status(pl.status) == "hotovo"
+                else None
+            )
+            wt = wr_by_planning.get(int(pl.id))
+            op["reported_ok_qty_total"] = int(wt["reported_ok_qty_total"]) if wt else 0
+            op["reported_nok_qty_total"] = int(wt["reported_nok_qty_total"]) if wt else 0
+            op["reported_minutes_total"] = int(wt["reported_minutes_total"]) if wt else 0
+        else:
+            st = log_status_by_no.get(no)
+            if st:
+                op.update(st)
+
+    po_status = (
+        _aggregate_vp_status_from_merged_operations(po, operations)
+        if operations
+        else (normalize_production_order_status(po.status) or "planned")
+    )
 
     wf_ok_detail = workflow_record_active(po)
     mat_cov_d = evaluate_production_order_material_covered(db, po) if wf_ok_detail else False
     mat_rel_d = evaluate_production_order_material_released(db, po) if wf_ok_detail else False
+
+    om = vp_operational_metrics_single(db, po)
+    unified_completion = _completion_percent_from_operations(operations) if operations else None
+    unified_phase = _current_phase_from_operations(operations) if operations else None
 
     return {
         "id": int(po.id),
@@ -775,6 +914,12 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         else None,
         "operations": operations,
         "inputs": inputs,
+        "reported_time_min": int(om.get("reported_time_min") or 0),
+        "direct_labor_cost": float(om.get("direct_labor_cost") or 0.0),
+        "completion_percent": unified_completion if operations else om.get("completion_percent"),
+        "performance_percent": om.get("performance_percent"),
+        "current_location": om.get("current_location"),
+        "current_phase": unified_phase if operations else om.get("current_phase"),
     }
 
 

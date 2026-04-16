@@ -23,6 +23,14 @@ export type OrdersOverviewRow = {
   customer_order_id: number | null;
   job_id: number;
   workflow_status?: string | null;
+  /** Provozní metriky (aktivní VP / položky), shodně s detail zakázky. */
+  reported_time_min?: number;
+  direct_labor_cost?: number;
+  completion_percent?: number | null;
+  performance_percent?: number | null;
+  current_phase?: string | null;
+  current_location?: string | null;
+  operational_summary_cs?: string | null;
 };
 
 export type OrdersOverviewResponse = {
@@ -96,6 +104,14 @@ export type OrderDetailItem = {
     consuming_logistic_mode: string | null;
     note: string | null;
   }>;
+  /** Agregace přes aktivní VP řádku (GET order-detail). */
+  reported_time_min?: number;
+  direct_labor_cost?: number;
+  completion_percent?: number | null;
+  performance_percent?: number | null;
+  current_phase?: string | null;
+  current_location?: string | null;
+  operational_summary_cs?: string | null;
 };
 
 export type OrderDetailResponse = {
@@ -122,6 +138,13 @@ export type OrderDetailResponse = {
     prodejni_cena: number;
     /** Součet (kusy × cena / ks) jen u položek s cenou z portfolia. */
     total_sales_price: number;
+    reported_time_min?: number;
+    direct_labor_cost?: number;
+    completion_percent?: number | null;
+    performance_percent?: number | null;
+    current_phase?: string | null;
+    current_location?: string | null;
+    operational_summary_cs?: string | null;
   };
   items: OrderDetailItem[];
 };
@@ -143,6 +166,13 @@ export type JobItemRow = {
   production_phase_label?: string | null;
   /** Např. "2 / 5" z backendu. */
   production_progress_label?: string | null;
+  reported_time_min?: number;
+  direct_labor_cost?: number;
+  completion_percent?: number | null;
+  performance_percent?: number | null;
+  current_phase?: string | null;
+  current_location?: string | null;
+  operational_summary_cs?: string | null;
 };
 
 export type JobItemCreatePayload = {
@@ -195,7 +225,28 @@ export type CreateProductionOrdersResponse = {
   duplicate_flow_warnings?: DuplicateFlowWarning[];
 };
 
-export type RestockConflictStrategy = "prefer_customer" | "prefer_stock";
+export type RestockConflictStrategy =
+  | "prefer_customer"
+  | "prefer_stock"
+  | "stock_and_wip"
+  | "stock_and_new_production"
+  | "wip_only"
+  | "new_production_only"
+  | "stock_only";
+
+export type RestockResolutionOption = {
+  strategy: RestockConflictStrategy;
+  label_cs: string;
+  summary_cs: string;
+  stock_issue_qty: number;
+  wip_reservation_qty: number;
+  new_customer_production_qty: number;
+  stock_after_customer_issue_qty: number;
+  future_stock_after_wip_qty: number;
+  min_stock_replenishment_gap: number;
+  unified_internal_replenishment_qty: number;
+  is_recommended?: boolean;
+};
 
 export type RestockConflictResolution = {
   job_item_id: number;
@@ -211,6 +262,15 @@ export type AllocationPreviewLine = {
   restock_qty: number;
   /** sklad_zakaznik: min. doplnění + náhrada za hotové zboží pro zákazníka */
   internal_replenishment_qty?: number;
+  /** sklad_zakaznik: rozšířený náhled sklad vs. minimum vs. WIP (backend). */
+  finished_stock_qty?: number;
+  minimum_stock_target_qty?: number;
+  wip_restock_qty?: number;
+  stock_after_customer_issue_qty?: number;
+  future_stock_after_wip_qty?: number;
+  wip_covers_minimum_after_customer_issue?: boolean;
+  restock_resolution_options?: RestockResolutionOption[];
+  recommended_fulfillment_strategy?: RestockConflictStrategy | null;
   restock_wip: {
     quantity_open: number;
     production_order_ids: number[];
@@ -298,6 +358,23 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
             kusy_celkem: Number(s.kusy_celkem ?? 0),
             prodejni_cena: Number(s.prodejni_cena ?? 0),
             total_sales_price: Number(s.total_sales_price ?? 0),
+            reported_time_min: s.reported_time_min != null ? Number(s.reported_time_min) : undefined,
+            direct_labor_cost: s.direct_labor_cost != null ? Number(s.direct_labor_cost) : undefined,
+            completion_percent:
+              s.completion_percent === undefined
+                ? undefined
+                : s.completion_percent === null
+                  ? null
+                  : Number(s.completion_percent),
+            performance_percent:
+              s.performance_percent === undefined
+                ? undefined
+                : s.performance_percent === null
+                  ? null
+                  : Number(s.performance_percent),
+            current_phase: s.current_phase ?? null,
+            current_location: s.current_location ?? null,
+            operational_summary_cs: s.operational_summary_cs ?? null,
           };
         }
         return {

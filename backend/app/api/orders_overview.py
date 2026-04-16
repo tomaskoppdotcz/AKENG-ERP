@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.orders import CustomerOrder, Job, JobItem
 from app.services.business_workflow import workflow_record_active
+from app.services.order_operational_metrics import order_operational_metrics_map
 from app.models.planning import PlanningOperation
 from app.models.portfolio import PortfolioItem
 from app.models.production import OperationLog
@@ -233,6 +234,16 @@ def get_orders_overview(
         "workflow_status": getattr(co, "workflow_status", None),
       }
     )
+
+  co_ids_metrics = [int(r["customer_order_id"]) for r in result if r.get("customer_order_id") is not None]
+  om = order_operational_metrics_map(db, co_ids_metrics) if co_ids_metrics else {}
+  for row in result:
+    cid = row.get("customer_order_id")
+    if cid is None:
+      continue
+    m = om.get(int(cid))
+    if m:
+      row.update(m)
 
   return {"orders": result}
 

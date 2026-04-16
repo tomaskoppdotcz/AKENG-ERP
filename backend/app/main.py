@@ -43,6 +43,7 @@ from app.api.portfolio import (
 )
 from app.api.customers import ensure_customers_sqlite_schema, router as customers_router
 from app.api.ui_settings import router as ui_settings_router
+from app.api.table_layouts import router as table_layouts_router
 from app.api.work_reports import router as work_reports_router
 
 from app.services.planning_operation_status import backfill_canonical_statuses
@@ -77,10 +78,12 @@ from app.models.material_stock import (
     MaterialStockReservation,
 )
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
+from app.models.fulfillment_decision_audit import FulfillmentDecisionAudit  # noqa: F401 — metadata / create_all
 from app.models.restock_wip_reservation import RestockWipReservation  # noqa: F401 — metadata / create_all
 from app.models.storage_location import StorageLocation
 from app.models.erp_user import ErpUser  # noqa: F401 — metadata / create_all
 from app.models.app_setting import AppSetting  # noqa: F401 — metadata / create_all
+from app.models.user_table_layout import UserTableLayout  # noqa: F401 — metadata / create_all
 
 configure_app_console_logging(logging.INFO)
 
@@ -148,6 +151,7 @@ app.include_router(generate_operations_router, prefix="/generate", tags=["genera
 app.include_router(portfolio_router, prefix="/portfolio", tags=["portfolio"])
 app.include_router(customers_router)
 app.include_router(ui_settings_router, prefix="/ui", tags=["ui-settings"])
+app.include_router(table_layouts_router, prefix="/ui", tags=["ui-table-layouts"])
 
 
 @app.get("/")

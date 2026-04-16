@@ -11,6 +11,13 @@ def get_effective_role(
     return normalize_role(x_akeng_role)
 
 
+def get_effective_actor(
+    x_akeng_actor: Annotated[str | None, Header(alias="X-AKENG-Actor")] = None,
+) -> str | None:
+    a = (x_akeng_actor or "").strip()
+    return a or None
+
+
 def require_action(action: str):
     def _dep(role: str | None = Depends(get_effective_role)) -> None:
         assert_can(role, action)

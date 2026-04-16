@@ -3,6 +3,7 @@ import PageContainer from "../components/layout/PageContainer";
 import PageHeader from "../components/layout/PageHeader";
 import PageSection from "../components/layout/PageSection";
 import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilterRow";
+import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
 import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
 import { UI } from "../styles/ui";
 import type { ErpWorkflowListFilter, OrdersOverviewOrderTypeFilter } from "../services/ordersApi";
@@ -18,6 +19,15 @@ import {
   formatProductionOrderOverviewOperationalStatus,
   isProductionOrderOverviewCompleted,
 } from "../utils/productionOrderOverviewStatus";
+import TableLayoutModal from "../components/overview/TableLayoutModal";
+import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
+import type { TableColumnDef } from "../overview/tableLayoutMerge";
+import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
+import {
+  formatOverviewMoneyKc0,
+  formatOverviewPercentAsShown,
+  formatOverviewReportedMinutes,
+} from "../overview/overviewMetricsFormat";
 
 type Props = {
   onOpenDetail: (productionOrderId: number) => void;
@@ -87,6 +97,163 @@ function isVpRowDone(row: ProductionOrderOverviewRow): boolean {
   return isProductionOrderOverviewCompleted(row);
 }
 
+const PRODUCTION_ORDERS_TABLE_DEFAULTS: readonly TableColumnDef[] = [
+  { key: "vp", label: "VP", defaultWidth: 200 },
+  { key: "gpn", label: "GPN", defaultWidth: 120 },
+  { key: "description", label: "Název", defaultWidth: 160 },
+  { key: "quantity", label: "Množství", defaultWidth: 100 },
+  { key: "logistic", label: "Logistický režim", defaultWidth: 160 },
+  { key: "source", label: "Typ zdroje", defaultWidth: 160 },
+  { key: "status", label: "Stav", defaultWidth: 120 },
+  { key: "reported", label: "Vykázaný čas", defaultWidth: 110 },
+  { key: "completion", label: "Hotovo", defaultWidth: 90 },
+  { key: "labor", label: "Náklad práce", defaultWidth: 120 },
+  { key: "performance", label: "Výkonnost", defaultWidth: 100 },
+  { key: "zakazka", label: "Zakázka", defaultWidth: 140 },
+  { key: "customer_order_no", label: "Objednávka", defaultWidth: 120 },
+  { key: "line_no", label: "Řádek", defaultWidth: 80 },
+  { key: "due", label: "Termín", defaultWidth: 110 },
+] as const;
+
+const PROD_COL_LABELS: Record<string, string> = Object.fromEntries(PRODUCTION_ORDERS_TABLE_DEFAULTS.map((c) => [c.key, c.label]));
+
+type ProdCellCtx = Pick<
+  Props,
+  | "onOpenDetail"
+  | "onOpenDetailInWorkspaceTab"
+  | "onOpenPortfolioItemId"
+  | "onOpenCustomerOrderCard"
+  | "onPreviewPortfolioById"
+  | "onPreviewProductionOrderById"
+>;
+
+function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx: ProdCellCtx): React.ReactNode {
+  switch (key) {
+    case "vp":
+      return (
+        <div onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            style={{ ...linkButtonReset, fontWeight: 900 }}
+            onClick={() => {
+              ctx.onOpenDetailInWorkspaceTab?.(row.id, row.vp_code ?? undefined);
+              ctx.onOpenDetail(row.id);
+            }}
+          >
+            {row.vp_code}
+          </button>
+          {ctx.onPreviewProductionOrderById ? (
+            <button
+              type="button"
+              style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+              onClick={() => ctx.onPreviewProductionOrderById!(row.id)}
+            >
+              Náhled
+            </button>
+          ) : null}
+          <button
+            type="button"
+            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              void openProductionOrderPdfInNewTab(row.id).catch((err) =>
+                window.alert(err instanceof Error ? err.message : String(err)),
+              );
+            }}
+          >
+            Tisk VP
+          </button>
+          {String(row.workflow_status ?? "").trim().toLowerCase() === "cancelled" ? (
+            <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 800, color: "#991b1b" }}>Storno</span>
+          ) : null}
+        </div>
+      );
+    case "gpn":
+      return (
+        <div onClick={(e) => e.stopPropagation()}>
+          {row.gpn && ctx.onOpenPortfolioItemId ? (
+            <button
+              type="button"
+              style={linkButtonReset}
+              onClick={async () => {
+                if (row.portfolio_item_id != null) {
+                  ctx.onOpenPortfolioItemId!(row.portfolio_item_id);
+                  return;
+                }
+                const g = row.gpn.trim();
+                if (!g) return;
+                const variants = await listPortfolioItemsByGpn(g);
+                if (variants.length === 1) {
+                  ctx.onOpenPortfolioItemId!(variants[0].id);
+                } else if (variants.length > 1) {
+                  window.alert(
+                    "U tohoto GPN existuje více logistických variant v portfoliu. Otevřete správnou variantu z modulu Portfolio, nebo použijte náhled VP s navázaným portfolio_item_id.",
+                  );
+                }
+              }}
+            >
+              {row.gpn}
+            </button>
+          ) : (
+            row.gpn ?? "—"
+          )}
+          {row.portfolio_item_id != null && ctx.onPreviewPortfolioById ? (
+            <button
+              type="button"
+              style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+              onClick={() => ctx.onPreviewPortfolioById!(row.portfolio_item_id!)}
+            >
+              Náhled
+            </button>
+          ) : null}
+        </div>
+      );
+    case "description":
+      return row.description ?? "—";
+    case "quantity":
+      return `${row.quantity} ks`;
+    case "logistic":
+      return labelLogisticMode(row.logistic_mode);
+    case "source":
+      return labelSourceTypeRow(row);
+    case "status":
+      return formatProductionOrderOverviewOperationalStatus(row);
+    case "reported":
+      return formatOverviewReportedMinutes(row.reported_time_min);
+    case "completion":
+      return formatOverviewPercentAsShown(row.completion_percent);
+    case "labor":
+      return formatOverviewMoneyKc0(row.direct_labor_cost);
+    case "performance":
+      return formatOverviewPercentAsShown(row.performance_percent);
+    case "zakazka":
+      return (
+        <div onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+            <span style={{ fontWeight: 800 }}>{row.zakazka ?? "—"}</span>
+            {row.customer_order_id != null && ctx.onOpenCustomerOrderCard ? (
+              <button
+                type="button"
+                style={{ ...UI.buttons.secondary, padding: "2px 8px", fontSize: 11 }}
+                onClick={() => ctx.onOpenCustomerOrderCard!(row.customer_order_id!)}
+              >
+                Náhled
+              </button>
+            ) : null}
+          </div>
+        </div>
+      );
+    case "customer_order_no":
+      return row.customer_order_no?.trim() ? row.customer_order_no : "—";
+    case "line_no":
+      return row.line_no ?? "—";
+    case "due":
+      return row.due_date ?? "—";
+    default:
+      return "—";
+  }
+}
+
 function formatNoticeFulfilledAt(iso: string | null): string {
   if (!iso || !String(iso).trim()) return "—";
   try {
@@ -112,6 +279,8 @@ export default function ProductionOrdersPage({
   const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("all");
   const [activeQuickFilters, setActiveQuickFilters] = useState<ProductionQuickFilter[]>([]);
   const [restockNotices, setRestockNotices] = useState<RestockWipReservationNotice[]>([]);
+
+  const tb = usePersistedTableLayout("production_orders_table", PRODUCTION_ORDERS_TABLE_DEFAULTS);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,12 +329,91 @@ export default function ProductionOrdersPage({
     );
   }, [rowsByOrderType, activeQuickFilters]);
 
+  const sortedDisplayRows = useMemo(
+    () =>
+      sortRowsWithConfig(displayRows, tb.sort, (row, key) => {
+        switch (key) {
+          case "vp":
+            return row.vp_code ?? "";
+          case "gpn":
+            return row.gpn ?? "";
+          case "description":
+            return row.description ?? "";
+          case "quantity":
+            return row.quantity ?? 0;
+          case "logistic":
+            return row.logistic_mode ?? "";
+          case "source":
+            return row.source_type ?? "";
+          case "status":
+            return formatProductionOrderOverviewOperationalStatus(row);
+          case "reported":
+            return row.reported_time_min != null && Number.isFinite(Number(row.reported_time_min))
+              ? Number(row.reported_time_min)
+              : -1;
+          case "completion":
+            return row.completion_percent != null && Number.isFinite(Number(row.completion_percent))
+              ? Number(row.completion_percent)
+              : -1;
+          case "labor":
+            return row.direct_labor_cost != null && Number.isFinite(Number(row.direct_labor_cost))
+              ? Number(row.direct_labor_cost)
+              : -1;
+          case "performance":
+            return row.performance_percent != null && Number.isFinite(Number(row.performance_percent))
+              ? Number(row.performance_percent)
+              : -1;
+          case "zakazka":
+            return row.zakazka ?? "";
+          case "customer_order_no":
+            return row.customer_order_no ?? "";
+          case "line_no":
+            return row.line_no ?? -1;
+          case "due":
+            return row.due_date ?? "";
+          default:
+            return "";
+        }
+      }),
+    [displayRows, tb.sort],
+  );
+
+  const prodCtx: ProdCellCtx = {
+    onOpenDetail,
+    onOpenDetailInWorkspaceTab,
+    onOpenPortfolioItemId,
+    onOpenCustomerOrderCard,
+    onPreviewPortfolioById,
+    onPreviewProductionOrderById,
+  };
+
+  const summaryTiles = useMemo(() => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const poTerminu = displayRows.filter((r) => isVpRowOverdue(r, todayIso)).length;
+    return [
+      { label: "Celkem VP", value: String(rows.length) },
+      { label: "Zobrazeno", value: String(displayRows.length) },
+      { label: "Po termínu (v přehledu)", value: String(poTerminu) },
+    ] as const;
+  }, [rows.length, displayRows]);
+
   return (
     <PageContainer style={{ paddingTop: 10 }}>
       <PageHeader
         title="Výrobní příkazy"
         subtitle="Přehled všech VP napříč zákaznickými i interními zakázkami"
       />
+
+      <div style={UI.summaryTilesGridOuter}>
+        <div style={UI.summaryTilesGridThree}>
+          {summaryTiles.map((t) => (
+            <div key={t.label} style={UI.summaryTile}>
+              <div style={UI.summaryTileLabel}>{t.label}</div>
+              <div style={UI.summaryTileValue}>{t.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {restockNotices.length > 0 ? (
         <PageSection gapTop={12}>
@@ -233,18 +481,12 @@ export default function ProductionOrdersPage({
       ) : null}
 
       <PageSection gapTop={16}>
-        <div
-          style={{
-            ...UI.card,
-            borderRadius: 14,
-            padding: 0,
-            overflow: "hidden",
-            width: "100%",
-            boxSizing: "border-box",
-          }}
-        >
-          <div style={{ padding: 16, paddingBottom: 14, borderBottom: "1px solid #e2e8f0" }}>
+        <div style={UI.overviewMainCard}>
+          <div style={UI.overviewCardHeaderBand}>
             <OverviewPrimaryFilterRow
+              leading={
+                <OverviewSloupceButton onClick={() => tb.openPanel()} disabled={loading} />
+              }
               loading={loading}
               typPrehleduOptions={OVERVIEW_ORDER_TYPE_OPTIONS}
               typPrehleduActiveId={overviewOrderType}
@@ -297,151 +539,105 @@ export default function ProductionOrdersPage({
             />
           </div>
           {loading ? (
-            <div style={{ padding: 16, color: "#64748b", fontWeight: 600 }}>Načítám výrobní příkazy…</div>
+            <div style={UI.overviewStateLoading}>Načítám výrobní příkazy…</div>
           ) : error ? (
-            <div style={{ padding: 16, color: "#991b1b", fontWeight: 700 }}>{error}</div>
+            <div style={UI.overviewStateError}>{error}</div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={UI.table}>
-                <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    {["VP", "GPN", "Název", "Množství", "Logistický režim", "Typ zdroje", "Stav", "Zakázka", "Objednávka", "Řádek", "Termín"].map((h) => (
-                      <th key={h} style={{ ...UI.th, whiteSpace: "nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayRows.map((row) => (
-                    <tr
-                      key={row.id}
-                      onClick={() => {
-                        onOpenDetailInWorkspaceTab?.(row.id, row.vp_code ?? undefined);
-                        onOpenDetail(row.id);
-                      }}
-                      onMouseEnter={() => setHoveredId(row.id)}
-                      onMouseLeave={() => setHoveredId((id) => (id === row.id ? null : id))}
-                      style={{
-                        cursor: "pointer",
-                        background: hoveredId === row.id ? "#eff6ff" : "#fff",
-                      }}
-                    >
-                      <td style={{ ...UI.td, fontWeight: 900 }} onClick={(e) => e.stopPropagation()}>
-                        <button
-                          type="button"
-                          style={{ ...linkButtonReset, fontWeight: 900 }}
-                          onClick={() => {
-                            onOpenDetailInWorkspaceTab?.(row.id, row.vp_code ?? undefined);
-                            onOpenDetail(row.id);
+            <div style={UI.overviewCardBody}>
+              {tb.loadError ? <div style={UI.overviewStateWarn}>{tb.loadError}</div> : null}
+              <div style={UI.overviewTableWrap}>
+                <table style={UI.table}>
+                  <thead>
+                    <tr style={UI.overviewTableHeadRow}>
+                      {tb.visibleColumns.map((col) => (
+                        <th
+                          key={col.key}
+                          style={{
+                            ...UI.th,
+                            fontSize: 13,
+                            whiteSpace: "nowrap",
+                            padding: `${tb.cellPaddingPx}px`,
+                            width: col.width ?? undefined,
                           }}
                         >
-                          {row.vp_code}
-                        </button>
-                        {onPreviewProductionOrderById ? (
-                          <button
-                            type="button"
-                            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
-                            onClick={() => onPreviewProductionOrderById(row.id)}
-                          >
-                            Náhled
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void openProductionOrderPdfInNewTab(row.id).catch((err) =>
-                              window.alert(err instanceof Error ? err.message : String(err))
-                            );
-                          }}
-                        >
-                          Tisk VP
-                        </button>
-                        {String(row.workflow_status ?? "").trim().toLowerCase() === "cancelled" ? (
-                          <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 800, color: "#991b1b" }}>Storno</span>
-                        ) : null}
-                      </td>
-                      <td style={UI.td} onClick={(e) => e.stopPropagation()}>
-                        {row.gpn && onOpenPortfolioItemId ? (
-                          <button
-                            type="button"
-                            style={linkButtonReset}
-                            onClick={async () => {
-                              if (row.portfolio_item_id != null) {
-                                onOpenPortfolioItemId(row.portfolio_item_id);
-                                return;
-                              }
-                              const g = row.gpn.trim();
-                              if (!g) return;
-                              const variants = await listPortfolioItemsByGpn(g);
-                              if (variants.length === 1) {
-                                onOpenPortfolioItemId(variants[0].id);
-                              } else if (variants.length > 1) {
-                                window.alert(
-                                  "U tohoto GPN existuje více logistických variant v portfoliu. Otevřete správnou variantu z modulu Portfolio, nebo použijte náhled VP s navázaným portfolio_item_id."
-                                );
-                              }
+                          {col.label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedDisplayRows.map((row) => (
+                      <tr
+                        key={row.id}
+                        onClick={() => {
+                          onOpenDetailInWorkspaceTab?.(row.id, row.vp_code ?? undefined);
+                          onOpenDetail(row.id);
+                        }}
+                        onMouseEnter={() => setHoveredId(row.id)}
+                        onMouseLeave={() => setHoveredId((id) => (id === row.id ? null : id))}
+                        style={{
+                          cursor: "pointer",
+                          background: hoveredId === row.id ? "#eff6ff" : "#fff",
+                        }}
+                      >
+                        {tb.visibleColumns.map((col) => (
+                          <td
+                            key={col.key}
+                            style={{
+                              ...UI.td,
+                              padding: `${tb.cellPaddingPx}px`,
+                              whiteSpace: "nowrap",
+                              fontWeight: col.key === "vp" ? 900 : col.key === "status" ? 800 : undefined,
                             }}
                           >
-                            {row.gpn}
-                          </button>
-                        ) : (
-                          row.gpn ?? "—"
-                        )}
-                        {row.portfolio_item_id != null && onPreviewPortfolioById ? (
-                          <button
-                            type="button"
-                            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
-                            onClick={() => onPreviewPortfolioById(row.portfolio_item_id!)}
-                          >
-                            Náhled
-                          </button>
-                        ) : null}
-                      </td>
-                      <td style={UI.td}>{row.description ?? "—"}</td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.quantity} ks</td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{labelLogisticMode(row.logistic_mode)}</td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{labelSourceTypeRow(row)}</td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap", fontWeight: 800 }}>
-                        {formatProductionOrderOverviewOperationalStatus(row)}
-                      </td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-                          <span style={{ fontWeight: 800 }}>{row.zakazka ?? "—"}</span>
-                          {row.customer_order_id != null && onOpenCustomerOrderCard ? (
-                            <button
-                              type="button"
-                              style={{ ...UI.buttons.secondary, padding: "2px 8px", fontSize: 11 }}
-                              onClick={() => onOpenCustomerOrderCard(row.customer_order_id!)}
-                            >
-                              Náhled
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.customer_order_no?.trim() ? row.customer_order_no : "—"}</td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.line_no ?? "—"}</td>
-                      <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{row.due_date ?? "—"}</td>
-                    </tr>
-                  ))}
-                  {rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={11} style={{ ...UI.td, textAlign: "center", color: "#64748b" }}>
-                        Žádné výrobní příkazy.
-                      </td>
-                    </tr>
-                  ) : displayRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={11} style={{ ...UI.td, textAlign: "center", color: "#64748b" }}>
-                        Žádné výsledky.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
+                            {renderProductionCell(col.key, row, prodCtx)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    {rows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={Math.max(1, tb.visibleColumns.length)}
+                          style={{ ...UI.td, textAlign: "center", color: "#64748b" }}
+                        >
+                          Žádné výrobní příkazy.
+                        </td>
+                      </tr>
+                    ) : displayRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={Math.max(1, tb.visibleColumns.length)}
+                          style={{ ...UI.td, textAlign: "center", color: "#64748b" }}
+                        >
+                          Žádné výsledky.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
+        <TableLayoutModal
+          open={tb.panelOpen}
+          title="Sloupce — výrobní příkazy"
+          columns={tb.columns}
+          onColumnsChange={tb.setColumns}
+          sort={tb.sort}
+          onSortChange={tb.setSort}
+          sortableKeys={tb.sortableKeys}
+          columnLabels={PROD_COL_LABELS}
+          density={tb.density}
+          onDensityChange={tb.setDensity}
+          onCancel={tb.closePanelCancel}
+          onSave={() => void tb.savePanel()}
+          onResetLocal={tb.resetLocalToDefaults}
+          onResetAndSave={() => void tb.resetAndSave()}
+          saving={tb.saving}
+          errorMessage={tb.saveError}
+        />
       </PageSection>
     </PageContainer>
   );

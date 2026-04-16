@@ -6,6 +6,9 @@ from app.core.database import get_db
 from app.models.orders import CustomerOrder, Job, JobItem, JobItemCoverage, ProductionOrder
 from app.models.portfolio import PortfolioItem
 from app.models.product_stock import ProductStockItem
+from app.services.job_item_operational_metrics import job_item_operational_metrics_map
+from app.services.order_operational_metrics import order_operational_metrics_map
+from app.services.vp_operational_metrics import OPERATIONAL_METRICS_EMPTY
 
 router = APIRouter()
 
@@ -368,6 +371,17 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
     )
     return int(ranked[0].id)
 
+  ji_metrics = job_item_operational_metrics_map(db, [int(it.id) for it in items]) if items else {}
+
+  co_pk = job.customer_order_id
+  order_metrics: dict[str, int | float | str | None]
+  if co_pk is None:
+    order_metrics = dict(OPERATIONAL_METRICS_EMPTY)
+  else:
+    order_metrics = dict(
+      order_operational_metrics_map(db, [int(co_pk)]).get(int(co_pk), OPERATIONAL_METRICS_EMPTY)
+    )
+
   return {
     "job": {
       "id": job.id,
@@ -381,9 +395,11 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
       "kusy_celkem": kusy_celkem,
       "prodejni_cena": prodejni_cena,
       "total_sales_price": float(total_sales_price),
+      **order_metrics,
     },
     "items": [
       {
+        **ji_metrics.get(int(it.id), {}),
         "job_item_id": it.id,
         "line_no": it.line_no,
         "gpn": it.gpn,

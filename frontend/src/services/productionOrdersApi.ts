@@ -37,6 +37,14 @@ export type ProductionOrderOverviewRow = {
   is_material_released_to_production?: boolean | null;
   /** Alias: stejné jako is_material_released_to_production */
   is_material_ready?: boolean | null;
+  /** Součet duration_min z work_reports pro VP */
+  reported_time_min?: number;
+  /** Součet (min/60)*cost_rate jen u záznamů se zaměstnancem a sazbou */
+  direct_labor_cost?: number;
+  /** Podíl dokončených planning_operations (hotovo) / celkem, % */
+  completion_percent?: number | null;
+  /** planned_runtime / vykázaný čas * 100; null bez plánu nebo vykázaného času */
+  performance_percent?: number | null;
 };
 
 export type ProductionOrderOperationRow = {
@@ -136,6 +144,14 @@ export type ProductionOrderDetail = {
   } | null;
   operations: ProductionOrderOperationRow[];
   inputs: ProductionOrderInputRow[];
+  reported_time_min?: number;
+  direct_labor_cost?: number;
+  completion_percent?: number | null;
+  performance_percent?: number | null;
+  /** Poloha z běžící planning operace (stroj) */
+  current_location?: string | null;
+  /** Fáze z planning_operations: planned | bezi | hotovo */
+  current_phase?: string | null;
 };
 
 /** Nedávno splněné rezervace výstupu z restock VP (GET restock-wip-reservation-notices). */

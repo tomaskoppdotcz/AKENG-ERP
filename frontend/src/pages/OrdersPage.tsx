@@ -12,7 +12,19 @@ import {
   type OrdersOverviewRow,
 } from "../services/ordersApi";
 import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilterRow";
+import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
+import TableLayoutModal from "../components/overview/TableLayoutModal";
+import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
+import type { TableColumnDef } from "../overview/tableLayoutMerge";
+import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
 import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
+import {
+  formatOverviewCurrency,
+  formatOverviewDecimalHours,
+  formatOverviewHoursFromMinutes,
+  formatOverviewMoneyKc0,
+  formatOverviewPercentInteger,
+} from "../overview/overviewMetricsFormat";
 
 const orderCodeLink: React.CSSProperties = {
   background: "none",
@@ -33,45 +45,102 @@ type Props = {
   onBackToDashboard?: () => void;
 };
 
-const TABLE_COLUMNS = [
-  "Zakázka",
-  "Zákazník",
-  "Objednávka",
-  "Datum",
-  "Výkresy",
-  "Prodejní cena",
-  "Celkový náklad",
-  "Vykázaný čas",
-  "Výroba výkonnost",
-  "Hotovo",
+const ORDERS_TABLE_DEFAULTS: readonly TableColumnDef[] = [
+  { key: "zakazka", label: "Zakázka", defaultWidth: 160 },
+  { key: "zakaznik", label: "Zákazník", defaultWidth: 160 },
+  { key: "objednavka", label: "Objednávka", defaultWidth: 140 },
+  { key: "datum", label: "Datum", defaultWidth: 120 },
+  { key: "vykresy", label: "Výkresy", defaultWidth: 90 },
+  { key: "prodejni_cena", label: "Prodejní cena", defaultWidth: 130 },
+  { key: "naklad", label: "Celkový náklad", defaultWidth: 120 },
+  { key: "reported_time", label: "Vykázaný čas", defaultWidth: 120 },
+  { key: "completion", label: "Hotovo", defaultWidth: 90 },
+  { key: "labor", label: "Náklad práce", defaultWidth: 120 },
+  { key: "performance", label: "Výkonnost", defaultWidth: 100 },
 ] as const;
+
+const ORDERS_COL_LABELS: Record<string, string> = Object.fromEntries(ORDERS_TABLE_DEFAULTS.map((c) => [c.key, c.label]));
+
+type OrdersCellCtx = { onOpenOrderInWorkspaceTab: (customerOrderId: number, titleHint?: string) => void };
+
+function renderOrdersCell(
+  key: string,
+  row: OrdersOverviewRow,
+  ctx: OrdersCellCtx,
+  linkStyle: React.CSSProperties,
+): React.ReactNode {
+  const openable = row.customer_order_id != null;
+  switch (key) {
+    case "zakazka":
+      return (
+        <>
+          {openable && row.customer_order_id != null ? (
+            <button
+              type="button"
+              style={linkStyle}
+              onClick={(e) => {
+                e.stopPropagation();
+                ctx.onOpenOrderInWorkspaceTab(row.customer_order_id!, row.zakazka ?? undefined);
+              }}
+            >
+              {row.zakazka}
+            </button>
+          ) : (
+            <span style={{ fontWeight: 1000, color: "#0f172a" }}>{row.zakazka}</span>
+          )}
+          {String(row.workflow_status ?? "").trim().toLowerCase() === "cancelled" ? (
+            <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 800, color: "#991b1b" }}>Storno</span>
+          ) : null}
+        </>
+      );
+    case "zakaznik":
+      return row.zakaznik ?? "—";
+    case "objednavka":
+      return row.objednavka ?? "—";
+    case "datum":
+      return row.datum ?? "—";
+    case "vykresy":
+      return row.vykresy;
+    case "prodejni_cena":
+      return formatOverviewCurrency(row.prodejni_cena);
+    case "naklad":
+      return formatOverviewMoneyKc0(row.naklad);
+    case "reported_time":
+      return formatOverviewHoursFromMinutes(
+        row.reported_time_min != null && Number.isFinite(Number(row.reported_time_min))
+          ? Number(row.reported_time_min)
+          : null,
+      );
+    case "completion":
+      return (
+        <span style={{ fontWeight: 1000, color: "#2563eb" }}>
+          {formatOverviewPercentInteger(
+            row.completion_percent != null && Number.isFinite(Number(row.completion_percent))
+              ? Number(row.completion_percent)
+              : null,
+          )}
+        </span>
+      );
+    case "labor":
+      return formatOverviewMoneyKc0(
+        row.direct_labor_cost != null && Number.isFinite(Number(row.direct_labor_cost)) ? Number(row.direct_labor_cost) : null,
+      );
+    case "performance":
+      return formatOverviewPercentInteger(
+        row.performance_percent != null && Number.isFinite(Number(row.performance_percent))
+          ? Number(row.performance_percent)
+          : null,
+      );
+    default:
+      return "—";
+  }
+}
 
 const ORDER_FILTERS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
 type OrderFilter = (typeof ORDER_FILTERS)[number];
 
 function formatSearchValue(v: string) {
   return v.trim().toLowerCase();
-}
-
-function formatMoneyKc(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 0 })} Kč`;
-}
-
-/** Součet z portfolia (shodně s kartou zakázky). */
-function formatProdejniCenaOverview(n: number | null | undefined): string {
-  const v = n == null || Number.isNaN(n) ? 0 : n;
-  return `${v.toLocaleString("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 })} Kč`;
-}
-
-function formatHours(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 1 })} h`;
-}
-
-function formatPercent(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${Math.round(n)} %`;
 }
 
 function startOfToday(): Date {
@@ -119,6 +188,8 @@ export default function OrdersPage(_props: Props) {
   const [formNote, setFormNote] = useState("");
   const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("customer");
   const [overviewWorkflowFilter, setOverviewWorkflowFilter] = useState<ErpWorkflowListFilter>("active");
+
+  const tb = usePersistedTableLayout("orders_table", ORDERS_TABLE_DEFAULTS);
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
@@ -170,10 +241,10 @@ export default function OrdersPage(_props: Props) {
       return !Number.isNaN(t.getTime()) && t < startOfToday();
     }).length;
     return [
-      { label: "Celkem objednávky", value: count ? formatProdejniCenaOverview(sumSales) : "—" },
+      { label: "Celkem objednávky", value: count ? formatOverviewCurrency(sumSales) : "—" },
       { label: "Počet zakázek", value: count ? String(count) : "—" },
       { label: "Nedodělané zakázky", value: count ? String(nedodelane) : "—" },
-      { label: "Celkem hodin", value: count ? formatHours(celkemZbyvaHodin) : "—" },
+      { label: "Celkem hodin", value: count ? formatOverviewDecimalHours(celkemZbyvaHodin) : "—" },
       { label: "Po termínu", value: count ? String(poTerminu) : "—" },
       { label: "K expedici", value: "—" },
     ] as const;
@@ -201,6 +272,47 @@ export default function OrdersPage(_props: Props) {
       return matchesQuery && matchesFilters;
     });
   }, [rows, query, activeFilters]);
+
+  const sortedFiltered = useMemo(
+    () =>
+      sortRowsWithConfig(filtered, tb.sort, (row, key) => {
+        switch (key) {
+          case "zakazka":
+            return row.zakazka ?? "";
+          case "zakaznik":
+            return row.zakaznik ?? "";
+          case "objednavka":
+            return row.objednavka ?? "";
+          case "datum":
+            return row.datum ?? "";
+          case "vykresy":
+            return row.vykresy;
+          case "prodejni_cena":
+            return row.prodejni_cena;
+          case "naklad":
+            return row.naklad;
+          case "reported_time":
+            return row.reported_time_min != null && Number.isFinite(Number(row.reported_time_min))
+              ? Number(row.reported_time_min)
+              : -1;
+          case "completion":
+            return row.completion_percent != null && Number.isFinite(Number(row.completion_percent))
+              ? Number(row.completion_percent)
+              : -1;
+          case "labor":
+            return row.direct_labor_cost != null && Number.isFinite(Number(row.direct_labor_cost))
+              ? Number(row.direct_labor_cost)
+              : -1;
+          case "performance":
+            return row.performance_percent != null && Number.isFinite(Number(row.performance_percent))
+              ? Number(row.performance_percent)
+              : -1;
+          default:
+            return "";
+        }
+      }),
+    [filtered, tb.sort],
+  );
 
   const activeSubtabLabel = ZAKAZKY_MODULE_SUBTABS.find((t) => t.id === activeSubtab)?.label ?? "Přehled";
 
@@ -372,18 +484,10 @@ export default function OrdersPage(_props: Props) {
 
       {activeSubtab === "prehled" ? (
         <PageSection gapTop={16}>
-          <div
-            style={{
-              ...UI.card,
-              padding: 0,
-              borderRadius: 14,
-              width: "100%",
-              boxSizing: "border-box",
-              overflow: "hidden",
-            }}
-          >
-            <div style={{ padding: 16, paddingBottom: 14, borderBottom: "1px solid #e2e8f0" }}>
+          <div style={UI.overviewMainCard}>
+            <div style={UI.overviewCardHeaderBand}>
               <OverviewPrimaryFilterRow
+                leading={<OverviewSloupceButton onClick={() => tb.openPanel()} disabled={loading} />}
                 loading={loading}
                 typPrehleduOptions={OVERVIEW_ORDER_TYPE_OPTIONS}
                 typPrehleduActiveId={overviewOrderType}
@@ -393,8 +497,9 @@ export default function OrdersPage(_props: Props) {
                 onStavZakazky={(id) => setOverviewWorkflowFilter(id as ErpWorkflowListFilter)}
                 rowStyle={{ marginBottom: !loading && rows.length > 0 ? 12 : 0 }}
                 trailing={
-                  !loading && rows.length > 0 ? (
-                    <>
+                  <>
+                    {!loading && rows.length > 0 ? (
+                      <>
                       {ORDER_FILTERS.map((filter) => {
                         const active = activeFilters.includes(filter);
                         return (
@@ -415,12 +520,13 @@ export default function OrdersPage(_props: Props) {
                           </button>
                         );
                       })}
-                    </>
-                  ) : null
+                      </>
+                    ) : null}
+                  </>
                 }
               />
               {!loading && rows.length > 0 ? (
-                <div style={{ ...UI.ordersFilterBar, marginBottom: 0 }}>
+                <div style={UI.overviewSecondaryFilterRow}>
                   <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 280px", minWidth: 200 }}>
                     <input
                       value={query}
@@ -433,45 +539,44 @@ export default function OrdersPage(_props: Props) {
               ) : null}
             </div>
 
-            <div style={{ padding: 16 }}>
-              {loadError ? (
-                <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 12 }}>{loadError}</div>
-              ) : null}
-              {loading ? <div style={{ ...UI.sectionSubtitle, marginBottom: 12 }}>Načítám zakázky…</div> : null}
+            <div style={UI.overviewCardBody}>
+              {loadError ? <div style={{ ...UI.overviewStateError, padding: "0 0 12px" }}>{loadError}</div> : null}
+              {tb.loadError ? <div style={UI.overviewStateWarn}>{tb.loadError}</div> : null}
+              {loading ? <div style={{ ...UI.overviewStateLoading, padding: "0 0 12px" }}>Načítám zakázky…</div> : null}
 
               {!loading && !loadError && rows.length === 0 ? (
-                <div
-                  style={{
-                    textAlign: "center",
-                    color: "#64748b",
-                    fontWeight: 700,
-                    padding: "28px 12px",
-                    background: "#f8fafc",
-                    borderRadius: 12,
-                    border: "1px solid #e2e8f0",
-                  }}
-                >
+                <div style={UI.overviewEmptyInCard}>
                   Žádné zakázky k zobrazení. Po načtení reálných dat z backendu se zde objeví přehled.
                 </div>
               ) : null}
 
               {!loading && rows.length > 0 ? (
-                <div style={{ overflowX: "auto" }}>
+                <div style={UI.overviewTableWrap}>
                   <table style={UI.table}>
                     <thead>
-                      <tr style={{ background: "#f8fafc" }}>
-                        {TABLE_COLUMNS.map((col) => (
-                          <th key={col} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                            {col}
+                      <tr style={UI.overviewTableHeadRow}>
+                        {tb.visibleColumns.map((col) => (
+                          <th
+                            key={col.key}
+                            style={{
+                              ...UI.th,
+                              fontSize: 13,
+                              padding: `${tb.cellPaddingPx}px`,
+                              whiteSpace: "nowrap",
+                              width: col.width ?? undefined,
+                            }}
+                          >
+                            {col.label}
                           </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.map((row) => {
+                      {sortedFiltered.map((row) => {
                         const rowKey = `${row.job_id}-${row.zakazka}`;
                         const isHovered = hoveredKey === rowKey;
                         const openable = row.customer_order_id != null;
+                        const ctx: OrdersCellCtx = { onOpenOrderInWorkspaceTab: _props.onOpenOrderInWorkspaceTab };
                         return (
                           <tr
                             key={rowKey}
@@ -488,49 +593,28 @@ export default function OrdersPage(_props: Props) {
                               opacity: openable ? 1 : 0.85,
                             }}
                           >
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                              {openable && row.customer_order_id != null ? (
-                                <button
-                                  type="button"
-                                  style={orderCodeLink}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    _props.onOpenOrderInWorkspaceTab(row.customer_order_id!, row.zakazka ?? undefined);
-                                  }}
-                                >
-                                  {row.zakazka}
-                                </button>
-                              ) : (
-                                <span style={{ fontWeight: 1000, color: "#0f172a" }}>{row.zakazka}</span>
-                              )}
-                              {String(row.workflow_status ?? "").trim().toLowerCase() === "cancelled" ? (
-                                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 800, color: "#991b1b" }}>
-                                  Storno
-                                </span>
-                              ) : null}
-                            </td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.zakaznik ?? "—"}</td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.objednavka ?? "—"}</td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.datum ?? "—"}</td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vykresy}</td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900, color: "#0f172a" }}>
-                              {formatProdejniCenaOverview(row.prodejni_cena)}
-                            </td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 900, color: "#0f172a" }}>
-                              {formatMoneyKc(row.naklad)}
-                            </td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatHours(row.vykazany_cas)}</td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{formatPercent(row.vykonnost)}</td>
-                            <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 1000, color: "#2563eb" }}>
-                              {formatPercent(row.hotovo)}
-                            </td>
+                            {tb.visibleColumns.map((col) => (
+                              <td
+                                key={col.key}
+                                style={{
+                                  ...UI.td,
+                                  padding: `${tb.cellPaddingPx}px`,
+                                  whiteSpace: "nowrap",
+                                  fontWeight: col.key === "prodejni_cena" || col.key === "naklad" ? 900 : undefined,
+                                  color:
+                                    col.key === "prodejni_cena" || col.key === "naklad" ? "#0f172a" : undefined,
+                                }}
+                              >
+                                {renderOrdersCell(col.key, row, ctx, orderCodeLink)}
+                              </td>
+                            ))}
                           </tr>
                         );
                       })}
                       {filtered.length === 0 && rows.length > 0 ? (
                         <tr>
                           <td
-                            colSpan={TABLE_COLUMNS.length}
+                            colSpan={Math.max(1, tb.visibleColumns.length)}
                             style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}
                           >
                             Žádné výsledky.
@@ -543,6 +627,24 @@ export default function OrdersPage(_props: Props) {
               ) : null}
             </div>
           </div>
+          <TableLayoutModal
+            open={tb.panelOpen}
+            title="Sloupce — zakázky"
+            columns={tb.columns}
+            onColumnsChange={tb.setColumns}
+            sort={tb.sort}
+            onSortChange={tb.setSort}
+            sortableKeys={tb.sortableKeys}
+            columnLabels={ORDERS_COL_LABELS}
+            density={tb.density}
+            onDensityChange={tb.setDensity}
+            onCancel={tb.closePanelCancel}
+            onSave={() => void tb.savePanel()}
+            onResetLocal={tb.resetLocalToDefaults}
+            onResetAndSave={() => void tb.resetAndSave()}
+            saving={tb.saving}
+            errorMessage={tb.saveError}
+          />
         </PageSection>
       ) : (
         <PageSection gapTop={16}>

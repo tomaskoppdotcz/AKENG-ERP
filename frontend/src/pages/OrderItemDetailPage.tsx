@@ -97,6 +97,37 @@ function formatMaterialNumber(value: number | null | undefined, empty = "—"): 
   return value.toLocaleString("cs-CZ", { maximumFractionDigits: 6 });
 }
 
+function formatItemReportedMin(m: number | null | undefined): string {
+  if (m == null || !Number.isFinite(Number(m))) return "—";
+  return `${Math.round(Number(m))} min`;
+}
+
+function formatItemPct(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  return `${Number(v)} %`;
+}
+
+function formatItemLaborCzk(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  if (Number(v) === 0) return "0 Kč";
+  try {
+    return new Intl.NumberFormat("cs-CZ", {
+      style: "currency",
+      currency: "CZK",
+      maximumFractionDigits: 0,
+    }).format(Number(v));
+  } catch {
+    return `${Math.round(Number(v))} Kč`;
+  }
+}
+
+function labelAggregatedPhase(phase: string | null | undefined): string {
+  const s = String(phase ?? "").trim().toLowerCase();
+  if (s === "hotovo") return "Hotovo";
+  if (s === "bezi") return "Běží";
+  return "Naplánováno";
+}
+
 function vpHasPendingMaterialIssue(vp: VpRequirementRow): boolean {
   if (vp.coverage !== "covered") return false;
   for (const m of vp.materials) {
@@ -678,6 +709,61 @@ export default function OrderItemDetailPage({
             </div>
           }
         />
+
+        <div style={{ ...UI.card, borderRadius: 14 }}>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>Provozní metriky položky</div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+              gap: 14,
+            }}
+          >
+            <div>
+              <div style={UI.statLabel}>Vykázaný čas</div>
+              <div style={UI.statValue}>{formatItemReportedMin(item.reported_time_min)}</div>
+            </div>
+            <div>
+              <div style={UI.statLabel}>Náklad práce</div>
+              <div style={UI.statValue}>{formatItemLaborCzk(item.direct_labor_cost)}</div>
+            </div>
+            <div>
+              <div style={UI.statLabel}>Hotovo</div>
+              <div style={UI.statValue}>{formatItemPct(item.completion_percent)}</div>
+            </div>
+            <div>
+              <div style={UI.statLabel}>Výkonnost</div>
+              <div style={UI.statValue}>{formatItemPct(item.performance_percent)}</div>
+            </div>
+          </div>
+          {(item.operational_summary_cs || item.current_phase || item.current_location) && (
+            <div
+              style={{
+                marginTop: 14,
+                paddingTop: 14,
+                borderTop: "1px solid #e2e8f0",
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {item.operational_summary_cs ? (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div style={UI.statLabel}>Souhrn VP</div>
+                  <div style={{ ...UI.statValue, fontSize: 15 }}>{item.operational_summary_cs}</div>
+                </div>
+              ) : null}
+              <div>
+                <div style={UI.statLabel}>Dominantní fáze</div>
+                <div style={UI.statValue}>{labelAggregatedPhase(item.current_phase)}</div>
+              </div>
+              <div>
+                <div style={UI.statLabel}>Poloha (běžící VP)</div>
+                <div style={UI.statValue}>{item.current_location?.trim() ? item.current_location : "—"}</div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {orderKind === "customer" ? (
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>

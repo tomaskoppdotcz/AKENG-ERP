@@ -9,7 +9,7 @@ from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_action
+from app.api.deps import get_effective_actor, require_action
 from app.core.database import get_db
 from app.core.scan_code import (
     customer_order_scan_code_for_id,
@@ -36,9 +36,13 @@ from app.models.orders import (
 )
 from app.models.restock_wip_reservation import RestockWipReservation
 from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
+from app.services.fulfillment_decision_audit import insert_fulfillment_decision_audit
 from app.services.sklad_zakaznik_fulfillment import (
     SkladZakaznikFulfillmentPlan,
     build_sklad_zakaznik_fulfillment_plan,
+    compute_sklad_zakaznik_customer_split,
+    list_sklad_zakaznik_resolution_options,
+    normalize_restock_resolution_strategy,
     wip_primary_restock_po_for_plan,
 )
 from app.services.vp_operation_generator import (
@@ -52,6 +56,7 @@ from app.services.business_workflow import (
     workflow_active_sql,
     workflow_record_active,
 )
+from app.services.job_item_operational_metrics import job_item_operational_metrics_map
 from app.services.job_item_production_labels import production_labels_for_job_item
 from app.services.material_reservation_sync import (
     MATERIAL_RESERVATION_ACTIVE_STATUSES,
@@ -433,6 +438,61 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_product_issues_customer_order_id ON product_issues (customer_order_id)")
         )
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS fulfillment_decision_audit ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "created_at DATETIME NOT NULL, "
+                "decision_phase VARCHAR(20) NOT NULL, "
+                "actor VARCHAR(255) NULL, "
+                "customer_order_id INTEGER NOT NULL, "
+                "job_item_id INTEGER NOT NULL, "
+                "gpn VARCHAR(120) NULL, "
+                "portfolio_item_id INTEGER NULL, "
+                "decision_mode VARCHAR(40) NULL, "
+                "recommended_strategy VARCHAR(40) NULL, "
+                "chosen_strategy VARCHAR(40) NULL, "
+                "requested_qty INTEGER NOT NULL, "
+                "finished_stock_qty_before INTEGER NULL, "
+                "minimum_stock_target_qty INTEGER NULL, "
+                "wip_restock_qty_before INTEGER NULL, "
+                "stock_issue_qty INTEGER NULL, "
+                "wip_reservation_qty INTEGER NULL, "
+                "new_customer_production_qty INTEGER NULL, "
+                "internal_restock_qty INTEGER NULL, "
+                "stock_after_issue_qty INTEGER NULL, "
+                "future_stock_after_wip_qty INTEGER NULL, "
+                "source_restock_production_order_id INTEGER NULL, "
+                "stock_allocation_production_order_id INTEGER NULL, "
+                "customer_order_allocation_production_order_id INTEGER NULL, "
+                "vyroba_zakaznik_production_order_id INTEGER NULL, "
+                "internal_restock_production_order_id INTEGER NULL, "
+                "restock_wip_reservation_id INTEGER NULL, "
+                "note VARCHAR(500) NULL, "
+                "details_json TEXT NULL, "
+                "FOREIGN KEY(customer_order_id) REFERENCES customer_orders (id), "
+                "FOREIGN KEY(job_item_id) REFERENCES job_items (id), "
+                "FOREIGN KEY(source_restock_production_order_id) REFERENCES production_orders (id), "
+                "FOREIGN KEY(stock_allocation_production_order_id) REFERENCES production_orders (id), "
+                "FOREIGN KEY(customer_order_allocation_production_order_id) REFERENCES production_orders (id), "
+                "FOREIGN KEY(vyroba_zakaznik_production_order_id) REFERENCES production_orders (id), "
+                "FOREIGN KEY(internal_restock_production_order_id) REFERENCES production_orders (id), "
+                "FOREIGN KEY(restock_wip_reservation_id) REFERENCES restock_wip_reservations (id)"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_fulfillment_audit_customer_order_id "
+                "ON fulfillment_decision_audit (customer_order_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_fulfillment_audit_job_item_id "
+                "ON fulfillment_decision_audit (job_item_id)"
+            )
+        )
 
     if "production_order_operations" in insp.get_table_names():
         poo_cols = {c["name"] for c in sa_inspect(engine).get_columns("production_order_operations")}
@@ -750,13 +810,18 @@ def _open_restock_wip_quantity_for_job_item(db: Session, item: JobItem, has_port
         return 0
 
 
-def _job_line_needs_restock_conflict_choice(
+def _job_line_needs_restock_wip_modal(
     to_production_qty: float,
-    restock_qty: float,
     wip_open_qty: int,
 ) -> bool:
-    """Stejná podmínka jako `needs_user_choice` v náhledu alokace."""
-    return wip_open_qty > 0 and (to_production_qty > 0 or restock_qty > 0)
+    """
+    Modal „sklad vs. zakázka“ jen když lze rozpracované doplnění skladu (WIP) reálně použít
+    jako náhradu za chybějící hotové kusy pro zákazníka (požadavek nad stav skladu).
+
+    Minimální zásoba sama o sobě výdej ze skladu neblokuje — rozhodnutí o interním doplnění
+    se dopočítá z cílového minima a budoucího stavu po dokončení WIP.
+    """
+    return wip_open_qty > 0 and to_production_qty > 0
 
 
 def _portfolio_logistic_mode_for_job_item(
@@ -981,40 +1046,73 @@ def _allocation_preview_for_customer_order(db: Session, customer_order_id: int) 
                 if pl_sz is not None:
                     needs_user_choice = bool(pl_sz.needs_wip_resolution)
                 elif line_logistic == "sklad_zakaznik":
-                    needs_user_choice = _job_line_needs_restock_conflict_choice(
-                        to_production_qty, restock_qty, qo
-                    )
+                    needs_user_choice = _job_line_needs_restock_wip_modal(to_production_qty, qo)
             except HTTPException:
                 pass
 
+        restock_resolution_options: list[dict] = []
+        recommended_fulfillment_strategy: str | None = None
+        if needs_user_choice and pl_sz is not None and portfolio_item_id is not None:
+            opts, rec = list_sklad_zakaznik_resolution_options(
+                customer_required_qty=int(it.qty or 0),
+                finished_stock_qty=float(pl_sz.finished_stock_qty),
+                wip_restock_qty=int(pl_sz.wip_open_qty),
+                minimum_stock_target_qty=float(pl_sz.minimum_stock_target_qty),
+            )
+            restock_resolution_options = [{**o, "is_recommended": o.get("strategy") == rec} for o in opts]
+            recommended_fulfillment_strategy = rec
+
         reserve_wip_plan: dict | None = None
         if needs_user_choice and has_portfolio:
-            wip_q = int(restock_wip.get("quantity_open") or 0)
-            tp_r = int(round(float(to_production_qty)))
-            rq_res = min(wip_q, max(0, tp_r))
-            rem = max(0, tp_r - rq_res)
-            reserve_wip_plan = {
-                "reserved_qty": int(rq_res),
-                "customer_sklad_zakaznik_qty": int(rq_res),
-                "replenishment_internal_qty": int(rq_res),
-                "customer_vyroba_extra_qty": int(rem),
-                "stock_restock_vp_unchanged": True,
-            }
-        lines.append(
-            {
-                "job_item_id": int(it.id),
-                "gpn": (it.gpn or "").strip(),
-                "from_stock_qty": float(from_stock_qty),
-                "to_production_qty": float(to_production_qty),
-                "restock_qty": float(restock_qty),
-                "internal_replenishment_qty": float(internal_repl),
-                "required_qty": float(it.qty or 0.0),
-                "restock_wip": restock_wip,
-                "needs_user_choice": bool(needs_user_choice),
-                "reserve_wip_plan": reserve_wip_plan,
-                "line_logistic_mode": line_logistic,
-            }
-        )
+            if pl_sz is not None and portfolio_item_id is not None:
+                pl_cust = build_sklad_zakaznik_fulfillment_plan(
+                    db, it, int(portfolio_item_id), has_portfolio, "stock_and_wip"
+                )
+                reserve_wip_plan = {
+                    "reserved_qty": int(pl_cust.qty_reserved_wip),
+                    "customer_sklad_zakaznik_qty": int(pl_cust.qty_reserved_wip),
+                    "replenishment_internal_qty": int(pl_cust.unified_internal_replenishment_qty),
+                    "customer_vyroba_extra_qty": int(pl_cust.qty_vyroba_remainder),
+                    "stock_restock_vp_unchanged": True,
+                }
+            else:
+                wip_q = int(restock_wip.get("quantity_open") or 0)
+                tp_r = int(round(float(to_production_qty)))
+                rq_res = min(wip_q, max(0, tp_r))
+                rem = max(0, tp_r - rq_res)
+                reserve_wip_plan = {
+                    "reserved_qty": int(rq_res),
+                    "customer_sklad_zakaznik_qty": int(rq_res),
+                    "replenishment_internal_qty": int(rq_res),
+                    "customer_vyroba_extra_qty": int(rem),
+                    "stock_restock_vp_unchanged": True,
+                }
+
+        line_payload: dict = {
+            "job_item_id": int(it.id),
+            "gpn": (it.gpn or "").strip(),
+            "from_stock_qty": float(from_stock_qty),
+            "to_production_qty": float(to_production_qty),
+            "restock_qty": float(restock_qty),
+            "internal_replenishment_qty": float(internal_repl),
+            "required_qty": float(it.qty or 0.0),
+            "restock_wip": restock_wip,
+            "needs_user_choice": bool(needs_user_choice),
+            "reserve_wip_plan": reserve_wip_plan,
+            "line_logistic_mode": line_logistic,
+            "restock_resolution_options": restock_resolution_options,
+            "recommended_fulfillment_strategy": recommended_fulfillment_strategy,
+        }
+        if pl_sz is not None:
+            line_payload["finished_stock_qty"] = float(pl_sz.finished_stock_qty)
+            line_payload["minimum_stock_target_qty"] = float(pl_sz.minimum_stock_target_qty)
+            line_payload["wip_restock_qty"] = float(pl_sz.wip_open_qty)
+            line_payload["stock_after_customer_issue_qty"] = float(pl_sz.stock_after_customer_issue_qty)
+            line_payload["future_stock_after_wip_qty"] = float(pl_sz.future_stock_after_wip_qty)
+            line_payload["wip_covers_minimum_after_customer_issue"] = bool(
+                pl_sz.wip_covers_minimum_after_customer_issue
+            )
+        lines.append(line_payload)
 
     return {
         "customer_order_id": int(customer_order_id),
@@ -1023,9 +1121,91 @@ def _allocation_preview_for_customer_order(db: Session, customer_order_id: int) 
     }
 
 
+def _insert_fulfillment_decision_preview_audits_if_requested(
+    db: Session,
+    *,
+    customer_order_id: int,
+    preview: dict,
+    actor: str | None,
+) -> None:
+    """Volitelný zápis náhledu rozhodnutí (bez vazeb na VP — ty vznikají až při commit)."""
+    for ln in preview.get("lines", []) or []:
+        if ln.get("line_logistic_mode") != "sklad_zakaznik":
+            continue
+        if ln.get("finished_stock_qty") is None:
+            continue
+        jid = int(ln["job_item_id"])
+        req = int(ln.get("required_qty") or 0)
+        fin = float(ln["finished_stock_qty"])
+        wip = int(ln.get("wip_restock_qty") or ln.get("restock_wip", {}).get("quantity_open") or 0)
+        min_t = float(ln.get("minimum_stock_target_qty") or 0.0)
+        recommended = ln.get("recommended_fulfillment_strategy")
+        if not recommended:
+            _opts, recommended = list_sklad_zakaznik_resolution_options(
+                customer_required_qty=req,
+                finished_stock_qty=fin,
+                wip_restock_qty=wip,
+                minimum_stock_target_qty=min_t,
+            )
+        sp = compute_sklad_zakaznik_customer_split(
+            customer_required_qty=req,
+            finished_stock_qty=fin,
+            wip_restock_qty=wip,
+            minimum_stock_target_qty=min_t,
+            mode=str(recommended),
+        )
+        it = db.get(JobItem, jid)
+        raw_port = getattr(it, "portfolio_item_id", None) if it is not None else None
+        portfolio_item_id_audit = int(raw_port) if raw_port is not None else None
+        insert_fulfillment_decision_audit(
+            db,
+            decision_phase="preview",
+            actor=actor,
+            customer_order_id=int(customer_order_id),
+            job_item_id=jid,
+            gpn=(ln.get("gpn") or None),
+            portfolio_item_id=portfolio_item_id_audit,
+            decision_mode="sklad_zakaznik",
+            recommended_strategy=str(recommended),
+            chosen_strategy=None,
+            requested_qty=req,
+            finished_stock_qty_before=fin,
+            minimum_stock_target_qty=min_t,
+            wip_restock_qty_before=wip,
+            stock_issue_qty=int(sp["stock_issue_qty"]),
+            wip_reservation_qty=int(sp["wip_reservation_qty"]),
+            new_customer_production_qty=int(sp["new_customer_production_qty"]),
+            internal_restock_qty=int(sp["unified_internal_replenishment_qty"]),
+            stock_after_issue_qty=float(sp["stock_after_customer_issue_qty"]),
+            future_stock_after_wip_qty=float(sp["future_stock_after_wip_qty"]),
+            source_restock_production_order_id=None,
+            stock_allocation_production_order_id=None,
+            customer_order_allocation_production_order_id=None,
+            vyroba_zakaznik_production_order_id=None,
+            internal_restock_production_order_id=None,
+            restock_wip_reservation_id=None,
+            details={
+                "needs_user_choice": bool(ln.get("needs_user_choice")),
+                "restock_wip_production_order_ids": (ln.get("restock_wip") or {}).get("production_order_ids"),
+            },
+            note="allocation_preview",
+        )
+
+
+RestockConflictStrategy = Literal[
+    "prefer_customer",
+    "prefer_stock",
+    "stock_and_wip",
+    "stock_and_new_production",
+    "wip_only",
+    "new_production_only",
+    "stock_only",
+]
+
+
 class RestockConflictResolutionItem(BaseModel):
     job_item_id: int = Field(..., ge=1)
-    strategy: Literal["prefer_customer", "prefer_stock"]
+    strategy: RestockConflictStrategy
 
 
 class CreateProductionOrdersFromAllocationBody(BaseModel):
@@ -1369,10 +1549,12 @@ def _apply_sklad_zakaznik_fulfillment_plan(
     result: list[dict],
     internal_co: CustomerOrder | None,
     internal_job: Job | None,
-) -> tuple[CustomerOrder | None, Job | None]:
+) -> tuple[CustomerOrder | None, Job | None, dict[str, int | None]]:
     plan = build_sklad_zakaznik_fulfillment_plan(
         db, it, int(portfolio_item_id), has_portfolio, restock_strategy
     )
+    primary_restock_po: ProductionOrder | None = None
+    replen_po_out: ProductionOrder | None = None
     if plan.qty_reserved_wip <= 0:
         _zero_sklad_zakaznik_order_allocation_pos_on_job_item(db, it)
 
@@ -1400,8 +1582,8 @@ def _apply_sklad_zakaznik_fulfillment_plan(
 
     pending_rsv_id: int | None = None
     if plan.qty_reserved_wip > 0:
-        primary = wip_primary_restock_po_for_plan(db, it, has_portfolio)
-        if primary is not None:
+        primary_restock_po = wip_primary_restock_po_for_plan(db, it, has_portfolio)
+        if primary_restock_po is not None:
             resolved_sz = _resolve_portfolio_variant_by_gpn_and_logistics(
                 db, gpn=it.gpn, logistic_mode="sklad_zakaznik"
             )
@@ -1410,7 +1592,7 @@ def _apply_sklad_zakaznik_fulfillment_plan(
             )
             pending_rsv_id = _execute_reserve_wip_for_customer_bundle(
                 db,
-                source_restock_po=primary,
+                source_restock_po=primary_restock_po,
                 reserve_qty=int(plan.qty_reserved_wip),
                 customer_it=it,
                 customer_order_id=int(customer_order_id),
@@ -1468,10 +1650,9 @@ def _apply_sklad_zakaznik_fulfillment_plan(
             result=result,
         )
 
-    replen_po: ProductionOrder | None = None
     if plan.unified_internal_replenishment_qty > 0:
         resolved_re = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=it.gpn, logistic_mode="sklad")
-        internal_co, internal_job, replen_po = _ensure_internal_restock_allocation_po(
+        internal_co, internal_job, replen_po_out = _ensure_internal_restock_allocation_po(
             db,
             it=it,
             description=description,
@@ -1484,13 +1665,38 @@ def _apply_sklad_zakaznik_fulfillment_plan(
             duplicate_flow_warnings=duplicate_flow_warnings,
             result=result,
         )
-    if pending_rsv_id is not None and replen_po is not None:
+    if pending_rsv_id is not None and replen_po_out is not None:
         rsv_row = db.get(RestockWipReservation, int(pending_rsv_id))
         if rsv_row is not None:
-            rsv_row.replenishment_production_order_id = int(replen_po.id)
+            rsv_row.replenishment_production_order_id = int(replen_po_out.id)
             db.flush()
 
-    return internal_co, internal_job
+    db.flush()
+
+    def _latest_line_po_id(source_type: str, logistic_mode: str) -> int | None:
+        p = db.scalar(
+            select(ProductionOrder)
+            .where(
+                ProductionOrder.job_item_id == int(it.id),
+                ProductionOrder.source_type == str(source_type),
+                ProductionOrder.logistic_mode == str(logistic_mode),
+                workflow_active_sql(ProductionOrder.workflow_status),
+            )
+            .order_by(ProductionOrder.id.desc())
+        )
+        return int(p.id) if p is not None else None
+
+    snap: dict[str, int | None] = {
+        "source_restock_production_order_id": int(primary_restock_po.id)
+        if primary_restock_po is not None
+        else None,
+        "stock_allocation_production_order_id": _latest_line_po_id("stock_allocation", "sklad_zakaznik"),
+        "customer_order_allocation_production_order_id": _latest_line_po_id("order_allocation", "sklad_zakaznik"),
+        "vyroba_zakaznik_production_order_id": _latest_line_po_id("order_allocation", "vyroba_zakaznik"),
+        "internal_restock_production_order_id": int(replen_po_out.id) if replen_po_out is not None else None,
+        "restock_wip_reservation_id": int(pending_rsv_id) if pending_rsv_id is not None else None,
+    }
+    return internal_co, internal_job, snap
 
 
 def _get_active_internal_job(db: Session) -> Job | None:
@@ -1556,7 +1762,7 @@ def _sync_linked_production_order_quantities_for_customer_job_item(db: Session, 
         )
         t_stock = int(pl_sy.qty_from_finished_stock)
         t_order = int(max(0, pl_sy.demand - pl_sy.qty_from_finished_stock))
-        t_restock = int(pl_sy.qty_from_finished_stock + pl_sy.min_stock_replenishment_gap + rsum_pending)
+        t_restock = int(pl_sy.unified_internal_replenishment_qty + rsum_pending)
     else:
         from_stock_qty, to_production_qty, restock_qty = _allocation_triple_for_line_logistic_mode(
             db, it, portfolio_item_id, line_lm=line_lm_sync
@@ -2338,6 +2544,10 @@ def get_job_items(
         item["production_phase_label"] = ph
         item["production_progress_label"] = prg
         out.append(item)
+    ji_ids = [int(it["id"]) for it in out]
+    ji_m = job_item_operational_metrics_map(db, ji_ids) if ji_ids else {}
+    for it in out:
+        it.update(ji_m.get(int(it["id"]), {}))
     return out
 
 
@@ -2491,10 +2701,18 @@ def storno_job_item(
 @router.get("/{customer_order_id}/allocation-preview")
 def get_allocation_preview(
     customer_order_id: int,
+    audit_preview: bool = Query(False),
     db: Session = Depends(get_db),
+    actor: str | None = Depends(get_effective_actor),
 ):
     """Náhled alokace a konfliktu s běžící výrobou doplnění skladu (restock) pro stejné GPN."""
-    return _allocation_preview_for_customer_order(db, customer_order_id)
+    out = _allocation_preview_for_customer_order(db, customer_order_id)
+    if audit_preview:
+        _insert_fulfillment_decision_preview_audits_if_requested(
+            db, customer_order_id=customer_order_id, preview=out, actor=actor
+        )
+        db.commit()
+    return out
 
 
 @router.post("/{customer_order_id}/create-production-orders")
@@ -2502,6 +2720,7 @@ def create_production_orders_from_allocation(
     customer_order_id: int,
     payload: CreateProductionOrdersFromAllocationBody | None = Body(default=None),
     db: Session = Depends(get_db),
+    actor: str | None = Depends(get_effective_actor),
     _rbac: None = Depends(require_action("orders.write")),
 ):
     body = payload or CreateProductionOrdersFromAllocationBody()
@@ -2647,7 +2866,10 @@ def create_production_orders_from_allocation(
             "duplicate_flow_warnings": duplicate_flow_warnings,
         }
 
-    strategies = {int(r.job_item_id): r.strategy for r in body.restock_conflict_resolutions}
+    strategies = {
+        int(r.job_item_id): normalize_restock_resolution_strategy(str(r.strategy))
+        for r in body.restock_conflict_resolutions
+    }
 
     preview = _allocation_preview_for_customer_order(db, customer_order_id)
     _assert_no_multi_line_shared_restock_wip_conflict_in_request(db, preview)
@@ -2684,6 +2906,7 @@ def create_production_orders_from_allocation(
     duplicate_flow_warnings: list[dict] = []
     internal_co: CustomerOrder | None = None
     internal_job: Job | None = None
+    preview_line_by_job_item_id = {int(ln["job_item_id"]): ln for ln in preview.get("lines", []) or []}
     for it in items:
         if not workflow_record_active(it):
             continue
@@ -2711,7 +2934,18 @@ def create_production_orders_from_allocation(
         )
 
         if line_lm == "sklad_zakaznik" and portfolio_item_id is not None and has_portfolio:
-            internal_co, internal_job = _apply_sklad_zakaznik_fulfillment_plan(
+            chosen = normalize_restock_resolution_strategy(current_strat)
+            plan_m = build_sklad_zakaznik_fulfillment_plan(
+                db, it, int(portfolio_item_id), has_portfolio, chosen
+            )
+            split = compute_sklad_zakaznik_customer_split(
+                customer_required_qty=int(it.qty or 0),
+                finished_stock_qty=float(plan_m.finished_stock_qty),
+                wip_restock_qty=int(plan_m.wip_open_qty),
+                minimum_stock_target_qty=float(plan_m.minimum_stock_target_qty),
+                mode=chosen,
+            )
+            internal_co, internal_job, snap = _apply_sklad_zakaznik_fulfillment_plan(
                 db,
                 it=it,
                 job=job,
@@ -2725,6 +2959,39 @@ def create_production_orders_from_allocation(
                 result=result,
                 internal_co=internal_co,
                 internal_job=internal_job,
+            )
+            pln = preview_line_by_job_item_id.get(int(it.id))
+            insert_fulfillment_decision_audit(
+                db,
+                decision_phase="committed",
+                actor=actor,
+                customer_order_id=int(customer_order_id),
+                job_item_id=int(it.id),
+                gpn=it.gpn,
+                portfolio_item_id=int(portfolio_item_id),
+                decision_mode="sklad_zakaznik",
+                recommended_strategy=(pln or {}).get("recommended_fulfillment_strategy"),
+                chosen_strategy=chosen,
+                requested_qty=int(it.qty or 0),
+                finished_stock_qty_before=float(plan_m.finished_stock_qty),
+                minimum_stock_target_qty=float(plan_m.minimum_stock_target_qty),
+                wip_restock_qty_before=int(plan_m.wip_open_qty),
+                stock_issue_qty=int(split["stock_issue_qty"]),
+                wip_reservation_qty=int(split["wip_reservation_qty"]),
+                new_customer_production_qty=int(split["new_customer_production_qty"]),
+                internal_restock_qty=int(split["unified_internal_replenishment_qty"]),
+                stock_after_issue_qty=float(split["stock_after_customer_issue_qty"]),
+                future_stock_after_wip_qty=float(split["future_stock_after_wip_qty"]),
+                source_restock_production_order_id=snap.get("source_restock_production_order_id"),
+                stock_allocation_production_order_id=snap.get("stock_allocation_production_order_id"),
+                customer_order_allocation_production_order_id=snap.get(
+                    "customer_order_allocation_production_order_id"
+                ),
+                vyroba_zakaznik_production_order_id=snap.get("vyroba_zakaznik_production_order_id"),
+                internal_restock_production_order_id=snap.get("internal_restock_production_order_id"),
+                restock_wip_reservation_id=snap.get("restock_wip_reservation_id"),
+                details={"needs_user_choice": (pln or {}).get("needs_user_choice")},
+                note="create_production_orders_from_allocation",
             )
             continue
 

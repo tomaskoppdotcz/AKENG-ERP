@@ -85,6 +85,44 @@ function formatCzk(value: number | null | undefined): string {
   return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
 }
 
+function formatLineReportedMin(m: number | null | undefined): string {
+  if (m == null || !Number.isFinite(Number(m))) return "—";
+  return `${Math.round(Number(m))} min`;
+}
+
+function formatLinePct(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  return `${Number(v)} %`;
+}
+
+function formatLineLabor(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  if (Number(v) === 0) return "0 Kč";
+  try {
+    return new Intl.NumberFormat("cs-CZ", {
+      style: "currency",
+      currency: "CZK",
+      maximumFractionDigits: 0,
+    }).format(Number(v));
+  } catch {
+    return `${Math.round(Number(v))} Kč`;
+  }
+}
+
+function formatOrderReportedHours(min: number | null | undefined): string {
+  if (min == null || !Number.isFinite(Number(min))) return "—";
+  const h = Number(min) / 60;
+  return `${h.toLocaleString("cs-CZ", { maximumFractionDigits: 1 })} h`;
+}
+
+function orderPhaseLabelCs(phase: string | null | undefined): string {
+  const p = String(phase ?? "").trim().toLowerCase();
+  if (p === "bezi") return "Běží";
+  if (p === "hotovo") return "Hotovo";
+  if (p === "planned") return "Plánováno";
+  return "—";
+}
+
 function isBusinessWorkflowActive(status: string | null | undefined): boolean {
   const s = String(status ?? "").trim().toLowerCase();
   return !s || s === "active";
@@ -350,7 +388,8 @@ export default function OrderCardPage({
         const defaults: Record<number, RestockConflictStrategy> = {};
         for (const l of preview.lines) {
           if (!l.needs_user_choice) continue;
-          defaults[l.job_item_id] = "prefer_stock";
+          const rec = l.recommended_fulfillment_strategy;
+          defaults[l.job_item_id] = (rec ?? "stock_and_new_production") as RestockConflictStrategy;
         }
         setRestockPreviewSnapshot(preview);
         setRestockChoices(defaults);
@@ -587,6 +626,7 @@ export default function OrderCardPage({
   const datumLabel = data.customer_order?.datum ?? "—";
   const kusyCelkem = data.summary?.kusy_celkem ?? 0;
   const totalSalesPrice = data.summary?.total_sales_price ?? 0;
+  const orderOp = data.summary;
   const orderWorkflowActive = isBusinessWorkflowActive(data.customer_order?.workflow_status);
 
   const conflictLines = (restockPreviewSnapshot?.lines ?? []).filter((l) => l.needs_user_choice);
@@ -828,6 +868,67 @@ export default function OrderCardPage({
         </div>
 
         {activeOrderSubtab === "Přehled" ? (
+          <>
+          <div
+            style={{
+              ...UI.card,
+              borderRadius: 14,
+              padding: 16,
+              marginBottom: 14,
+              border: "1px solid #e2e8f0",
+              background: "#fafafa",
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 1000, color: "#0f172a", marginBottom: 12 }}>Provozní metriky zakázky</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14, fontWeight: 600 }}>
+              Součet přes aktivní položky a aktivní výrobní příkazy (VP). Stornované nebo uzavřené toky nejsou zahrnuty.
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                gap: 14,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Vykázaný čas
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>
+                  {formatOrderReportedHours(orderOp?.reported_time_min)}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Hotovo
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: "#2563eb", marginTop: 4 }}>{formatLinePct(orderOp?.completion_percent)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Náklad práce
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>{formatLineLabor(orderOp?.direct_labor_cost)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Výkonnost
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>{formatLinePct(orderOp?.performance_percent)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>Fáze</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>{orderPhaseLabelCs(orderOp?.current_phase)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>Poloha</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginTop: 4 }}>{orderOp?.current_location?.trim() || "—"}</div>
+              </div>
+            </div>
+            {orderOp?.operational_summary_cs ? (
+              <div style={{ marginTop: 14, fontSize: 14, fontWeight: 700, color: "#334155" }}>{orderOp.operational_summary_cs}</div>
+            ) : null}
+          </div>
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
             <div style={{ fontSize: 16, fontWeight: 1000, color: "#0f172a", marginBottom: 10 }}>Položky zakázky</div>
 
@@ -1042,7 +1143,20 @@ export default function OrderCardPage({
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
-                        {["GPN", "Název", "Množství", "Prodejní cena / ks", "Termín", "Výrobní příkazy", "Portfolio", "Akce"].map((h) => (
+                        {[
+                          "GPN",
+                          "Název",
+                          "Množství",
+                          "Prodejní cena / ks",
+                          "Termín",
+                          "Výrobní příkazy",
+                          "Vykázaný čas",
+                          "Hotovo",
+                          "Náklad práce",
+                          "Výkonnost",
+                          "Portfolio",
+                          "Akce",
+                        ].map((h) => (
                           <th
                             key={h}
                             style={{
@@ -1103,6 +1217,18 @@ export default function OrderCardPage({
                           >
                             {formatVpCodes(item, orderKind)}
                           </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
+                            {formatLineReportedMin(item.reported_time_min)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
+                            {formatLinePct(item.completion_percent)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
+                            {formatLineLabor(item.direct_labor_cost)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
+                            {formatLinePct(item.performance_percent)}
+                          </td>
                           <td
                             style={{
                               ...UI.td,
@@ -1150,7 +1276,7 @@ export default function OrderCardPage({
                       ))}
                       {filteredItems.length === 0 ? (
                         <tr>
-                          <td colSpan={8} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                          <td colSpan={12} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
                             Žádné výsledky.
                           </td>
                         </tr>
@@ -1181,6 +1307,7 @@ export default function OrderCardPage({
               </>
             )}
           </div>
+          </>
         ) : (
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>
@@ -1226,9 +1353,10 @@ export default function OrderCardPage({
       }
     >
       <p style={{ margin: "0 0 12px", fontSize: 14, color: "#334155", lineHeight: 1.5 }}>
-        U uvedených položek už běží výroba na <strong>doplnění skladu</strong> (stejné GPN). Můžete buď nechat rozpracovanou
-        výrobu čistě na sklad, nebo <strong>rezervovat</strong> její budoucí výstup pro zákazníka — bez změny zdrojového skladového
-        VP; systém založí zákaznický tok ze skladu (Expedice) a paralelní interní doplnění skladu.
+        U uvedených položek běží současně <strong>doplnění skladu</strong> (stejné GPN) a zákazník potřebuje víc, než je
+        právě na polici. Minimální zásoba je <strong>cíl pro zákazníka</strong> — nesmí blokovat okamžitý výdej ze skladu.
+        Zvolte, zda část požadavku pokrýt z budoucího výstupu rozpracovaného skladového VP, nebo nechat WIP čistě na
+        doplnění skladu a zbytek řešit přímou výrobou pro zákazníka.
       </p>
       {vpError && restockModalOpen ? (
         <div
@@ -1250,7 +1378,18 @@ export default function OrderCardPage({
           const wip = line.restock_wip;
           const vpLabel = wip.vp_codes.length ? wip.vp_codes.join(", ") : "—";
           const choice = restockChoices[line.job_item_id];
-          const plan = line.reserve_wip_plan;
+          const options = [...(line.restock_resolution_options ?? [])].sort((a, b) => {
+            if (a.is_recommended && !b.is_recommended) return -1;
+            if (!a.is_recommended && b.is_recommended) return 1;
+            return 0;
+          });
+          const fallbackStrategy = (line.recommended_fulfillment_strategy ?? "stock_and_new_production") as RestockConflictStrategy;
+          const effectiveStrategy = (choice ?? fallbackStrategy) as RestockConflictStrategy;
+          const selectedOpt = options.find((o) => o.strategy === effectiveStrategy) ?? options[0];
+          const hasBasics =
+            line.finished_stock_qty != null &&
+            line.minimum_stock_target_qty != null &&
+            (line.wip_restock_qty != null || wip.quantity_open != null);
           return (
             <div
               key={line.job_item_id}
@@ -1266,66 +1405,132 @@ export default function OrderCardPage({
                 <div>
                   Požadavek zákazníka: <strong>{formatQty(line.required_qty)} ks</strong>
                 </div>
-                <div>
-                  Ve výrobě na doplnění skladu: <strong>{formatQty(wip.quantity_open)} ks</strong> (VP: {vpLabel})
-                </div>
-                {plan ? (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      padding: "10px 12px",
-                      borderRadius: 10,
-                      background: "#f8fafc",
-                      border: "1px solid #e2e8f0",
-                      fontSize: 12,
-                      color: "#334155",
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    <div style={{ fontWeight: 800, marginBottom: 6 }}>Při volbě „Rezervovat WIP pro zákazníka“</div>
-                    <div>Rezervace budoucího výstupu: <strong>{formatQty(plan.reserved_qty)} ks</strong></div>
-                    <div>Zákaznický VP (sklad → zákazník, Expedice): <strong>{formatQty(plan.customer_sklad_zakaznik_qty)} ks</strong></div>
-                    <div>Nové interní doplnění skladu: <strong>{formatQty(plan.replenishment_internal_qty)} ks</strong></div>
-                    {plan.customer_vyroba_extra_qty > 0 ? (
+                {hasBasics ? (
+                  <>
+                    <div>
+                      Sklad hotových kusů: <strong>{formatQty(line.finished_stock_qty!)} ks</strong>
+                    </div>
+                    <div>
+                      Minimální zásoba (cíl): <strong>{formatQty(line.minimum_stock_target_qty!)} ks</strong>
+                    </div>
+                    <div>
+                      Ve výrobě na doplnění skladu:{" "}
+                      <strong>{formatQty(line.wip_restock_qty ?? wip.quantity_open)} ks</strong> (VP: {vpLabel})
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    Ve výrobě na doplnění skladu: <strong>{formatQty(wip.quantity_open)} ks</strong> (VP: {vpLabel})
+                  </div>
+                )}
+                {selectedOpt ? (
+                  <>
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "#fff",
+                        border: "1px solid #cbd5e1",
+                        fontSize: 13,
+                        color: "#0f172a",
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <div style={{ fontWeight: 900, marginBottom: 8 }}>Rozložení při zvolené variantě</div>
+                      <div style={{ fontWeight: 700, marginBottom: 8 }}>{selectedOpt.summary_cs}</div>
+                      <div>Ze skladu ihned: <strong>{formatQty(selectedOpt.stock_issue_qty)} ks</strong></div>
+                      <div>Z WIP po dokončení: <strong>{formatQty(selectedOpt.wip_reservation_qty)} ks</strong></div>
+                      <div>Z nové výroby: <strong>{formatQty(selectedOpt.new_customer_production_qty)} ks</strong></div>
+                      <div>Stav skladu po výdeji: <strong>{formatQty(selectedOpt.stock_after_customer_issue_qty)} ks</strong></div>
                       <div>
-                        Další výroba přímo pro zákazníka (nad rámec WIP):{" "}
-                        <strong>{formatQty(plan.customer_vyroba_extra_qty)} ks</strong>
+                        Budoucí stav skladu po dokončení WIP (nerezervovaná část jde na sklad):{" "}
+                        <strong>{formatQty(selectedOpt.future_stock_after_wip_qty)} ks</strong>
+                      </div>
+                      <div>
+                        Potřebné doplnění minima (interní zakázka):{" "}
+                        <strong>{formatQty(selectedOpt.min_stock_replenishment_gap)} ks</strong>
+                      </div>
+                    </div>
+                    {selectedOpt.min_stock_replenishment_gap <= 0 ? (
+                      <div
+                        style={{
+                          marginTop: 10,
+                          padding: "10px 12px",
+                          borderRadius: 10,
+                          background: "#ecfdf5",
+                          border: "1px solid #6ee7b7",
+                          color: "#065f46",
+                          fontWeight: 700,
+                        }}
+                      >
+                        Další interní doplnění skladu není potřeba — po této variantě už cílové minimum pokryje rozpracovaná
+                        výroba (WIP) a stav skladu.
                       </div>
                     ) : null}
-                    <div style={{ marginTop: 6 }}>Původní skladový VP zůstane beze změny (dokončí se Příjem na sklad).</div>
-                  </div>
+                  </>
                 ) : null}
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 14 }}>
-                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: creatingVp ? "not-allowed" : "pointer" }}>
-                  <input
-                    type="radio"
-                    name={`restock-strategy-${line.job_item_id}`}
-                    checked={choice === "prefer_customer"}
-                    onChange={() =>
-                      setRestockChoices((prev) => ({ ...prev, [line.job_item_id]: "prefer_customer" }))
-                    }
-                    disabled={creatingVp}
-                  />
-                  <span>
-                    <strong>Rezervovat rozpracované kusy pro zakázku</strong> — založí se rezervace budoucího výstupu z běžícího
-                    skladového VP, zákaznický VP sklad_zakaznik (čeká na příjem na sklad) a paralelní interní doplnění skladu.
-                    Skladový výrobní VP se nemění.
-                  </span>
-                </label>
-                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
-                  <input
-                    type="radio"
-                    name={`restock-strategy-${line.job_item_id}`}
-                    checked={choice === "prefer_stock"}
-                    onChange={() => setRestockChoices((prev) => ({ ...prev, [line.job_item_id]: "prefer_stock" }))}
-                    disabled={creatingVp}
-                  />
-                  <span>
-                    <strong>Přednost skladu</strong> — nechat rozpracovanou výrobu na doplnění skladu; pro zakázku založit
-                    samostatnou výrobu.
-                  </span>
-                </label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 14 }}>
+                {options.length > 0 ? (
+                  options.map((opt) => (
+                    <label
+                      key={opt.strategy}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 8,
+                        cursor: creatingVp ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name={`restock-strategy-${line.job_item_id}`}
+                        checked={effectiveStrategy === opt.strategy}
+                        onChange={() =>
+                          setRestockChoices((prev) => ({ ...prev, [line.job_item_id]: opt.strategy }))
+                        }
+                        disabled={creatingVp}
+                      />
+                      <span>
+                        <strong>{opt.label_cs}</strong>
+                        {opt.is_recommended ? (
+                          <span style={{ marginLeft: 6, fontSize: 12, color: "#059669", fontWeight: 800 }}>(doporučeno)</span>
+                        ) : null}
+                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4, fontWeight: 600 }}>{opt.summary_cs}</div>
+                      </span>
+                    </label>
+                  ))
+                ) : (
+                  <>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+                      <input
+                        type="radio"
+                        name={`restock-strategy-${line.job_item_id}`}
+                        checked={effectiveStrategy === "stock_and_new_production" || effectiveStrategy === "prefer_stock"}
+                        onChange={() =>
+                          setRestockChoices((prev) => ({ ...prev, [line.job_item_id]: "stock_and_new_production" }))
+                        }
+                        disabled={creatingVp}
+                      />
+                      <span>
+                        <strong>Ze skladu + zbytek nová výroba</strong>
+                      </span>
+                    </label>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: creatingVp ? "not-allowed" : "pointer" }}>
+                      <input
+                        type="radio"
+                        name={`restock-strategy-${line.job_item_id}`}
+                        checked={effectiveStrategy === "stock_and_wip" || effectiveStrategy === "prefer_customer"}
+                        onChange={() => setRestockChoices((prev) => ({ ...prev, [line.job_item_id]: "stock_and_wip" }))}
+                        disabled={creatingVp}
+                      />
+                      <span>
+                        <strong>Sklad + WIP</strong>
+                      </span>
+                    </label>
+                  </>
+                )}
               </div>
             </div>
           );
