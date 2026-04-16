@@ -47,6 +47,7 @@ from app.services.production_order_operation_runtime import (
 )
 from app.services.planning_engine import PlanningEngineService
 from app.services.planning_operation_status import normalize_planning_operation_status
+from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
 from app.services.vp_operational_metrics import vp_operational_metrics_map, vp_operational_metrics_single
 from app.services.vp_operation_generator import regenerate_single_production_order_from_tp
 
@@ -428,10 +429,21 @@ def list_production_orders(
     co_by_id = {int(c.id): c for c in customer_orders}
     desc_map, portfolio_map = _job_item_optional_map(db, job_item_ids)
 
+    resolved_portfolio_for_draw: list[int | None] = []
+    for po in rows:
+        ji = item_by_id.get(int(po.job_item_id)) if po.job_item_id is not None else None
+        rid: int | None = None
+        if po.portfolio_item_id is not None:
+            rid = int(po.portfolio_item_id)
+        elif ji is not None:
+            rid = portfolio_map.get(int(ji.id))
+        resolved_portfolio_for_draw.append(rid)
+    draw_by_pid = drawing_number_revision_by_portfolio_id(db, resolved_portfolio_for_draw)
+
     metrics_by_id = vp_operational_metrics_map(db, rows)
 
     out: list[dict] = []
-    for po in rows:
+    for idx, po in enumerate(rows):
         wf_ok = workflow_record_active(po)
         mat_cov = evaluate_production_order_material_covered(db, po) if wf_ok else False
         mat_rel = evaluate_production_order_material_released(db, po) if wf_ok else False
@@ -445,6 +457,10 @@ def list_production_orders(
             resolved_portfolio_id = portfolio_map.get(int(ji.id))
         op_status, completion_terminal = _overview_operational_status_and_terminal(db, po)
         mm = metrics_by_id.get(int(po.id)) or {}
+        pid_draw = resolved_portfolio_for_draw[idx]
+        dr_num, dr_rev = (
+            draw_by_pid.get(int(pid_draw), (None, None)) if pid_draw is not None else (None, None)
+        )
         out.append(
             {
                 "id": int(po.id),
@@ -452,6 +468,8 @@ def list_production_orders(
                 "scan_code": po.scan_code,
                 "gpn": po.gpn or (ji.gpn if ji is not None else None),
                 "description": po.description or desc_map.get(int(ji.id)) if ji is not None else po.description,
+                "drawing_number": dr_num,
+                "drawing_revision": dr_rev,
                 "quantity": int(po.quantity or 0),
                 "logistic_mode": po.logistic_mode,
                 "source_type": po.source_type,

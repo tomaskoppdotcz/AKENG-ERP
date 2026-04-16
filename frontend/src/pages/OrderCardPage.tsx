@@ -24,6 +24,7 @@ import {
   type OrderDetailResponse,
   type RestockConflictStrategy,
 } from "../services/ordersApi";
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import { canPerformAction, readStoredErpRole } from "../auth/rbac";
 
@@ -557,11 +558,20 @@ export default function OrderCardPage({
   const orderKind = data?.customer_order?.order_type ?? "customer";
 
   const filteredItems = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const zakazka = data?.job?.zakazka ?? "";
     return items.filter((item) => {
       const vpCodes = relevantProductionOrders(item, orderKind).map((po) => po.vp_code).filter(Boolean).join(" ");
-      const haystack = [item.gpn, item.description ?? "", item.vp_code ?? "", vpCodes].join(" ").toLowerCase();
-      const matchesQuery = !q || haystack.includes(q);
+      const haystack = buildSearchHaystack(
+        zakazka,
+        item.gpn,
+        item.description,
+        item.vp_code,
+        vpCodes,
+        item.drawing_number,
+        item.drawing_revision,
+        item.portfolio_item_name
+      );
+      const matchesQuery = matchesSearchQuery(query, haystack);
 
       const matchesFilters = activeFilters.every((f) => {
         if (f === "Po termínu") {
@@ -576,7 +586,7 @@ export default function OrderCardPage({
 
       return matchesQuery && matchesFilters;
     });
-  }, [items, query, activeFilters, orderKind]);
+  }, [items, query, activeFilters, orderKind, data?.job?.zakazka]);
 
   const polozekCelkem = items.length;
 
@@ -1111,7 +1121,7 @@ export default function OrderCardPage({
                     <input
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Hledat GPN, popis nebo VP..."
+                      placeholder="Hledat zakázku, GPN, popis, výkres, revizi, VP…"
                       style={UI.inputs.base}
                     />
                   </div>

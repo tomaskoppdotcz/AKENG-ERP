@@ -58,6 +58,7 @@ from app.services.business_workflow import (
 )
 from app.services.job_item_operational_metrics import job_item_operational_metrics_map
 from app.services.job_item_production_labels import production_labels_for_job_item
+from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
 from app.services.material_reservation_sync import (
     MATERIAL_RESERVATION_ACTIVE_STATUSES,
     cancel_active_reservations_for_production_order,
@@ -2544,6 +2545,15 @@ def get_job_items(
         item["production_phase_label"] = ph
         item["production_progress_label"] = prg
         out.append(item)
+    draw_by_pid = drawing_number_revision_by_portfolio_id(db, (it.get("portfolio_item_id") for it in out))
+    for it in out:
+        pid = it.get("portfolio_item_id")
+        if pid is not None:
+            dr_num, dr_rev = draw_by_pid.get(int(pid), (None, None))
+        else:
+            dr_num, dr_rev = None, None
+        it["drawing_number"] = dr_num
+        it["drawing_revision"] = dr_rev
     ji_ids = [int(it["id"]) for it in out]
     ji_m = job_item_operational_metrics_map(db, ji_ids) if ji_ids else {}
     for it in out:

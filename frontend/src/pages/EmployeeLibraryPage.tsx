@@ -11,10 +11,7 @@ import {
   type EmployeeSubgroupRow,
 } from "../services/masterLibrariesApi";
 import { normalizeCzechKeyboardReaderNumeric } from "../utils/czCardReaderNormalize";
-
-function norm(s: string) {
-  return s.trim().toLowerCase();
-}
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 
 const pillBase: React.CSSProperties = {
   display: "inline-block",
@@ -118,13 +115,21 @@ export default function EmployeeLibraryPage() {
   }, [loadAll]);
 
   const filtered = useMemo(() => {
-    const q = norm(query);
-    if (!q) return rows;
-    return rows.filter((r) =>
-      norm(
-        `${r.first_name ?? ""} ${r.last_name ?? ""} ${r.full_name} ${r.employee_code} ${r.chip_card_uid ?? ""} ${r.scan_code ?? ""} ${r.email ?? ""}`
-      ).includes(q)
-    );
+    return rows.filter((r) => {
+      const hay = buildSearchHaystack(
+        r.employee_code,
+        r.name,
+        r.full_name,
+        r.first_name,
+        r.last_name,
+        r.email,
+        r.phone,
+        r.chip_card_uid,
+        r.card_uid,
+        r.scan_code
+      );
+      return matchesSearchQuery(query, hay);
+    });
   }, [rows, query]);
 
   function resetForm() {
@@ -294,7 +299,7 @@ export default function EmployeeLibraryPage() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Hledat jméno, kód, čip, sken, e-mail…"
+          placeholder="Hledat jméno, kód, telefon, e-mail, čip, sken…"
           style={{ ...UI.inputs.base, flex: "1 1 280px", minWidth: 200, maxWidth: 480 }}
         />
         <select

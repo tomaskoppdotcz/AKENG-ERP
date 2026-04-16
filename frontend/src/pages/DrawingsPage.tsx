@@ -20,10 +20,12 @@ import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
 import type { TableColumnDef } from "../overview/tableLayoutMerge";
 import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
 import {
+  formatOverviewDash,
   formatOverviewMoneyKc0,
   formatOverviewPercentAsShown,
   formatOverviewReportedMinutes,
 } from "../overview/overviewMetricsFormat";
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 
 type DrawingItem = {
   zakazka: string;
@@ -33,6 +35,8 @@ type DrawingItem = {
   portfolio_item_id: number | null;
   line_no: number | null;
   gpn: string;
+  drawing_number: string | null;
+  drawing_revision: string | null;
   popis: string;
   material: string;
   mnozstvi: string;
@@ -108,10 +112,25 @@ function formatVpCodes(codes: string[]): string {
   return `${cleaned[0]}, ${cleaned[1]} +${cleaned.length - 2}`;
 }
 
+function drawingsSearchHaystack(row: DrawingItem): string {
+  const vpCodes = row.vpLinks.map((l) => l.vp_code).join(" ");
+  return buildSearchHaystack(
+    row.gpn,
+    row.popis,
+    row.drawing_number,
+    row.drawing_revision,
+    row.vp,
+    vpCodes,
+    row.zakazka
+  );
+}
+
 const DRAWINGS_TABLE_DEFAULTS: readonly TableColumnDef[] = [
   { key: "zakazka", label: "Zakázka", defaultWidth: 140 },
   { key: "line_no", label: "Řádek", defaultWidth: 72 },
   { key: "gpn", label: "GPN", defaultWidth: 120 },
+  { key: "drawing_number", label: "Výkres", defaultWidth: 130 },
+  { key: "drawing_revision", label: "Revize", defaultWidth: 90 },
   { key: "popis", label: "Popis", defaultWidth: 180 },
   { key: "material", label: "Materiál", defaultWidth: 100 },
   { key: "mnozstvi", label: "Množství", defaultWidth: 100 },
@@ -155,6 +174,7 @@ export default function DrawingsPage({
   const [error, setError] = useState<string | null>(null);
   const [workflowListFilter, setWorkflowListFilter] = useState<ErpWorkflowListFilter>("active");
   const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -200,6 +220,8 @@ export default function DrawingsPage({
             portfolio_item_id: row.portfolio_item_id ?? null,
             line_no: normalizedLineNo,
             gpn: row.gpn,
+            drawing_number: row.drawing_number ?? null,
+            drawing_revision: row.drawing_revision ?? null,
             popis: row.description?.trim() ? row.description : "—",
             material: "—",
             mnozstvi: `${row.qty} ks`,
@@ -253,9 +275,10 @@ export default function DrawingsPage({
         return true;
       });
 
+      if (!matchesSearchQuery(searchQuery, drawingsSearchHaystack(row))) return false;
       return matchesFilters;
     });
-  }, [rowsByOrderType, activeFilters]);
+  }, [rowsByOrderType, activeFilters, searchQuery]);
 
   const tb = usePersistedTableLayout("drawings_table", DRAWINGS_TABLE_DEFAULTS);
 
@@ -267,6 +290,10 @@ export default function DrawingsPage({
             return row.zakazka;
           case "line_no":
             return row.line_no ?? -1;
+          case "drawing_number":
+            return row.drawing_number ?? "";
+          case "drawing_revision":
+            return row.drawing_revision ?? "";
           case "gpn":
             return row.gpn;
           case "popis":
@@ -353,6 +380,10 @@ export default function DrawingsPage({
         );
       case "line_no":
         return row.line_no ?? "—";
+      case "drawing_number":
+        return formatOverviewDash(row.drawing_number);
+      case "drawing_revision":
+        return formatOverviewDash(row.drawing_revision);
       case "gpn":
         return (
           <span onClick={(e) => e.stopPropagation()}>
@@ -647,7 +678,7 @@ export default function DrawingsPage({
                         colSpan={Math.max(1, tb.visibleColumns.length)}
                         style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}
                       >
-                        Žádné výsledky.
+                        Žádné výsledky (rychlé filtry nebo hledání).
                       </td>
                     </tr>
                   ) : null}

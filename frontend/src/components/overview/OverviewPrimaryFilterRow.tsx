@@ -5,7 +5,7 @@ import { UI } from "../../styles/ui";
 export const overviewPrimaryFilterLabelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 800,
-  color: "#475569",
+  color: UI.colors.tableHeadText,
 };
 
 export const overviewPrimaryFilterRowStyle: React.CSSProperties = {

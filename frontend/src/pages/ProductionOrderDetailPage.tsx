@@ -272,10 +272,54 @@ export default function ProductionOrderDetailPage({
   }
 
   const headerModel = buildProductionOrderDetailHeaderModel(data);
+  const productTitle =
+    (data.description || "").trim() || (data.portfolio_item_name || "").trim() || "—";
+
+  const poStateAccent = UI.colors.primaryLight;
+  const poStateBg = "linear-gradient(145deg, rgba(37, 99, 235, 0.09) 0%, rgba(241, 245, 249, 0.92) 52%, #ffffff 100%)";
+  const kpiPanelBg = UI.colors.neutralBg;
+  const sectionEyebrow: React.CSSProperties = {
+    fontSize: 10,
+    fontWeight: 900,
+    color: UI.colors.textSecondary,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    marginBottom: 12,
+  };
+  const stateRowLabel: React.CSSProperties = {
+    fontSize: 10,
+    fontWeight: 800,
+    color: UI.colors.neutralFg,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+  };
+  const stateRowValue: React.CSSProperties = {
+    fontSize: 17,
+    fontWeight: 1000,
+    color: UI.colors.textPrimary,
+    lineHeight: 1.3,
+    marginTop: 5,
+  };
+  const kpiLabel: React.CSSProperties = {
+    fontSize: 10,
+    fontWeight: 700,
+    color: UI.colors.textSecondary,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+  };
+  const kpiValue: React.CSSProperties = {
+    fontSize: 26,
+    fontWeight: 1000,
+    color: UI.colors.textPrimary,
+    letterSpacing: "-0.03em",
+    lineHeight: 1.1,
+    marginTop: 6,
+    wordBreak: "break-word",
+  };
 
   return (
     <div style={UI.container}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
         <DetailPageHeader
           preHeader={
             !poWorkflowActive ? (
@@ -294,45 +338,71 @@ export default function ProductionOrderDetailPage({
             ) : null
           }
           title={
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10 }}>
-              <span style={UI.pageTitle}>Výrobní příkaz</span>
-              <span style={{ fontSize: 22, fontWeight: 1000, color: "#334155" }}>{data.vp_code}</span>
+            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div
+                style={{
+                  fontSize: 28,
+                  fontWeight: 1000,
+                  color: UI.colors.primary,
+                  letterSpacing: "-0.03em",
+                  lineHeight: 1.12,
+                }}
+              >
+                {data.vp_code}
+              </div>
+              <div
+                style={{
+                  fontSize: 15,
+                  fontWeight: 800,
+                  color: UI.colors.textPrimary,
+                  lineHeight: 1.35,
+                  maxWidth: 640,
+                }}
+              >
+                {productTitle}
+              </div>
+              <div style={{ ...UI.sectionSubtitle, maxWidth: 640 }}>{headerModel.headlineSentence}</div>
             </div>
           }
-          subtitle={headerModel.headlineSentence}
           headerAside={
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
               <span style={vpHeaderBadgeStyle(headerModel.mainStatusTone)}>{headerModel.mainStatusLabel}</span>
-              <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a", letterSpacing: "0.02em" }}>
-                Postup: {headerModel.progressLine}
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: UI.colors.textSecondary, letterSpacing: "0.06em" }}>
+                  Hotovo (operace)
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 1000, color: UI.colors.textPrimary, letterSpacing: "-0.03em", lineHeight: 1.05 }}>
+                  {headerModel.progressPercent} %
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: UI.colors.textSecondary, marginTop: 4 }}>
+                  Postup: {headerModel.progressLine}
+                </div>
               </div>
             </div>
           }
           context={
-            <div>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 900,
-                  color: "#64748b",
-                  marginBottom: 10,
-                  letterSpacing: "0.06em",
-                }}
-              >
-                POLOHA VE V\u00ddROB\u011b
-              </div>
-              <div style={UI.detailPageHeaderContextGrid}>
+            <div
+              style={{
+                borderRadius: 14,
+                padding: "18px 18px 16px",
+                background: poStateBg,
+                border: `1px solid ${poStateAccent}`,
+                boxShadow: "0 8px 28px rgba(15, 23, 42, 0.06)",
+              }}
+            >
+              <div style={sectionEyebrow}>Aktuální stav výroby</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
                 {(
                   [
-                    ["Pracoviště (kde je díl)", headerModel.workplaceWherePartIs],
+                    ["Kde je díl", headerModel.workplaceWherePartIs],
                     ["Aktuální operace", headerModel.currentOperationLine],
                     ["Následující operace", headerModel.nextOperationLine],
                     ["Poté", headerModel.afterNextLine],
                   ] as const
                 ).map(([label, val]) => (
-                  <div key={label}>
-                    <div style={UI.statLabel}>{label}</div>
-                    <div style={UI.statValue}>{val}</div>
+                  <div key={label} style={{ minWidth: 0 }}>
+                    <div style={stateRowLabel}>{label}</div>
+                    <div style={stateRowValue}>{val}</div>
                   </div>
                 ))}
               </div>
@@ -408,29 +478,84 @@ export default function ProductionOrderDetailPage({
             </>
           }
           summaryTiles={
-            <div style={{ display: "flex", flexDirection: "column", gap: 18, width: "100%" }}>
-              <div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 26, width: "100%", minWidth: 0 }}>
+              <div
+                style={{
+                  borderRadius: 14,
+                  padding: "18px 16px 16px",
+                  background: kpiPanelBg,
+                  border: `1px solid ${UI.colors.border}`,
+                }}
+              >
+                <div style={sectionEyebrow}>Provozní metriky</div>
                 <div
                   style={{
-                    fontSize: 11,
-                    fontWeight: 900,
-                    color: "#64748b",
-                    marginBottom: 10,
-                    letterSpacing: "0.06em",
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(128px, 1fr))",
+                    gap: 16,
+                    alignItems: "start",
                   }}
                 >
-                  IDENTIFIKACE A OBJEDNÁVKA
+                  <div style={{ minWidth: 0 }}>
+                    <div style={kpiLabel}>Vykázaný čas</div>
+                    <div style={kpiValue}>{Math.round(Number(data.reported_time_min ?? 0))} min</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={kpiLabel}>Náklad práce</div>
+                    <div style={kpiValue}>{formatDetailLaborCzk(data.direct_labor_cost)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={kpiLabel}>Hotovo %</div>
+                    <div style={kpiValue}>{formatDetailPercent(data.completion_percent)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={kpiLabel}>Výkonnost</div>
+                    <div style={kpiValue}>{formatDetailPercent(data.performance_percent)}</div>
+                    <div style={{ fontSize: 10, color: UI.colors.textSecondary, marginTop: 8, fontWeight: 600, lineHeight: 1.35 }}>
+                      Plánovaný čas (planning_operations) / vykázaný čas (work_reports)
+                    </div>
+                  </div>
                 </div>
+                {(data.current_location || data.current_phase) && (
+                  <div
+                    style={{
+                      marginTop: 18,
+                      paddingTop: 16,
+                      borderTop: `1px solid ${UI.colors.divider}`,
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                      gap: 12,
+                    }}
+                  >
+                    <div>
+                      <div style={{ ...kpiLabel, marginBottom: 4 }}>Poloha (běžící operace)</div>
+                      <div style={{ fontSize: 15, fontWeight: 900, color: UI.colors.textPrimary }}>
+                        {data.current_location?.trim() ? data.current_location : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ ...kpiLabel, marginBottom: 4 }}>Fáze VP</div>
+                      <div style={{ fontSize: 15, fontWeight: 900, color: UI.colors.textPrimary }}>
+                        {formatPlanningPhaseCs(data.current_phase)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ paddingTop: 4 }}>
+                <div style={{ ...sectionEyebrow, color: UI.colors.neutralFg, marginBottom: 10 }}>Identifikace a objednávka</div>
                 <div
                   style={{
                     ...UI.detailPageHeaderContextGrid,
                     gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))",
+                    gap: 10,
                   }}
                 >
                   {headerModel.rowIdentifiers.map((row) => (
                     <div key={row.key} style={{ minWidth: 0 }}>
-                      <div style={UI.summaryTileLabel}>{row.label}</div>
-                      <div style={{ ...UI.summaryTileValue, fontSize: 17 }}>
+                      <div style={{ ...UI.summaryTileLabel, fontSize: 10, opacity: 0.85 }}>{row.label}</div>
+                      <div style={{ ...UI.summaryTileValue, fontSize: 14, fontWeight: 800, color: UI.colors.textSecondary }}>
                         {row.key === "gpn" &&
                         data.portfolio_item_id != null &&
                         onOpenPortfolioItemId &&
@@ -462,22 +587,14 @@ export default function ProductionOrderDetailPage({
                 </div>
               </div>
               <div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 900,
-                    color: "#64748b",
-                    marginBottom: 10,
-                    letterSpacing: "0.06em",
-                  }}
-                >
-                  PORTFOLIO A ZDROJ
-                </div>
-                <div style={UI.detailPageHeaderContextGrid}>
+                <div style={{ ...sectionEyebrow, color: UI.colors.neutralFg, marginBottom: 10 }}>Portfolio a zdroj</div>
+                <div style={{ ...UI.detailPageHeaderContextGrid, gap: 10 }}>
                   {headerModel.rowSource.map((row) => (
                     <div key={row.key} style={{ minWidth: 0 }}>
-                      <div style={UI.summaryTileLabel}>{row.label}</div>
-                      <div style={{ ...UI.summaryTileValue, fontSize: 17 }}>{row.value}</div>
+                      <div style={{ ...UI.summaryTileLabel, fontSize: 10, opacity: 0.85 }}>{row.label}</div>
+                      <div style={{ ...UI.summaryTileValue, fontSize: 14, fontWeight: 800, color: UI.colors.textSecondary }}>
+                        {row.value}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -485,58 +602,6 @@ export default function ProductionOrderDetailPage({
             </div>
           }
         />
-
-        <div style={{ ...UI.card, borderRadius: 14 }}>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>Provozní metriky</div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-              gap: 14,
-            }}
-          >
-            <div>
-              <div style={UI.statLabel}>Vykázaný čas</div>
-              <div style={UI.statValue}>{Math.round(Number(data.reported_time_min ?? 0))} min</div>
-            </div>
-            <div>
-              <div style={UI.statLabel}>Náklad práce</div>
-              <div style={UI.statValue}>{formatDetailLaborCzk(data.direct_labor_cost)}</div>
-            </div>
-            <div>
-              <div style={UI.statLabel}>Hotovo</div>
-              <div style={UI.statValue}>{formatDetailPercent(data.completion_percent)}</div>
-            </div>
-            <div>
-              <div style={UI.statLabel}>Výkonnost</div>
-              <div style={UI.statValue}>{formatDetailPercent(data.performance_percent)}</div>
-              <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, fontWeight: 600 }}>
-                Plánovaný čas (planning_operations) / vykázaný čas (work_reports)
-              </div>
-            </div>
-          </div>
-          {(data.current_location || data.current_phase) && (
-            <div
-              style={{
-                marginTop: 14,
-                paddingTop: 14,
-                borderTop: "1px solid #e2e8f0",
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-                gap: 12,
-              }}
-            >
-              <div>
-                <div style={UI.statLabel}>Poloha (běžící operace)</div>
-                <div style={UI.statValue}>{data.current_location?.trim() ? data.current_location : "—"}</div>
-              </div>
-              <div>
-                <div style={UI.statLabel}>Fáze VP</div>
-                <div style={UI.statValue}>{formatPlanningPhaseCs(data.current_phase)}</div>
-              </div>
-            </div>
-          )}
-        </div>
 
         {receiveMessage ? (
           <div

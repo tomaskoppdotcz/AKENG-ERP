@@ -25,6 +25,8 @@ export type ProductStockItem = {
   portfolio_gpn: string;
   portfolio_name: string;
   portfolio_customer_name?: string | null;
+  drawing_number?: string | null;
+  drawing_revision?: string | null;
   location: string | null;
   current_qty: number;
   min_qty: number | null;

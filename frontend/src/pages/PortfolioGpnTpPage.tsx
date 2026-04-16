@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import { akengFetch } from "../services/akengFetch";
 
@@ -623,16 +624,16 @@ export default function PortfolioGpnTpPage() {
   }, [templates]);
 
   const filteredTemplates = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
     return templates.filter((t) => {
-      const matchSearch =
-        !q ||
-        t.gpn.toLowerCase().includes(q) ||
-        (t.name || "").toLowerCase().includes(q) ||
-        (t.material || "").toLowerCase().includes(q) ||
-        (t.product_group || "").toLowerCase().includes(q);
-
+      const hay = buildSearchHaystack(
+        t.gpn,
+        t.name,
+        t.revision,
+        t.material,
+        t.product_group,
+        t.operations_count
+      );
+      const matchSearch = matchesSearchQuery(search, hay);
       const matchGroup =
         groupFilter === "vse" || (t.product_group || "").toLowerCase() === groupFilter.toLowerCase();
 
@@ -696,7 +697,7 @@ export default function PortfolioGpnTpPage() {
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Hledat GPN, nazev, material..."
+                  placeholder="Hledat GPN, název, revizi, TP, materiál…"
                   style={fieldStyle()}
                 />
               </div>

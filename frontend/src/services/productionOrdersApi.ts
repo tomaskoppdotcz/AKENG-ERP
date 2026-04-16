@@ -9,6 +9,10 @@ export type ProductionOrderOverviewRow = {
   vp_code: string;
   scan_code?: string | null;
   gpn: string | null;
+  /** Z `portfolio_items.drawing_no` (portfolio řádku / VP). */
+  drawing_number?: string | null;
+  /** Z `portfolio_items.revision`. */
+  drawing_revision?: string | null;
   description: string | null;
   quantity: number;
   logistic_mode: string | null;

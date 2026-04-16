@@ -14,6 +14,7 @@ import {
   type PortfolioGroup,
   type PortfolioItem,
 } from "../services/portfolioApi";
+import { buildSearchHaystack, matchesSearchQuery, normalizeSearchText } from "../overview/overviewSearch";
 
 type Props = {
   onBackToDashboard?: () => void;
@@ -25,10 +26,6 @@ type Props = {
   initialSearchQuery?: string | null;
   onConsumedInitialSearch?: () => void;
 };
-
-function searchValue(v: string) {
-  return v.trim().toLowerCase();
-}
 
 function dash(v: string | null | undefined): string {
   const t = (v ?? "").trim();
@@ -191,30 +188,29 @@ export default function PortfolioPage({
     }
   }, [portfolioGroups, formPortfolioGroupId]);
 
-  const filtered = useMemo(() => {
-    const q = searchValue(query);
-    if (!q) return items;
-    return items.filter((i) =>
-      [
-        i.gpn,
-        i.scan_code ?? "",
-        i.name,
-        String(i.customer_id),
-        i.customer_name ?? "",
-        i.group_id == null ? "" : String(i.group_id),
-        i.group_name ?? "",
-        i.drawing_no ?? "",
-        i.revision ?? "",
-        i.material_default ?? "",
-        i.logistic_mode ?? "",
-        logisticLabel(i.logistic_mode),
-        i.sale_price_per_piece != null ? String(i.sale_price_per_piece) : "",
-        formatCzk(i.sale_price_per_piece),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
+  function buildPortfolioSearchHaystack(i: PortfolioItem): string {
+    return buildSearchHaystack(
+      i.gpn,
+      i.scan_code,
+      i.name,
+      i.customer_id,
+      i.customer_name,
+      i.group_id,
+      i.group_name,
+      i.drawing_no,
+      i.revision,
+      i.material_default,
+      i.logistic_mode,
+      logisticLabel(i.logistic_mode),
+      i.sale_price_per_piece != null ? String(i.sale_price_per_piece) : "",
+      formatCzk(i.sale_price_per_piece),
+      i.active_template_id
     );
+  }
+
+  const filtered = useMemo(() => {
+    if (!normalizeSearchText(query)) return items;
+    return items.filter((i) => matchesSearchQuery(query, buildPortfolioSearchHaystack(i)));
   }, [items, query]);
 
   const portfolioGpnGroups = useMemo(() => {
@@ -590,7 +586,7 @@ export default function PortfolioPage({
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Hledat"
+              placeholder="Hledat GPN, název, výkres, revizi…"
               style={UI.inputs.base}
             />
           </div>

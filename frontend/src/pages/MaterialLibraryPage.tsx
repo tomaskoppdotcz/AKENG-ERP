@@ -9,10 +9,7 @@ import {
   type MaterialGroup,
   type MaterialLibraryItem,
 } from "../services/materialLibraryApi";
-
-function norm(s: string) {
-  return s.trim().toLowerCase();
-}
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 
 function formatMoney(v: number | null): string {
   if (v == null) return "—";
@@ -104,12 +101,23 @@ export default function MaterialLibraryPage() {
   }, [loadRows]);
 
   const filtered = useMemo(() => {
-    const q = norm(query);
     return rows.filter((r) => {
       const groupLabel = r.material_group_name ?? "";
-      const matchesText =
-        !q ||
-        norm(`${r.scan_code ?? ""} ${r.code} ${r.name} ${groupLabel} ${r.form} ${r.dimension}`).includes(q);
+      const hay = buildSearchHaystack(
+        r.scan_code,
+        r.code,
+        r.name,
+        groupLabel,
+        r.form,
+        r.dimension,
+        r.unit,
+        r.density != null ? String(r.density) : "",
+        r.price_per_kg != null ? String(r.price_per_kg) : "",
+        r.price_per_unit != null ? String(r.price_per_unit) : "",
+        r.kg_per_mm != null ? String(r.kg_per_mm) : "",
+        r.price_per_mm != null ? String(r.price_per_mm) : ""
+      );
+      const matchesText = matchesSearchQuery(query, hay);
       const matchesGroup = groupFilter === "" || r.material_group_id === groupFilter;
       const matchesForm = !formFilter || r.form === formFilter;
       return matchesText && matchesGroup && matchesForm;
@@ -261,7 +269,7 @@ export default function MaterialLibraryPage() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Hledat kód, název, skupinu, formu nebo rozměr…"
+          placeholder="Hledat kód, název, rozměr, skupinu…"
           style={{ ...UI.inputs.base, flex: "1 1 280px", minWidth: 200, maxWidth: 480 }}
         />
         <select

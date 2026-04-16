@@ -12,6 +12,7 @@ import {
   updateMaterialStockItem,
   type MaterialStockItem,
 } from "../services/materialStockApi";
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 
 type MaterialStockRow = MaterialStockItem & {
   material_dimension: string | null;
@@ -21,10 +22,6 @@ type Props = {
   /** Klik na řádek — otevře detail v pracovní záložce. */
   onOpenStockInWorkspaceTab: (item: MaterialStockRow) => void;
 };
-
-function norm(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) {
   const [rows, setRows] = useState<MaterialStockRow[]>([]);
@@ -181,13 +178,21 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
   }
 
   const filtered = useMemo(() => {
-    const q = norm(query);
     const locationByCode = new Map(locations.map((l) => [l.code, l.name]));
     return rows.filter((r) => {
       const locationName = r.location ? locationByCode.get(r.location) ?? "" : "";
-      const matchesText = !q || norm(
-        `${r.material_name} ${r.material_code} ${r.material_form ?? ""} ${r.material_dimension ?? ""} ${r.location ?? ""} ${locationName} ${r.unit ?? ""}`
-      ).includes(q);
+      const hay = buildSearchHaystack(
+        r.material_code,
+        r.material_name,
+        r.material_form,
+        r.material_dimension,
+        r.location,
+        locationName,
+        r.unit,
+        r.scan_code,
+        r.note
+      );
+      const matchesText = matchesSearchQuery(query, hay);
       const matchesGroup = groupFilter === "" || r.material_group_id === groupFilter;
       const matchesForm = !formFilter || r.material_form === formFilter;
       return matchesText && matchesGroup && matchesForm;
@@ -227,7 +232,7 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Hledat materiál, kód, rozměr, lokaci..."
+              placeholder="Hledat kód, název, lokaci, scan…"
               style={UI.inputs.base}
             />
             <select

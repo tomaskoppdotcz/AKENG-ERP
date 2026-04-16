@@ -8,6 +8,7 @@ from app.models.portfolio import PortfolioItem
 from app.models.product_stock import ProductStockItem
 from app.services.job_item_operational_metrics import job_item_operational_metrics_map
 from app.services.order_operational_metrics import order_operational_metrics_map
+from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
 from app.services.vp_operational_metrics import OPERATIONAL_METRICS_EMPTY
 
 router = APIRouter()
@@ -373,6 +374,13 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
 
   ji_metrics = job_item_operational_metrics_map(db, [int(it.id) for it in items]) if items else {}
 
+  draw_by_pid: dict[int, tuple[str | None, str | None]] = {}
+  if have_portfolio_fk and items:
+    draw_by_pid = drawing_number_revision_by_portfolio_id(
+      db,
+      (portfolio_item_id_by_item.get(it.id) for it in items),
+    )
+
   co_pk = job.customer_order_id
   order_metrics: dict[str, int | float | str | None]
   if co_pk is None:
@@ -409,6 +417,16 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "workflow_status": getattr(it, "workflow_status", None),
         "sales_price_per_unit": price_by_id.get(it.id) if have_price_col else None,
         "sale_price_per_piece": _item_sale_price_per_piece(it.id),
+        "drawing_number": (
+          draw_by_pid.get(int(portfolio_item_id_by_item.get(it.id)), (None, None))[0]
+          if have_portfolio_fk and portfolio_item_id_by_item.get(it.id) is not None
+          else None
+        ),
+        "drawing_revision": (
+          draw_by_pid.get(int(portfolio_item_id_by_item.get(it.id)), (None, None))[1]
+          if have_portfolio_fk and portfolio_item_id_by_item.get(it.id) is not None
+          else None
+        ),
         "vp_code": vp_by_item.get(it.id),
         "vp_count": int(vp_count_by_item.get(it.id, 0)),
         "production_orders": vp_list_by_item.get(it.id, []),

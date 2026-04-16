@@ -114,12 +114,16 @@ def ensure_product_stock_sqlite_schema(engine: Engine) -> None:
 def _item_payload(row: ProductStockItem) -> dict:
     p = row.portfolio_item
     cust = p.customer if p else None
+    dn = (str(p.drawing_no).strip() if p and getattr(p, "drawing_no", None) else "") or None
+    rv = (str(p.revision).strip() if p and getattr(p, "revision", None) else "") or None
     return {
         "id": row.id,
         "portfolio_item_id": row.portfolio_item_id,
         "portfolio_gpn": p.gpn if p else "",
         "portfolio_name": p.name if p else "",
         "portfolio_customer_name": cust.name if cust else None,
+        "drawing_number": dn,
+        "drawing_revision": rv,
         "location": row.location,
         "current_qty": row.current_qty,
         "min_qty": row.min_qty,

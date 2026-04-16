@@ -25,6 +25,7 @@ import {
   formatOverviewMoneyKc0,
   formatOverviewPercentInteger,
 } from "../overview/overviewMetricsFormat";
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 
 const orderCodeLink: React.CSSProperties = {
   background: "none",
@@ -139,10 +140,6 @@ function renderOrdersCell(
 const ORDER_FILTERS = ["Po termínu", "Dokončená", "Dodací list", "Fakturováno"] as const;
 type OrderFilter = (typeof ORDER_FILTERS)[number];
 
-function formatSearchValue(v: string) {
-  return v.trim().toLowerCase();
-}
-
 function startOfToday(): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -251,10 +248,14 @@ export default function OrdersPage(_props: Props) {
   }, [rows]);
 
   const filtered = useMemo(() => {
-    const q = formatSearchValue(query);
     return rows.filter((row) => {
-      const haystack = [row.zakazka, row.zakaznik ?? "", row.objednavka ?? ""].join(" ").toLowerCase();
-      const matchesQuery = !q || haystack.includes(q);
+      const hay = buildSearchHaystack(
+        row.zakazka,
+        row.zakaznik,
+        row.objednavka,
+        row.overview_search_corpus,
+      );
+      const matchesQuery = matchesSearchQuery(query, hay);
 
       const hotovoNum = Number(row.hotovo) || 0;
       const matchesFilters = activeFilters.every((f) => {
@@ -531,7 +532,7 @@ export default function OrdersPage(_props: Props) {
                     <input
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Hledat zakázku, zákazníka nebo objednávku..."
+                      placeholder="Hledat zakázku, objednávku, zákazníka, GPN, název, výkres, revizi, VP…"
                       style={UI.inputs.base}
                     />
                   </div>

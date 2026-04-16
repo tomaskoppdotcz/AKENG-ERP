@@ -7,10 +7,7 @@ import {
   updateWorkplaceLibraryItem,
   type WorkplaceLibraryItem,
 } from "../services/masterLibrariesApi";
-
-function norm(s: string) {
-  return s.trim().toLowerCase();
-}
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 
 function formatRate(v: number | null): string {
   if (v == null) return "—";
@@ -65,12 +62,17 @@ export default function WorkplaceLibraryPage() {
   }, [loadRows]);
 
   const filtered = useMemo(() => {
-    const q = norm(query);
-    if (!q) return rows;
     return rows.filter((r) => {
-      const code = r.code ?? "";
-      const typ = r.workplace_type ?? "";
-      return norm(`${code} ${r.name} ${typ}`).includes(q);
+      const hay = buildSearchHaystack(
+        r.code,
+        r.name,
+        r.workplace_type,
+        r.hourly_rate != null ? String(r.hourly_rate) : "",
+        r.daily_capacity_hours != null ? String(r.daily_capacity_hours) : "",
+        r.is_plannable === false ? "neplanovat" : "",
+        r.is_active === false ? "neaktivni" : ""
+      );
+      return matchesSearchQuery(query, hay);
     });
   }, [rows, query]);
 
@@ -174,7 +176,7 @@ export default function WorkplaceLibraryPage() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Hledat pracoviště nebo kód..."
+          placeholder="Hledat kód, název, typ pracoviště…"
           style={{ ...UI.inputs.base, flex: "1 1 280px", minWidth: 200, maxWidth: 480 }}
         />
         <button type="button" style={UI.buttons.primary} onClick={openCreate}>

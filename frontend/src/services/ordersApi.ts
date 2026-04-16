@@ -31,6 +31,8 @@ export type OrdersOverviewRow = {
   current_phase?: string | null;
   current_location?: string | null;
   operational_summary_cs?: string | null;
+  /** GPN, popisy řádků, výkres, revize, kódy VP — pro klientské fulltextové hledání v přehledu. */
+  overview_search_corpus?: string | null;
 };
 
 export type OrdersOverviewResponse = {
@@ -66,6 +68,8 @@ export type OrderDetailItem = {
   sale_price_per_piece?: number | null;
   vp_code: string | undefined;
   vp_count?: number;
+  drawing_number?: string | null;
+  drawing_revision?: string | null;
   production_orders?: Array<{
     id: number;
     vp_code: string;
@@ -162,6 +166,9 @@ export type JobItemRow = {
   order_type?: string | null;
   description?: string | null;
   portfolio_item_id?: number | null;
+  /** Z `portfolio_items` (stejná logika jako u přehledu VP). */
+  drawing_number?: string | null;
+  drawing_revision?: string | null;
   /** Text z backendu (fáze výroby z VP / plánování). */
   production_phase_label?: string | null;
   /** Např. "2 / 5" z backendu. */

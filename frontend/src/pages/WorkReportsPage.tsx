@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { WORK_REPORT_PAUSE_REASONS } from "../constants/workReportPauseReasons";
 import { getEmployeesMaster, type EmployeeMasterRow } from "../services/masterLibrariesApi";
 import { getProductionOrdersOverview, type ProductionOrderOverviewRow } from "../services/productionOrdersApi";
+import { akengFetch } from "../services/akengFetch";
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 import { UI } from "../styles/ui";
 import {
   createWorkReport,
@@ -33,17 +35,31 @@ function fromDatetimeLocalValue(v: string): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+type MachineMasterRow = {
+  id: number;
+  machine_code?: string | null;
+  name?: string | null;
+  machine_type?: string | null;
+};
+
 function filterVps(orders: ProductionOrderOverviewRow[], q: string): ProductionOrderOverviewRow[] {
-  const s = q.trim().toLowerCase();
+  const s = q.trim();
   if (!s) return orders;
-  return orders.filter(
-    (v) =>
-      (v.vp_code || "").toLowerCase().includes(s) ||
-      (v.gpn || "").toLowerCase().includes(s) ||
-      (v.description || "").toLowerCase().includes(s) ||
-      (v.zakazka || "").toLowerCase().includes(s) ||
-      (v.customer_order_no || "").toLowerCase().includes(s)
-  );
+  return orders.filter((v) => {
+    const hay = buildSearchHaystack(
+      v.vp_code,
+      v.gpn,
+      v.description,
+      v.zakazka,
+      v.customer_order_no,
+      v.drawing_number,
+      v.drawing_revision,
+      v.logistic_mode
+    );
+    return matchesSearchQuery(s, hay);
+  });
 }
 
 function sortEmployeesForPicker(rows: EmployeeMasterRow[], kioskOnly: boolean): EmployeeMasterRow[] {
@@ -116,7 +132,7 @@ function VpSearchField({
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             disabled={disabled}
-            placeholder="Hledat VP kód, GPN, popis, zakázku, číslo objednávky…"
+            placeholder="Hledat VP, GPN, popis, zakázku, výkres, revizi, objednávku…"
             style={{ width: "100%", marginTop: 4, padding: 8, borderRadius: 8, border: "1px solid #cbd5e1" }}
           />
           <div
@@ -355,9 +371,11 @@ export default function WorkReportsPage() {
   const [filterOpId, setFilterOpId] = useState("");
   const [filterMachineId, setFilterMachineId] = useState("");
   const [openOnly, setOpenOnly] = useState(false);
+  const [listSearch, setListSearch] = useState("");
 
   const [vps, setVps] = useState<ProductionOrderOverviewRow[]>([]);
   const [employees, setEmployees] = useState<EmployeeMasterRow[]>([]);
+  const [machines, setMachines] = useState<MachineMasterRow[]>([]);
   const [mastersLoading, setMastersLoading] = useState(true);
 
   const [selected, setSelected] = useState<WorkReportDto | null>(null);
@@ -401,13 +419,24 @@ export default function WorkReportsPage() {
     (async () => {
       setMastersLoading(true);
       try {
-        const [vpRows, empRows] = await Promise.all([
+        const [vpRows, empRows, machRes] = await Promise.all([
           getProductionOrdersOverview("all"),
           getEmployeesMaster("active"),
+          akengFetch(`${API_BASE}/master-data/machines`),
         ]);
+        let machRows: MachineMasterRow[] = [];
+        if (machRes.ok) {
+          try {
+            const raw = await machRes.json();
+            if (Array.isArray(raw)) machRows = raw as MachineMasterRow[];
+          } catch {
+            /* ignore */
+          }
+        }
         if (!c) {
           setVps(vpRows);
           setEmployees(empRows);
+          setMachines(machRows);
         }
       } catch {
         if (!c) setError("Nepodařilo se načíst výrobní příkazy nebo zaměstnance.");
@@ -443,6 +472,45 @@ export default function WorkReportsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const vpById = useMemo(() => new Map(vps.map((v) => [v.id, v])), [vps]);
+
+  const machineHaystackById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const row of machines) {
+      m.set(row.id, buildSearchHaystack(row.machine_code, row.name, row.machine_type, row.id));
+    }
+    return m;
+  }, [machines]);
+
+  const filteredReports = useMemo(() => {
+    return reports.filter((r) => {
+      const vp = r.production_order_id != null ? vpById.get(r.production_order_id) : undefined;
+      const emp = r.employee_id != null ? employees.find((e) => e.id === r.employee_id) : undefined;
+      const machineHay = machineHaystackById.get(r.machine_id) ?? buildSearchHaystack(r.machine_id);
+      const hay = buildSearchHaystack(
+        vp?.vp_code,
+        vp?.gpn,
+        vp?.description,
+        vp?.drawing_number,
+        vp?.drawing_revision,
+        vp?.zakazka,
+        vp?.customer_order_no,
+        `#${r.operation_no}`,
+        r.operation_no,
+        r.operation_name,
+        r.operator_display,
+        emp?.full_name,
+        emp?.first_name,
+        emp?.last_name,
+        emp?.employee_code,
+        machineHay,
+        r.note,
+        r.source
+      );
+      return matchesSearchQuery(listSearch, hay);
+    });
+  }, [reports, listSearch, vpById, employees, machineHaystackById]);
 
   useEffect(() => {
     if (!selected) {
@@ -763,6 +831,12 @@ export default function WorkReportsPage() {
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 16, marginTop: 16 }}>
         <div style={{ ...UI.card, minWidth: 0 }}>
           <div style={{ fontWeight: 900, marginBottom: 10 }}>Seznam</div>
+          <input
+            value={listSearch}
+            onChange={(e) => setListSearch(e.target.value)}
+            placeholder="Hledat VP, GPN, operaci, zaměstnance, stroj, poznámku…"
+            style={{ width: "100%", marginBottom: 10, padding: "8px 10px", borderRadius: 8, border: "1px solid #cbd5e1" }}
+          />
           {loading ? <div style={{ color: "#64748b" }}>Načítám…</div> : null}
           <div style={{ maxHeight: "62vh", overflow: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -779,7 +853,7 @@ export default function WorkReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {reports.map((r) => (
+                {filteredReports.map((r) => (
                   <tr
                     key={r.id}
                     onClick={() => syncDraftFromRow(r)}

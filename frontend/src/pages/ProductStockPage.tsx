@@ -20,15 +20,12 @@ import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
 import type { TableColumnDef } from "../overview/tableLayoutMerge";
 import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
 import { formatOverviewQtyWithUnit } from "../overview/overviewMetricsFormat";
+import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
 
 type Props = {
   /** Klik na řádek — otevře detail v pracovní záložce. */
   onOpenStockInWorkspaceTab: (item: ProductStockItem) => void;
 };
-
-function norm(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 function dashScan(v: string | null | undefined): string {
   const t = (v ?? "").trim();
@@ -165,15 +162,20 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
   }, [portfolioItemsForStock, portfolioItems, portfolioItemId]);
 
   const filtered = useMemo(() => {
-    const q = norm(query);
     const locationByCode = new Map(locations.map((l) => [l.code, l.name]));
     return rows.filter((r) => {
       const locationName = r.location ? locationByCode.get(r.location) ?? "" : "";
-      const matchesText =
-        !q ||
-        norm(
-          `${r.scan_code ?? ""} ${r.portfolio_gpn} ${r.portfolio_name} ${r.location ?? ""} ${locationName} ${r.unit ?? ""}`
-        ).includes(q);
+      const hay = buildSearchHaystack(
+        r.portfolio_gpn,
+        r.portfolio_name,
+        r.drawing_number,
+        r.drawing_revision,
+        r.location,
+        locationName,
+        r.scan_code,
+        r.unit,
+      );
+      const matchesText = matchesSearchQuery(query, hay);
       const cust = r.portfolio_customer_name?.trim() ?? "";
       const matchesCustomer = !customerFilter || cust === customerFilter;
       return matchesText && matchesCustomer;
@@ -496,7 +498,7 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Hledat"
+                placeholder="Hledat GPN, název, výkres, revizi, lokaci, scan kód…"
                 style={{ ...UI.inputs.base, minWidth: 200, flex: "1 1 240px" }}
               />
               {customerOptions.length > 0 ? (

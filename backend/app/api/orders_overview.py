@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
@@ -5,12 +6,13 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.orders import CustomerOrder, Job, JobItem
+from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
 from app.services.business_workflow import workflow_record_active
 from app.services.order_operational_metrics import order_operational_metrics_map
 from app.models.planning import PlanningOperation
 from app.models.portfolio import PortfolioItem
 from app.models.production import OperationLog
+from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
 
 router = APIRouter()
 
@@ -117,6 +119,28 @@ def get_orders_overview(
         if template_id_by_portfolio_id.get(pid) is None:
           template_id_by_portfolio_id[pid] = int(r[0])
 
+  drawing_pair_by_pid = drawing_number_revision_by_portfolio_id(db, list(portfolio_id_by_item.values()))
+
+  ji_cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
+  has_ji_desc = "description" in ji_cols
+  desc_by_item_id: dict[int, str | None] = {}
+  if has_ji_desc and items:
+    ji_ids_list = [int(it.id) for it in items]
+    in_ji = ",".join(str(x) for x in ji_ids_list)
+    for r in db.execute(text(f"SELECT id, description FROM job_items WHERE id IN ({in_ji})")):
+      desc_by_item_id[int(r[0])] = r[1]
+
+  vp_by_item_id: dict[int, list[str]] = defaultdict(list)
+  if items:
+    ji_ids_list = [int(it.id) for it in items]
+    po_rows = db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id.in_(ji_ids_list))).all()
+    for po in po_rows:
+      if po.job_item_id is None:
+        continue
+      v = (po.vp_code or "").strip()
+      if v:
+        vp_by_item_id[int(po.job_item_id)].append(v)
+
   # Vykázané minuty: operation_logs přes planning_operations.order_item_id (job_item_id).
   reported_min_by_item_id: dict[int, float] = {}
   if job_ids:
@@ -213,6 +237,27 @@ def get_orders_overview(
     if planned_min > 0:
       hotovo = min(max((reported_min / planned_min) * 100.0, 0.0), 100.0)
 
+    search_parts: list[str] = []
+    for it in job_items:
+      gpn_v = (it.gpn or "").strip()
+      if gpn_v:
+        search_parts.append(gpn_v)
+      if has_ji_desc:
+        dv = desc_by_item_id.get(int(it.id))
+        if dv and str(dv).strip():
+          search_parts.append(str(dv).strip())
+      if have_portfolio:
+        pid = portfolio_id_by_item.get(it.id)
+        if pid is not None:
+          dn, rv = drawing_pair_by_pid.get(int(pid), (None, None))
+          if dn:
+            search_parts.append(dn)
+          if rv:
+            search_parts.append(rv)
+      for vpc in vp_by_item_id.get(int(it.id), []):
+        search_parts.append(vpc)
+    overview_search_corpus = " ".join(search_parts) if search_parts else ""
+
     result.append(
       {
         "zakazka": job.zak_code,
@@ -232,6 +277,7 @@ def get_orders_overview(
         "customer_order_id": co.id if co else None,
         "job_id": job.id,
         "workflow_status": getattr(co, "workflow_status", None),
+        "overview_search_corpus": overview_search_corpus,
       }
     )
 
