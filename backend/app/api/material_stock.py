@@ -443,21 +443,42 @@ class MaterialIssuePayload(BaseModel):
 @router.get("/items")
 def list_stock_items(
     for_job_item_id: int | None = Query(None, ge=1, description="Pro výdej: dostupné = stav − rezervace jiných položek."),
+    limit: int | None = Query(None, ge=1, le=2000, description="Server-side pagination: max. záznamů na stránku."),
+    offset: int = Query(0, ge=0, description="Server-side pagination: offset od začátku."),
     db: Session = Depends(get_db),
 ):
-    rows = db.scalars(
+    """Sklad materiálu. Response: `{items, total, limit, offset}`."""
+    total = int(
+        db.scalar(
+            select(func.count(MaterialStockItem.id)).join(
+                MaterialLibraryItem,
+                MaterialStockItem.material_library_item_id == MaterialLibraryItem.id,
+            )
+        )
+        or 0
+    )
+    q = (
         select(MaterialStockItem)
         .join(MaterialLibraryItem, MaterialStockItem.material_library_item_id == MaterialLibraryItem.id)
         .options(
             joinedload(MaterialStockItem.material_library_item).joinedload(MaterialLibraryItem.material_group)
         )
         .order_by(MaterialLibraryItem.name.asc())
-    ).unique().all()
+    )
+    if limit is not None:
+        q = q.offset(int(offset)).limit(int(limit))
+    rows = db.scalars(q).unique().all()
     stock_ids = [r.id for r in rows]
     reserved_map = reserved_totals_for_stock_items(
         db, stock_ids, exclude_job_item_id=for_job_item_id
     )
-    return [_stock_item_list_payload(r, reserved_map.get(r.id, 0.0)) for r in rows]
+    items = [_stock_item_list_payload(r, reserved_map.get(r.id, 0.0)) for r in rows]
+    return {
+        "items": items,
+        "total": total,
+        "limit": int(limit) if limit is not None else total,
+        "offset": int(offset),
+    }
 
 
 @router.post("/items")

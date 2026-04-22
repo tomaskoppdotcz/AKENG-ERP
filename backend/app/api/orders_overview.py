@@ -34,8 +34,16 @@ def _order_type_value(co: CustomerOrder) -> str:
 def get_orders_overview(
   order_type: str = Query("customer", description="customer | internal | all"),
   workflow_filter: str = Query("active", description="active | cancelled | all"),
+  limit: int | None = Query(None, ge=1, le=2000, description="Server-side pagination: max. záznamů na stránku."),
+  offset: int = Query(0, ge=0, description="Server-side pagination: offset od začátku."),
   db: Session = Depends(get_db),
 ):
+  """
+  Přehled zakázek — připraveno na server-side pagination:
+  - `limit` + `offset` + `total` v odpovědi.
+  - pokud `limit` není uveden, vrací se všechny řádky (klientská pagination/search).
+  Response: `{orders, total, limit, offset}`.
+  """
   ot = (order_type or "customer").strip().lower()
   if ot not in ("customer", "internal", "all"):
     ot = "customer"
@@ -46,7 +54,12 @@ def get_orders_overview(
   jobs = db.scalars(select(Job).order_by(Job.id.desc())).all()
 
   if not jobs:
-    return {"orders": []}
+    return {
+      "orders": [],
+      "total": 0,
+      "limit": int(limit) if limit is not None else 0,
+      "offset": int(offset),
+    }
 
   # preload customer orders
   customer_ids = {job.customer_order_id for job in jobs if job.customer_order_id is not None}
@@ -291,5 +304,18 @@ def get_orders_overview(
     if m:
       row.update(m)
 
-  return {"orders": result}
+  total = len(result)
+  # Backend zatím filtruje až po enrichmentu (viz historická logika order_type/workflow_filter);
+  # pagination se tu proto aplikuje na již kompletně obohacený dataset.
+  if limit is not None:
+    sliced = result[int(offset) : int(offset) + int(limit)]
+  else:
+    sliced = result
+
+  return {
+    "orders": sliced,
+    "total": total,
+    "limit": int(limit) if limit is not None else total,
+    "offset": int(offset),
+  }
 

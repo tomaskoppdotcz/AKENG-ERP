@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
@@ -197,14 +197,36 @@ class ProductStockMovementUpdate(BaseModel):
 
 
 @router.get("/items")
-def list_product_stock_items(db: Session = Depends(get_db)):
-    rows = db.scalars(
+def list_product_stock_items(
+    limit: int | None = Query(None, ge=1, le=2000, description="Server-side pagination: max. záznamů na stránku."),
+    offset: int = Query(0, ge=0, description="Server-side pagination: offset od začátku."),
+    db: Session = Depends(get_db),
+):
+    """Sklad výrobků. Response: `{items, total, limit, offset}`."""
+    total = int(
+        db.scalar(
+            select(func.count(ProductStockItem.id)).join(
+                PortfolioItem, ProductStockItem.portfolio_item_id == PortfolioItem.id
+            )
+        )
+        or 0
+    )
+    q = (
         select(ProductStockItem)
         .join(PortfolioItem, ProductStockItem.portfolio_item_id == PortfolioItem.id)
         .options(joinedload(ProductStockItem.portfolio_item).joinedload(PortfolioItem.customer))
         .order_by(PortfolioItem.name.asc())
-    ).unique().all()
-    return [_item_payload(r) for r in rows]
+    )
+    if limit is not None:
+        q = q.offset(int(offset)).limit(int(limit))
+    rows = db.scalars(q).unique().all()
+    items = [_item_payload(r) for r in rows]
+    return {
+        "items": items,
+        "total": total,
+        "limit": int(limit) if limit is not None else total,
+        "offset": int(offset),
+    }
 
 
 @router.post("/items")

@@ -9,7 +9,7 @@ from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_effective_actor, require_action
+from app.api.deps import get_effective_actor, require_action, require_permission
 from app.core.database import get_db
 from app.core.scan_code import (
     customer_order_scan_code_for_id,
@@ -2462,9 +2462,18 @@ def storno_customer_order(
 
 
 @router.get("/jobs")
-def get_jobs(db: Session = Depends(get_db)):
-    rows = db.scalars(select(Job).order_by(Job.id.desc())).all()
-    return [
+def get_jobs(
+    limit: int | None = Query(None, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Seznam zakázek (Job). Response: `{items, total, limit, offset}`."""
+    total = int(db.scalar(select(func.count(Job.id))) or 0)
+    q = select(Job).order_by(Job.id.desc())
+    if limit is not None:
+        q = q.offset(int(offset)).limit(int(limit))
+    rows = db.scalars(q).all()
+    items = [
         {
             "id": row.id,
             "zak_code": row.zak_code,
@@ -2472,11 +2481,19 @@ def get_jobs(db: Session = Depends(get_db)):
         }
         for row in rows
     ]
+    return {
+        "items": items,
+        "total": total,
+        "limit": int(limit) if limit is not None else total,
+        "offset": int(offset),
+    }
 
 
 @router.get("/job-items")
 def get_job_items(
     workflow_filter: str = Query("active", description="active | cancelled | all"),
+    limit: int | None = Query(None, ge=1, le=2000, description="Server-side pagination: max. záznamů na stránku."),
+    offset: int = Query(0, ge=0, description="Server-side pagination: offset od začátku."),
     db: Session = Depends(get_db),
 ):
     wf = (workflow_filter or "active").strip().lower()
@@ -2558,7 +2575,18 @@ def get_job_items(
     ji_m = job_item_operational_metrics_map(db, ji_ids) if ji_ids else {}
     for it in out:
         it.update(ji_m.get(int(it["id"]), {}))
-    return out
+
+    total = len(out)
+    if limit is not None:
+        sliced = out[int(offset) : int(offset) + int(limit)]
+    else:
+        sliced = out
+    return {
+        "items": sliced,
+        "total": total,
+        "limit": int(limit) if limit is not None else total,
+        "offset": int(offset),
+    }
 
 
 @router.post("/job-items")
@@ -2732,6 +2760,7 @@ def create_production_orders_from_allocation(
     db: Session = Depends(get_db),
     actor: str | None = Depends(get_effective_actor),
     _rbac: None = Depends(require_action("orders.write")),
+    _perm: None = Depends(require_permission("create_production_orders")),
 ):
     body = payload or CreateProductionOrdersFromAllocationBody()
     co = db.get(CustomerOrder, customer_order_id)
@@ -3119,8 +3148,11 @@ def create_production_orders_from_allocation(
 @router.get("/production-orders")
 def get_production_orders(
     workflow_filter: str = Query("active", description="active | cancelled | all"),
+    limit: int | None = Query(None, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
+    """Jednoduchý seznam VP. Response: `{items, total, limit, offset}`."""
     wf = (workflow_filter or "active").strip().lower()
     if wf not in ("active", "cancelled", "all"):
         wf = "active"
@@ -3149,4 +3181,14 @@ def get_production_orders(
                 "workflow_status": getattr(row, "workflow_status", None),
             }
         )
-    return out
+    total = len(out)
+    if limit is not None:
+        sliced = out[int(offset) : int(offset) + int(limit)]
+    else:
+        sliced = out
+    return {
+        "items": sliced,
+        "total": total,
+        "limit": int(limit) if limit is not None else total,
+        "offset": int(offset),
+    }

@@ -14,6 +14,9 @@ class WorkReport(Base):
     __tablename__ = "work_reports"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
+    """Public id (e.g. WR-000001); allocated at create and backfilled for legacy rows."""
+
     employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True, index=True)
     operator_display: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
@@ -48,6 +51,13 @@ class WorkReport(Base):
     updated_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WorkReportCodeSequence(Base):
+    __tablename__ = "work_report_code_seq"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    next_val: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class WorkReportPause(Base):

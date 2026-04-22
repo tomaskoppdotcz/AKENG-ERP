@@ -24,6 +24,8 @@ ALLOWED_PAGE_KEYS = frozenset(
         "job_items_table",
         "drawings_table",
         "product_stock_table",
+        "portfolio_table",
+        "order_card_items",
     }
 )
 

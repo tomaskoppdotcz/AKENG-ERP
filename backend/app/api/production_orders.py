@@ -399,8 +399,16 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
 @router.get("")
 def list_production_orders(
     workflow_filter: str = Query("active", description="active | cancelled | all"),
+    limit: int | None = Query(None, ge=1, le=2000, description="Server-side pagination: max. záznamů na stránku."),
+    offset: int = Query(0, ge=0, description="Server-side pagination: offset od začátku."),
     db: Session = Depends(get_db),
 ):
+    """
+    Přehled VP — připraveno na server-side pagination:
+    - `limit` + `offset` + `total` v odpovědi.
+    - pokud `limit` není uveden, vrací se všechny řádky pro klientskou pagination/search.
+    Response: `{items, total, limit, offset}`.
+    """
     wf = (workflow_filter or "active").strip().lower()
     if wf not in ("active", "cancelled", "all"):
         wf = "active"
@@ -409,9 +417,22 @@ def list_production_orders(
         q = q.where(workflow_active_sql(ProductionOrder.workflow_status))
     elif wf == "cancelled":
         q = q.where(not_(workflow_active_sql(ProductionOrder.workflow_status)))
-    rows = db.scalars(q.order_by(ProductionOrder.id.desc())).all()
+
+    # Celkový počet po aplikaci filtru (pro pagination UI).
+    count_stmt = select(func.count()).select_from(q.subquery())
+    total = int(db.scalar(count_stmt) or 0)
+
+    page_q = q.order_by(ProductionOrder.id.desc())
+    if limit is not None:
+        page_q = page_q.offset(int(offset)).limit(int(limit))
+    rows = db.scalars(page_q).all()
     if not rows:
-        return {"items": []}
+        return {
+            "items": [],
+            "total": total,
+            "limit": int(limit) if limit is not None else 0,
+            "offset": int(offset),
+        }
 
     job_item_ids = sorted({int(r.job_item_id) for r in rows if r.job_item_id is not None})
     job_ids = sorted({int(r.job_id) for r in rows if r.job_id is not None})
@@ -497,7 +518,12 @@ def list_production_orders(
                 "performance_percent": mm.get("performance_percent"),
             }
         )
-    return {"items": out}
+    return {
+        "items": out,
+        "total": total,
+        "limit": int(limit) if limit is not None else total,
+        "offset": int(offset),
+    }
 
 
 @router.get("/restock-wip-reservation-notices")
@@ -896,6 +922,13 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
     unified_completion = _completion_percent_from_operations(operations) if operations else None
     unified_phase = _current_phase_from_operations(operations) if operations else None
 
+    draw_map = drawing_number_revision_by_portfolio_id(
+        db, [int(portfolio.id)] if portfolio is not None else []
+    )
+    draw_num_d, draw_rev_d = (
+        draw_map.get(int(portfolio.id), (None, None)) if portfolio is not None else (None, None)
+    )
+
     return {
         "id": int(po.id),
         "vp_code": po.vp_code,
@@ -913,7 +946,10 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         ),
         "gpn": po.gpn or (ji.gpn if ji is not None else None),
         "description": po.description or (desc_map.get(int(ji.id)) if ji is not None else None),
+        "drawing_number": draw_num_d,
+        "drawing_revision": draw_rev_d,
         "portfolio_item_id": int(portfolio.id) if portfolio is not None else None,
+        "portfolio_item_gpn": portfolio.gpn if portfolio is not None else None,
         "portfolio_item_name": portfolio.name if portfolio is not None else None,
         "portfolio_item_logistic_mode": portfolio.logistic_mode if portfolio is not None else None,
         "logistic_mode": po.logistic_mode,

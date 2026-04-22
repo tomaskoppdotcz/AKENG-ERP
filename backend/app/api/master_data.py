@@ -11,6 +11,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect as sa_inspect
 
+from app.api.deps import require_action
 from app.core.database import get_db, engine
 from app.models.kiosk import Employee, KioskActivityLog, KioskSession, OperationEvent
 from app.models.work_report import WorkReport
@@ -245,7 +246,10 @@ class EmployeeSubgroupOut(BaseModel):
 
 
 @router.get("/employee-subgroups", response_model=list[EmployeeSubgroupOut])
-def list_employee_subgroups(db: Session = Depends(get_db)):
+def list_employee_subgroups(
+    db: Session = Depends(get_db),
+    _=Depends(require_action("read_employees")),
+):
     rows = db.scalars(
         select(EmployeeSubgroup).order_by(EmployeeSubgroup.sort_order.asc(), EmployeeSubgroup.id.asc())
     ).all()
@@ -253,7 +257,11 @@ def list_employee_subgroups(db: Session = Depends(get_db)):
 
 
 @router.post("/employee-subgroups", response_model=EmployeeSubgroupOut)
-def create_employee_subgroup(payload: EmployeeSubgroupPayload, db: Session = Depends(get_db)):
+def create_employee_subgroup(
+    payload: EmployeeSubgroupPayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_action("edit_employees")),
+):
     ex = db.scalar(select(EmployeeSubgroup).where(EmployeeSubgroup.name == payload.name.strip()))
     if ex:
         raise HTTPException(status_code=409, detail="Role se stejným názvem už existuje.")
@@ -269,7 +277,12 @@ def create_employee_subgroup(payload: EmployeeSubgroupPayload, db: Session = Dep
 
 
 @router.put("/employee-subgroups/{subgroup_id}", response_model=EmployeeSubgroupOut)
-def update_employee_subgroup(subgroup_id: int, payload: EmployeeSubgroupPayload, db: Session = Depends(get_db)):
+def update_employee_subgroup(
+    subgroup_id: int,
+    payload: EmployeeSubgroupPayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_action("edit_employees")),
+):
     row = db.get(EmployeeSubgroup, subgroup_id)
     if not row:
         raise HTTPException(status_code=404, detail="Role nebyla nalezena.")
@@ -540,6 +553,7 @@ def list_employees(
         description="active | inactive — bez parametru všechny záznamy",
     ),
     db: Session = Depends(get_db),
+    _=Depends(require_action("read_employees")),
 ):
     stmt = select(Employee).order_by(Employee.id.asc())
     if active_filter == "active":
@@ -551,7 +565,11 @@ def list_employees(
 
 
 @router.get("/employees/{employee_id}", response_model=EmployeeOut)
-def get_employee(employee_id: int, db: Session = Depends(get_db)):
+def get_employee(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_action("read_employees")),
+):
     row = db.get(Employee, employee_id)
     if not row:
         raise HTTPException(status_code=404, detail="Zaměstnanec nebyl nalezen.")
@@ -559,7 +577,11 @@ def get_employee(employee_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/employees", response_model=EmployeeOut)
-def create_employee(payload: EmployeePayload, db: Session = Depends(get_db)):
+def create_employee(
+    payload: EmployeePayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_action("create_employees")),
+):
     code = payload.employee_code.strip()
     if db.scalar(select(Employee).where(func.lower(Employee.employee_code) == code.lower())):
         raise HTTPException(status_code=409, detail="Kód zaměstnance už existuje.")
@@ -619,7 +641,12 @@ def create_employee(payload: EmployeePayload, db: Session = Depends(get_db)):
 
 
 @router.put("/employees/{employee_id}", response_model=EmployeeOut)
-def update_employee(employee_id: int, payload: EmployeePayload, db: Session = Depends(get_db)):
+def update_employee(
+    employee_id: int,
+    payload: EmployeePayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_action("edit_employees")),
+):
     row = db.get(Employee, employee_id)
     if not row:
         raise HTTPException(status_code=404, detail="Zaměstnanec nebyl nalezen.")
@@ -680,7 +707,12 @@ def update_employee(employee_id: int, payload: EmployeePayload, db: Session = De
 
 
 @router.patch("/employees/{employee_id}/active", response_model=EmployeeOut)
-def patch_employee_active(employee_id: int, payload: EmployeeActivePayload, db: Session = Depends(get_db)):
+def patch_employee_active(
+    employee_id: int,
+    payload: EmployeeActivePayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_action("edit_employees")),
+):
     row = db.get(Employee, employee_id)
     if not row:
         raise HTTPException(status_code=404, detail="Zaměstnanec nebyl nalezen.")
@@ -692,7 +724,11 @@ def patch_employee_active(employee_id: int, payload: EmployeeActivePayload, db: 
 
 
 @router.delete("/employees/{employee_id}")
-def delete_employee(employee_id: int, db: Session = Depends(get_db)):
+def delete_employee(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_action("delete_employees")),
+):
     row = db.get(Employee, employee_id)
     if not row:
         raise HTTPException(status_code=404, detail="Zaměstnanec nebyl nalezen.")

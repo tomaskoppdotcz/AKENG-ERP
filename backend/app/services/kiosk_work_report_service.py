@@ -21,6 +21,7 @@ from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_o
 from app.services.kiosk_vp_operation_order import assert_vp_previous_operations_finished_for_kiosk_start
 from app.services.planning_engine import PlanningEngineService
 from app.services.planning_operation_status import normalize_planning_operation_status
+from app.services.work_report_code import allocate_next_work_report_code
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +253,7 @@ def work_report_start(
 
     links = resolve_report_links(db, op)
     rep = WorkReport(
+        code=allocate_next_work_report_code(db),
         employee_id=employee_id,
         operator_display=(operator_display or None),
         customer_order_id=links["customer_order_id"],

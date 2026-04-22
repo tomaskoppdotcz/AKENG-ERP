@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_action
@@ -20,6 +20,7 @@ from app.models.orders import ProductionOrder
 from app.models.planning import PlanningOperation
 from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.work_report import WorkReport, WorkReportAuditLog, WorkReportPause
+from app.services.work_report_code import allocate_next_work_report_code
 from app.services.kiosk_planner_queue import operation_on_same_planner_row_as_machine
 from app.services.kiosk_work_report_service import (
     PAUSE_REASONS,
@@ -30,11 +31,107 @@ from app.services.kiosk_work_report_service import (
 )
 from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_operation_complete
 from app.services.planning_engine import PlanningEngineService
-from app.services.planning_operation_status import normalize_planning_operation_status
+from app.services.planning_operation_status import (
+    LEGACY_PLANNING_STATUS_TO_CANONICAL,
+    normalize_planning_operation_status,
+)
 
 router = APIRouter()
 
 _ALLOWED_SOURCES = frozenset({"manual", "pc_kiosk", "shopfloor_kiosk"})
+_ALLOWED_WORK_REPORT_LIST_PAGE_SIZES = frozenset({25, 50, 100, 200})
+
+
+def _work_reports_paginated_response(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    date_from: date | None,
+    date_to: date | None,
+    employee_id: int | None,
+    machine_id: int | None,
+    production_order_id: int | None,
+    status: str | None,
+    search: str | None,
+) -> dict[str, Any]:
+    """GET /work-reports?page=… — limit/offset list with {items, page, page_size, total_count}."""
+
+    def _apply_filters(stmt: Any) -> Any:
+        if production_order_id is not None:
+            stmt = stmt.where(WorkReport.production_order_id == int(production_order_id))
+        if machine_id is not None:
+            stmt = stmt.where(WorkReport.machine_id == int(machine_id))
+        if employee_id is not None:
+            stmt = stmt.where(WorkReport.employee_id == int(employee_id))
+        if date_from is not None:
+            stmt = stmt.where(WorkReport.started_at >= datetime.combine(date_from, time.min))
+        if date_to is not None:
+            stmt = stmt.where(WorkReport.started_at < datetime.combine(date_to + timedelta(days=1), time.min))
+        if status is not None and str(status).strip():
+            canon = normalize_planning_operation_status(status)
+            lc = func.lower(PlanningOperation.status)
+            status_conds = [lc == canon]
+            for legacy_key, mapped in LEGACY_PLANNING_STATUS_TO_CANONICAL.items():
+                if mapped == canon:
+                    status_conds.append(lc == legacy_key.lower())
+            stmt = stmt.where(or_(*status_conds))
+        if search is not None and (term := str(search).strip()):
+            pat = f"%{term}%"
+            stmt = stmt.where(
+                or_(
+                    WorkReport.note.ilike(pat),
+                    WorkReport.code.ilike(pat),
+                    WorkReport.operation_name.ilike(pat),
+                    WorkReport.operator_display.ilike(pat),
+                    cast(WorkReport.operation_no, String).ilike(pat),
+                    PlanningOperation.work_order_no.ilike(pat),
+                    ProductionOrder.vp_code.ilike(pat),
+                    Machine.name.ilike(pat),
+                    Machine.machine_code.ilike(pat),
+                    WorkplaceLibraryItem.name.ilike(pat),
+                    WorkplaceLibraryItem.code.ilike(pat),
+                    Employee.name.ilike(pat),
+                    Employee.first_name.ilike(pat),
+                    Employee.last_name.ilike(pat),
+                    Employee.employee_code.ilike(pat),
+                )
+            )
+        return stmt
+
+    base = (
+        select(WorkReport)
+        .join(PlanningOperation, PlanningOperation.id == WorkReport.planning_operation_id)
+        .outerjoin(ProductionOrder, ProductionOrder.id == WorkReport.production_order_id)
+        .join(Machine, Machine.id == WorkReport.machine_id)
+        .outerjoin(Employee, Employee.id == WorkReport.employee_id)
+        .outerjoin(WorkplaceLibraryItem, WorkplaceLibraryItem.id == WorkReport.workplace_library_item_id)
+    )
+    count_stmt = (
+        select(func.count(WorkReport.id))
+        .select_from(WorkReport)
+        .join(PlanningOperation, PlanningOperation.id == WorkReport.planning_operation_id)
+        .outerjoin(ProductionOrder, ProductionOrder.id == WorkReport.production_order_id)
+        .join(Machine, Machine.id == WorkReport.machine_id)
+        .outerjoin(Employee, Employee.id == WorkReport.employee_id)
+        .outerjoin(WorkplaceLibraryItem, WorkplaceLibraryItem.id == WorkReport.workplace_library_item_id)
+    )
+    total_count = int(db.scalar(_apply_filters(count_stmt)) or 0)
+
+    off = (page - 1) * page_size
+    page_stmt = (
+        _apply_filters(base)
+        .order_by(WorkReport.started_at.desc(), WorkReport.id.desc())
+        .offset(off)
+        .limit(page_size)
+    )
+    rows = list(db.scalars(page_stmt).all())
+    return {
+        "items": [_row_to_report(db, r) for r in rows],
+        "page": page,
+        "page_size": page_size,
+        "total_count": total_count,
+    }
 
 
 def _actor_dep(x: Annotated[str | None, Header(alias="X-Akeng-Actor")] = None) -> str | None:
@@ -83,6 +180,7 @@ def _row_to_report(db: Session, r: WorkReport) -> dict[str, Any]:
     )
     return {
         "id": r.id,
+        "code": r.code,
         "employee_id": r.employee_id,
         "operator_display": r.operator_display,
         "customer_order_id": r.customer_order_id,
@@ -114,6 +212,14 @@ def _get_open_report_for_op(db: Session, planning_operation_id: int) -> WorkRepo
         select(WorkReport)
         .where(WorkReport.planning_operation_id == int(planning_operation_id))
         .where(WorkReport.ended_at.is_(None))
+    )
+
+
+def _get_existing_report_for_op(db: Session, planning_operation_id: int) -> WorkReport | None:
+    return db.scalar(
+        select(WorkReport)
+        .where(WorkReport.planning_operation_id == int(planning_operation_id))
+        .limit(1)
     )
 
 
@@ -195,6 +301,66 @@ def _recompute_po_status_from_chain(db: Session, op: PlanningOperation) -> str |
     return str(po.status or "planned")
 
 
+def _assert_delete_is_business_safe(db: Session, rep: WorkReport) -> None:
+    """
+    Guard hard delete for completed reports:
+    if a downstream operation in the same chain already has runtime progress,
+    deleting an earlier completion would break process chronology.
+    """
+    if rep.ended_at is None or rep.planning_operation_id is None:
+        return
+
+    op = db.get(PlanningOperation, int(rep.planning_operation_id))
+    if op is None:
+        return
+
+    chain_stmt = None
+    woo = (op.work_order_no or "").strip()
+    if woo:
+        chain_stmt = (
+            select(PlanningOperation)
+            .where(PlanningOperation.work_order_no == woo)
+            .where(PlanningOperation.operation_no > int(op.operation_no or 0))
+            .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
+        )
+    elif op.order_item_id is not None:
+        chain_stmt = (
+            select(PlanningOperation)
+            .where(PlanningOperation.order_item_id == int(op.order_item_id))
+            .where(PlanningOperation.operation_no > int(op.operation_no or 0))
+            .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
+        )
+    if chain_stmt is None:
+        return
+
+    downstream_ops = list(db.scalars(chain_stmt).all())
+    if not downstream_ops:
+        return
+
+    for row in downstream_ops:
+        has_report = db.scalar(
+            select(WorkReport.id)
+            .where(WorkReport.planning_operation_id == int(row.id))
+            .limit(1)
+        )
+        if has_report is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Výkaz nelze smazat: na navazující operaci už existuje výkaz práce. "
+                    "Nejprve stornujte navazující kroky od konce."
+                ),
+            )
+        if normalize_planning_operation_status(row.status) in {"bezi", "ceka", "hotovo"}:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Výkaz nelze smazat: navazující operace už je rozpracovaná nebo dokončená. "
+                    "Nejprve vraťte navazující kroky do bezpečného stavu."
+                ),
+            )
+
+
 class WorkReportCreate(BaseModel):
     planning_operation_id: int
     machine_id: int
@@ -246,6 +412,7 @@ def list_pause_reasons(
 @router.get("/context/planning-operations")
 def context_planning_operations_for_vp(
     production_order_id: int = Query(..., gt=0),
+    only_without_work_report: bool = Query(False),
     db: Session = Depends(get_db),
     _rbac: None = Depends(require_action("production.execute")),
 ):
@@ -277,6 +444,9 @@ def context_planning_operations_for_vp(
     )
     out: list[dict[str, Any]] = []
     for op in ops:
+        has_work_report = _get_existing_report_for_op(db, int(op.id)) is not None
+        if only_without_work_report and has_work_report:
+            continue
         m = db.get(Machine, int(op.machine_id)) if op.machine_id else None
         wp_name: str | None = None
         if op.workplace_library_item_id:
@@ -297,6 +467,7 @@ def context_planning_operations_for_vp(
                 "status": str(op.status or ""),
                 "work_order_no": op.work_order_no,
                 "gpn": op.gpn,
+                "has_work_report": has_work_report,
             }
         )
     return {
@@ -342,27 +513,115 @@ def context_production_order_for_planning_operation(
 def list_work_reports(
     db: Session = Depends(get_db),
     _rbac: None = Depends(require_action("production.execute")),
+    page: int | None = Query(None, ge=1, description="Číslo stránky (1-based). Pokud je zadáno, vrací se {items,page,page_size,total_count}."),
+    page_size: int = Query(25, description="Velikost stránky pro režim `page` (25, 50, 100, 200)."),
+    date_from: date | None = Query(None, description="Inkluzivní spodní hranice started_at (režim `page`)."),
+    date_to: date | None = Query(None, description="Inkluzivní horní hranice started_at (režim `page`)."),
+    status: str | None = Query(None, description="Filtrovat podle stavu plánovací operace (režim `page`)."),
+    search: str | None = Query(
+        None,
+        description="Režim `page`: VP kód, WOO, stroj (název/kód), pracoviště (název/kód), zaměstnanec (jméno/kód), č. operace, text výkazu.",
+    ),
     planning_operation_id: int | None = Query(None),
     production_order_id: int | None = Query(None),
     machine_id: int | None = Query(None),
     employee_id: int | None = Query(None),
+    workplace_library_item_id: int | None = Query(None),
+    started_from: date | None = Query(None, description="Inkluzivní spodní hranice started_at (datum)."),
+    started_to: date | None = Query(None, description="Inkluzivní horní hranice started_at (datum)."),
     open_only: bool = Query(False),
     limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
-    stmt = select(WorkReport).order_by(WorkReport.started_at.desc())
-    if planning_operation_id is not None:
-        stmt = stmt.where(WorkReport.planning_operation_id == int(planning_operation_id))
-    if production_order_id is not None:
-        stmt = stmt.where(WorkReport.production_order_id == int(production_order_id))
-    if machine_id is not None:
-        stmt = stmt.where(WorkReport.machine_id == int(machine_id))
-    if employee_id is not None:
-        stmt = stmt.where(WorkReport.employee_id == int(employee_id))
-    if open_only:
-        stmt = stmt.where(WorkReport.ended_at.is_(None))
-    stmt = stmt.limit(limit)
-    rows = list(db.scalars(stmt).all())
-    return {"reports": [_row_to_report(db, r) for r in rows]}
+    """
+    Stránkovaný log výkazů — pro UI přehled (100k+ záznamů).
+    Vrací kromě `reports` také `total` a `kpi` spočítané nad plným (nefiltrovaným stránkou) rozsahem
+    aktuálních filtrů.
+    """
+    if page is not None:
+        if page_size not in _ALLOWED_WORK_REPORT_LIST_PAGE_SIZES:
+            allowed = ", ".join(str(x) for x in sorted(_ALLOWED_WORK_REPORT_LIST_PAGE_SIZES))
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid page_size: must be exactly one of {allowed} (received {page_size}).",
+            )
+        return _work_reports_paginated_response(
+            db,
+            page=page,
+            page_size=page_size,
+            date_from=date_from,
+            date_to=date_to,
+            employee_id=employee_id,
+            machine_id=machine_id,
+            production_order_id=production_order_id,
+            status=status,
+            search=search,
+        )
+
+    from sqlalchemy.sql.selectable import Select
+
+    def _apply_filters(stmt: Select) -> Select:
+        if planning_operation_id is not None:
+            stmt = stmt.where(WorkReport.planning_operation_id == int(planning_operation_id))
+        if production_order_id is not None:
+            stmt = stmt.where(WorkReport.production_order_id == int(production_order_id))
+        if machine_id is not None:
+            stmt = stmt.where(WorkReport.machine_id == int(machine_id))
+        if employee_id is not None:
+            stmt = stmt.where(WorkReport.employee_id == int(employee_id))
+        if workplace_library_item_id is not None:
+            stmt = stmt.where(WorkReport.workplace_library_item_id == int(workplace_library_item_id))
+        if started_from is not None:
+            stmt = stmt.where(WorkReport.started_at >= datetime.combine(started_from, time.min))
+        if started_to is not None:
+            stmt = stmt.where(WorkReport.started_at < datetime.combine(started_to + timedelta(days=1), time.min))
+        if open_only:
+            stmt = stmt.where(WorkReport.ended_at.is_(None))
+        return stmt
+
+    base_stmt: Select = _apply_filters(select(WorkReport))
+    total = int(db.scalar(_apply_filters(select(func.count(WorkReport.id)))) or 0)
+    distinct_employees = int(
+        db.scalar(
+            _apply_filters(select(func.count(func.distinct(WorkReport.employee_id)))).where(
+                WorkReport.employee_id.is_not(None)
+            )
+        )
+        or 0
+    )
+
+    # "Dnes" a "Aktivní operace" jsou live metriky nezávislé na filtrech — vždy celosystémový stav.
+    today = date.today()
+    today_start = datetime.combine(today, time.min)
+    today_end = datetime.combine(today + timedelta(days=1), time.min)
+    reported_min_today = float(
+        db.scalar(
+            select(func.coalesce(func.sum(WorkReport.duration_min), 0.0)).where(
+                WorkReport.started_at >= today_start,
+                WorkReport.started_at < today_end,
+            )
+        )
+        or 0.0
+    )
+    open_count = int(
+        db.scalar(select(func.count(WorkReport.id)).where(WorkReport.ended_at.is_(None))) or 0
+    )
+
+    page_stmt = base_stmt.order_by(WorkReport.started_at.desc()).offset(offset).limit(limit)
+    rows = list(db.scalars(page_stmt).all())
+
+    return {
+        "reports": [_row_to_report(db, r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "kpi": {
+            "reported_min_today": reported_min_today,
+            "total_count": total,
+            "open_count": open_count,
+            "distinct_employees": distinct_employees,
+        },
+    }
 
 
 @router.get("/{report_id}")
@@ -436,10 +695,10 @@ def create_work_report(
             detail="Operace nepatří na stejný řádek Planneru jako zvolený stroj.",
         )
 
-    if _get_open_report_for_op(db, op.id):
+    if _get_existing_report_for_op(db, op.id):
         raise HTTPException(
             status_code=409,
-            detail="Pro tuto operaci už existuje otevřený výkaz — nejdřív ho uzavřete nebo upravte.",
+            detail="Pro tuto operaci již existuje výkaz práce.",
         )
     started_at = _normalize_runtime_dt(payload.started_at)
     ended_at = _normalize_runtime_dt(payload.ended_at)
@@ -460,7 +719,9 @@ def create_work_report(
 
     links = resolve_report_links(db, op)
     now = datetime.now()
+    wr_code = allocate_next_work_report_code(db)
     rep = WorkReport(
+        code=wr_code,
         employee_id=payload.employee_id,
         operator_display=(payload.operator_display or None),
         customer_order_id=links["customer_order_id"],
@@ -617,6 +878,7 @@ def delete_work_report(
     rep = db.get(WorkReport, int(report_id))
     if not rep:
         raise HTTPException(status_code=404, detail="Výkaz nenalezen.")
+    _assert_delete_is_business_safe(db, rep)
     op_id = int(rep.planning_operation_id) if rep.planning_operation_id is not None else None
     snap = _row_to_report(db, rep)
     rid = int(rep.id)
@@ -669,7 +931,7 @@ def delete_work_report(
             db.flush()
             PlanningEngineService(db).rebuild_global_schedules(date.today())
     db.commit()
-    return {"status": "ok", "deleted_id": rid}
+    return {"status": "deleted", "deleted_id": rid, "message": "Výkaz byl trvale smazán."}
 
 
 @router.post("/{report_id}/pauses")

@@ -3,9 +3,12 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.kiosk import Employee
 from app.models.orders import CustomerOrder, Job, JobItem, JobItemCoverage, ProductionOrder
 from app.models.portfolio import PortfolioItem
+from app.models.planning import PlanningOperation
 from app.models.product_stock import ProductStockItem
+from app.models.work_report import WorkReport
 from app.services.job_item_operational_metrics import job_item_operational_metrics_map
 from app.services.order_operational_metrics import order_operational_metrics_map
 from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
@@ -199,6 +202,55 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "workflow_status": getattr(vp, "workflow_status", None),
       }
     )
+
+  work_reports_by_item: dict[int, list[dict]] = {}
+  if items:
+    item_ids = [int(it.id) for it in items]
+    wr_rows = db.execute(
+      select(WorkReport, PlanningOperation, ProductionOrder, Employee)
+      .join(PlanningOperation, PlanningOperation.id == WorkReport.planning_operation_id)
+      .join(
+        ProductionOrder,
+        func.lower(func.trim(ProductionOrder.vp_code))
+        == func.lower(func.trim(PlanningOperation.work_order_no)),
+      )
+      .outerjoin(Employee, Employee.id == WorkReport.employee_id)
+      .where(ProductionOrder.job_item_id.in_(item_ids))
+      .order_by(WorkReport.started_at.desc(), WorkReport.id.desc())
+    ).all()
+    for wr, op, po, emp in wr_rows:
+      ji = int(po.job_item_id)
+      op_status = str(getattr(op, "status", "") or "").strip()
+      if op_status:
+        display_status = op_status
+      elif wr.ended_at is None:
+        display_status = "bezi"
+      else:
+        display_status = "hotovo"
+      employee_name = (getattr(emp, "name", None) or "").strip() if emp is not None else ""
+      fallback_name = (wr.operator_display or "").strip()
+      work_reports_by_item.setdefault(ji, []).append(
+        {
+          "id": int(wr.id),
+          "code": wr.code,
+          "started_at": wr.started_at.isoformat() if wr.started_at else None,
+          "ended_at": wr.ended_at.isoformat() if wr.ended_at else None,
+          "duration_min": float(wr.duration_min) if wr.duration_min is not None else None,
+          "employee": {
+            "id": int(wr.employee_id) if wr.employee_id is not None else None,
+            "name": employee_name or (fallback_name or None),
+            "operator_display": wr.operator_display,
+          },
+          "production_order_code": po.vp_code,
+          "operation_no": int(wr.operation_no) if wr.operation_no is not None else int(op.operation_no),
+          "operation_label": wr.operation_name or op.operation_name,
+          "ok_qty": int(wr.qty_ok or 0),
+          "nok_qty": int(wr.qty_nok or 0),
+          "source": wr.source,
+          "status": op_status or None,
+          "status_display": display_status,
+        }
+      )
 
   coverage_rows = db.scalars(
     select(JobItemCoverage)
@@ -442,6 +494,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
           else None
         ),
         "effective_portfolio_item_id": _effective_portfolio_variant_id(it),
+        "work_reports": work_reports_by_item.get(int(it.id), []),
         **_item_allocation_and_coverage(it),
       }
       for it in items
