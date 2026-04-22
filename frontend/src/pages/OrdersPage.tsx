@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import PageContainer from "../components/layout/PageContainer";
 import PageHeader from "../components/layout/PageHeader";
 import PageSection from "../components/layout/PageSection";
-import { UI } from "../styles/ui";
+import { erpKpiTileBackground, UI } from "../styles/ui";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
 import {
   createCustomerOrder,
@@ -14,6 +14,8 @@ import {
 import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilterRow";
 import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
 import TableLayoutModal from "../components/overview/TableLayoutModal";
+import ErpPagination from "../components/overview/ErpPagination";
+import { useClientPagination } from "../hooks/useClientPagination";
 import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
 import type { TableColumnDef } from "../overview/tableLayoutMerge";
 import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
@@ -26,19 +28,6 @@ import {
   formatOverviewPercentInteger,
 } from "../overview/overviewMetricsFormat";
 import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
-
-const orderCodeLink: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  padding: 0,
-  margin: 0,
-  cursor: "pointer",
-  font: "inherit",
-  fontWeight: 1000,
-  color: "#0f172a",
-  textDecoration: "underline",
-  textUnderlineOffset: "3px",
-};
 
 type Props = {
   /** Klik na řádek / kód zakázky otevře kartu v pracovní záložce. */
@@ -64,21 +53,36 @@ const ORDERS_COL_LABELS: Record<string, string> = Object.fromEntries(ORDERS_TABL
 
 type OrdersCellCtx = { onOpenOrderInWorkspaceTab: (customerOrderId: number, titleHint?: string) => void };
 
-function renderOrdersCell(
-  key: string,
-  row: OrdersOverviewRow,
-  ctx: OrdersCellCtx,
-  linkStyle: React.CSSProperties,
-): React.ReactNode {
+function ordersColumnTextAlign(key: string): "left" | "right" {
+  switch (key) {
+    case "prodejni_cena":
+    case "naklad":
+    case "reported_time":
+    case "vykresy":
+    case "completion":
+    case "labor":
+    case "performance":
+      return "right";
+    default:
+      return "left";
+  }
+}
+
+function ordersColumnTabularNumeric(key: string): boolean {
+  return ordersColumnTextAlign(key) === "right";
+}
+
+function renderOrdersCell(key: string, row: OrdersOverviewRow, ctx: OrdersCellCtx): React.ReactNode {
   const openable = row.customer_order_id != null;
   switch (key) {
     case "zakazka":
       return (
-        <>
+        <span onClick={(e) => e.stopPropagation()}>
           {openable && row.customer_order_id != null ? (
             <button
               type="button"
-              style={linkStyle}
+              className="erp-table-link"
+              style={{ ...UI.tableLinkButtonReset, fontWeight: 900, textDecoration: "none" }}
               onClick={(e) => {
                 e.stopPropagation();
                 ctx.onOpenOrderInWorkspaceTab(row.customer_order_id!, row.zakazka ?? undefined);
@@ -92,7 +96,7 @@ function renderOrdersCell(
           {String(row.workflow_status ?? "").trim().toLowerCase() === "cancelled" ? (
             <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 800, color: "#991b1b" }}>Storno</span>
           ) : null}
-        </>
+        </span>
       );
     case "zakaznik":
       return row.zakaznik ?? "—";
@@ -165,7 +169,6 @@ const ZAKAZKY_MODULE_SUBTABS = [
 
 export default function OrdersPage(_props: Props) {
   const [query, setQuery] = useState("");
-  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [activeSubtab, setActiveSubtab] = useState("prehled");
   const [hoverSubtab, setHoverSubtab] = useState<string | null>(null);
   const [activeFilters, setActiveFilters] = useState<OrderFilter[]>([]);
@@ -238,12 +241,48 @@ export default function OrdersPage(_props: Props) {
       return !Number.isNaN(t.getTime()) && t < startOfToday();
     }).length;
     return [
-      { label: "Celkem objednávky", value: count ? formatOverviewCurrency(sumSales) : "—" },
-      { label: "Počet zakázek", value: count ? String(count) : "—" },
-      { label: "Nedodělané zakázky", value: count ? String(nedodelane) : "—" },
-      { label: "Celkem hodin", value: count ? formatOverviewDecimalHours(celkemZbyvaHodin) : "—" },
-      { label: "Po termínu", value: count ? String(poTerminu) : "—" },
-      { label: "K expedici", value: "—" },
+      {
+        label: "Celkem objednávky",
+        value: count ? formatOverviewCurrency(sumSales) : "—",
+        accent: UI.colors.primary,
+        kind: "primary" as const,
+        hint: "Součet prodejních cen zakázek v aktuálním filtru.",
+      },
+      {
+        label: "Počet zakázek",
+        value: count ? String(count) : "—",
+        accent: UI.colors.neutralFg,
+        kind: "neutral" as const,
+        hint: "Počet zakázek po aplikaci typu / stavu.",
+      },
+      {
+        label: "Nedodělané zakázky",
+        value: count ? String(nedodelane) : "—",
+        accent: UI.colors.waitFg,
+        kind: "warning" as const,
+        hint: "Zakázky se zbývajícími hodinami > 0.",
+      },
+      {
+        label: "Celkem hodin",
+        value: count ? formatOverviewDecimalHours(celkemZbyvaHodin) : "—",
+        accent: UI.colors.primary,
+        kind: "info" as const,
+        hint: "Zbývající plánované hodiny napříč zakázkami.",
+      },
+      {
+        label: "Po termínu",
+        value: count ? String(poTerminu) : "—",
+        accent: UI.colors.problemFg,
+        kind: "danger" as const,
+        hint: "Zakázky s termínem < dnes a zbývajícími hodinami.",
+      },
+      {
+        label: "K expedici",
+        value: "—",
+        accent: UI.colors.okFg,
+        kind: "success" as const,
+        hint: "Zatím nenapojeno na backend.",
+      },
     ] as const;
   }, [rows]);
 
@@ -315,6 +354,19 @@ export default function OrdersPage(_props: Props) {
     [filtered, tb.sort],
   );
 
+  // Klientská pagination nad setříděným/filtrovaným polem.
+  // Backend `/orders-overview/list` podporuje server-side limit/offset/total,
+  // zde držíme plný dataset kvůli universal search + sortingu napříč všemi řádky.
+  const ordersPaginationResetKey = `${overviewOrderType}|${overviewWorkflowFilter}|${query}|${activeFilters.join(",")}|${tb.sort?.key ?? ""}|${tb.sort?.direction ?? ""}`;
+  const {
+    pagedRows: pagedOrdersRows,
+    pageSize: ordersPageSize,
+    setPageSize: setOrdersPageSize,
+    offset: ordersOffset,
+    setOffset: setOrdersOffset,
+    total: ordersPagedTotal,
+  } = useClientPagination(sortedFiltered, { resetKey: ordersPaginationResetKey });
+
   const activeSubtabLabel = ZAKAZKY_MODULE_SUBTABS.find((t) => t.id === activeSubtab)?.label ?? "Přehled";
 
   function openCreateForm() {
@@ -367,7 +419,7 @@ export default function OrdersPage(_props: Props) {
   }
 
   return (
-    <PageContainer style={{ paddingTop: 10 }}>
+    <PageContainer className="erp-overview-page" style={{ paddingTop: 10 }}>
       <PageHeader
         title="Zakázky"
         subtitle="Přehled zakázek"
@@ -393,9 +445,19 @@ export default function OrdersPage(_props: Props) {
       <div style={UI.summaryTilesGridOuter}>
         <div style={UI.summaryTilesGridSix}>
           {summaryTiles.map((tile) => (
-            <div key={tile.label} style={UI.summaryTile}>
-              <div style={UI.summaryTileLabel}>{tile.label}</div>
-              <div style={UI.summaryTileValue}>{tile.value}</div>
+            <div
+              key={tile.label}
+              className="erp-kpi-tile"
+              style={{
+                ...UI.overviewKpiTile,
+                borderLeftColor: tile.accent,
+                background: erpKpiTileBackground(tile.kind),
+                boxShadow: `${UI.overviewKpiTile.boxShadow as string}, inset 0 1px 0 rgba(255, 255, 255, 0.9)`,
+              }}
+            >
+              <div style={UI.overviewKpiLabel}>{tile.label}</div>
+              <div style={{ ...UI.overviewKpiValue, fontSize: 31, lineHeight: 1.05 }}>{tile.value}</div>
+              <div style={UI.overviewKpiHint}>{tile.hint}</div>
             </div>
           ))}
         </div>
@@ -528,12 +590,13 @@ export default function OrdersPage(_props: Props) {
               />
               {!loading && rows.length > 0 ? (
                 <div style={UI.overviewSecondaryFilterRow}>
-                  <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 280px", minWidth: 200 }}>
+                  <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 360px", minWidth: 240 }}>
                     <input
+                      className="erp-overview-search"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       placeholder="Hledat zakázku, objednávku, zákazníka, GPN, název, výkres, revizi, VP…"
-                      style={UI.inputs.base}
+                      style={UI.inputs.overviewSearch}
                     />
                   </div>
                 </div>
@@ -552,7 +615,7 @@ export default function OrdersPage(_props: Props) {
               ) : null}
 
               {!loading && rows.length > 0 ? (
-                <div style={UI.overviewTableWrap}>
+                <div className="erp-table-wrap" style={UI.overviewTableWrap}>
                   <table style={UI.table}>
                     <thead>
                       <tr style={UI.overviewTableHeadRow}>
@@ -561,10 +624,10 @@ export default function OrdersPage(_props: Props) {
                             key={col.key}
                             style={{
                               ...UI.th,
-                              fontSize: 13,
                               padding: `${tb.cellPaddingPx}px`,
                               whiteSpace: "nowrap",
                               width: col.width ?? undefined,
+                              textAlign: ordersColumnTextAlign(col.key),
                             }}
                           >
                             {col.label}
@@ -573,9 +636,8 @@ export default function OrdersPage(_props: Props) {
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedFiltered.map((row) => {
+                      {pagedOrdersRows.map((row) => {
                         const rowKey = `${row.job_id}-${row.zakazka}`;
-                        const isHovered = hoveredKey === rowKey;
                         const openable = row.customer_order_id != null;
                         const ctx: OrdersCellCtx = { onOpenOrderInWorkspaceTab: _props.onOpenOrderInWorkspaceTab };
                         return (
@@ -586,12 +648,9 @@ export default function OrdersPage(_props: Props) {
                                 _props.onOpenOrderInWorkspaceTab(row.customer_order_id, row.zakazka ?? undefined);
                               }
                             }}
-                            onMouseEnter={() => setHoveredKey(rowKey)}
-                            onMouseLeave={() => setHoveredKey(null)}
                             style={{
                               cursor: openable ? "pointer" : "default",
-                              background: isHovered && openable ? "#eff6ff" : "#fff",
-                              opacity: openable ? 1 : 0.85,
+                              background: UI.colors.card,
                             }}
                           >
                             {tb.visibleColumns.map((col) => (
@@ -600,13 +659,16 @@ export default function OrdersPage(_props: Props) {
                                 style={{
                                   ...UI.td,
                                   padding: `${tb.cellPaddingPx}px`,
-                                  whiteSpace: "nowrap",
-                                  fontWeight: col.key === "prodejni_cena" || col.key === "naklad" ? 900 : undefined,
-                                  color:
-                                    col.key === "prodejni_cena" || col.key === "naklad" ? "#0f172a" : undefined,
+                                  whiteSpace: col.key === "zakaznik" ? "normal" : "nowrap",
+                                  textAlign: ordersColumnTextAlign(col.key),
+                                  fontVariantNumeric: ordersColumnTabularNumeric(col.key)
+                                    ? ("tabular-nums" as const)
+                                    : undefined,
+                                  fontWeight: col.key === "zakazka" ? 900 : undefined,
+                                  color: UI.colors.textPrimary,
                                 }}
                               >
-                                {renderOrdersCell(col.key, row, ctx, orderCodeLink)}
+                                {renderOrdersCell(col.key, row, ctx)}
                               </td>
                             ))}
                           </tr>
@@ -616,7 +678,12 @@ export default function OrdersPage(_props: Props) {
                         <tr>
                           <td
                             colSpan={Math.max(1, tb.visibleColumns.length)}
-                            style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}
+                            style={{
+                              ...UI.td,
+                              textAlign: "center",
+                              color: UI.colors.textSecondary,
+                              padding: "24px 12px",
+                            }}
                           >
                             Žádné výsledky.
                           </td>
@@ -625,6 +692,17 @@ export default function OrdersPage(_props: Props) {
                     </tbody>
                   </table>
                 </div>
+              ) : null}
+              {!loading && rows.length > 0 ? (
+                <ErpPagination
+                  pageSize={ordersPageSize}
+                  onPageSizeChange={setOrdersPageSize}
+                  offset={ordersOffset}
+                  onOffsetChange={setOrdersOffset}
+                  total={ordersPagedTotal}
+                  currentCount={pagedOrdersRows.length}
+                  disabled={loading}
+                />
               ) : null}
             </div>
           </div>

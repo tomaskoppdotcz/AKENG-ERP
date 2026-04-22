@@ -5,7 +5,7 @@ import PageSection from "../components/layout/PageSection";
 import OverviewPrimaryFilterRow from "../components/overview/OverviewPrimaryFilterRow";
 import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
 import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
-import { UI } from "../styles/ui";
+import { erpKpiTileBackground, UI } from "../styles/ui";
 import type { ErpWorkflowListFilter, OrdersOverviewOrderTypeFilter } from "../services/ordersApi";
 import {
   getProductionOrdersOverview,
@@ -20,6 +20,8 @@ import {
   isProductionOrderOverviewCompleted,
 } from "../utils/productionOrderOverviewStatus";
 import TableLayoutModal from "../components/overview/TableLayoutModal";
+import ErpPagination from "../components/overview/ErpPagination";
+import { useClientPagination } from "../hooks/useClientPagination";
 import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
 import type { TableColumnDef } from "../overview/tableLayoutMerge";
 import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
@@ -31,55 +33,6 @@ import {
   formatOverviewReportedMinutes,
 } from "../overview/overviewMetricsFormat";
 
-/** Scoped micro-interactions (hover lift, tabulka) — jen tato stránka. */
-const PRODUCTION_ORDERS_PAGE_STYLES = `
-.production-orders-overview .po-kpi-tile:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.92);
-}
-.production-orders-overview button.po-lift:not(:disabled):hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
-}
-.production-orders-overview .po-table-wrap table tbody tr {
-  transition: background-color 0.16s ease, box-shadow 0.16s ease;
-  cursor: pointer;
-}
-.production-orders-overview .po-table-wrap table tbody tr:hover {
-  background-color: #F1F5F9 !important;
-  box-shadow: inset 4px 0 0 #1D4ED8, 0 1px 0 rgba(15, 23, 42, 0.04);
-}
-.production-orders-overview .po-overview-search::placeholder {
-  color: #475569;
-  opacity: 1;
-}
-.production-orders-overview .po-overview-search::-webkit-input-placeholder {
-  color: #475569;
-}
-.production-orders-overview .po-overview-search::-moz-placeholder {
-  color: #475569;
-  opacity: 1;
-}
-.production-orders-overview .po-status-badge {
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
-  cursor: default;
-}
-.production-orders-overview .po-status-badge:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
-}
-.production-orders-overview button.po-table-link {
-  color: #1D4ED8;
-  text-decoration: none;
-  text-underline-offset: 3px;
-  transition: color 0.15s ease, text-decoration 0.15s ease;
-}
-.production-orders-overview button.po-table-link:hover {
-  color: #1E3A8A;
-  text-decoration: underline;
-}
-`.trim();
-
 type Props = {
   onOpenDetail: (productionOrderId: number) => void;
   /** Otevře detail VP v pracovní záložce. */
@@ -87,7 +40,6 @@ type Props = {
   onOpenPortfolioItemId?: (portfolioItemId: number) => void;
   onOpenCustomerOrderCard?: (customerOrderId: number) => void;
   onPreviewPortfolioById?: (portfolioItemId: number) => void;
-  onPreviewProductionOrderById?: (productionOrderId: number) => void;
 };
 
 const linkButtonReset: React.CSSProperties = {
@@ -103,34 +55,15 @@ const linkButtonReset: React.CSSProperties = {
   fontWeight: 800,
 };
 
-/** Stejné jako linkButtonReset, ale barva z CSS (.po-table-link) kvůli hoveru. */
-const tableLinkButtonReset: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  padding: 0,
-  margin: 0,
-  cursor: "pointer",
-  font: "inherit",
-  textUnderlineOffset: "3px",
-  fontWeight: 800,
-};
-
 function productionOrderStatusBadgeStyle(label: string): React.CSSProperties {
   const base = UI.statusBadgeBase;
-  const innerRing: React.CSSProperties = {
-    fontWeight: 800,
-    letterSpacing: "0.03em",
-    boxShadow:
-      "0 1px 4px rgba(15, 23, 42, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.75), inset 0 0 0 1px rgba(15, 23, 42, 0.1)",
-  };
-  if (label === "Stornováno" || label === "Blokováno")
-    return { ...base, ...UI.statusBadgeProblem, ...innerRing, color: "#7F1D1D" };
-  if (label === "Běží") return { ...base, ...UI.statusBadgeRunning, ...innerRing, color: "#172554" };
+  if (label === "Stornováno" || label === "Blokováno") return { ...base, ...UI.statusBadgeProblem };
+  if (label === "Běží") return { ...base, ...UI.statusBadgeRunning };
   if (label === "Hotovo" || label === "Na skladě" || label === "K expedici")
-    return { ...base, ...UI.statusBadgeOk, ...innerRing, color: "#14532D" };
+    return { ...base, ...UI.statusBadgeOk };
   if (label === "Čeká na materiál" || label === "Naplánováno")
-    return { ...base, ...UI.statusBadgeWait, ...innerRing, color: "#7C2D12" };
-  return { ...base, ...UI.statusBadgeNeutral, ...innerRing, color: "#0F172A" };
+    return { ...base, ...UI.statusBadgeWait };
+  return { ...base, ...UI.statusBadgeNeutral };
 }
 
 const NUMERIC_COLUMN_KEYS = new Set(["quantity", "reported", "completion", "labor", "performance", "line_no"]);
@@ -222,7 +155,6 @@ type ProdCellCtx = Pick<
   | "onOpenPortfolioItemId"
   | "onOpenCustomerOrderCard"
   | "onPreviewPortfolioById"
-  | "onPreviewProductionOrderById"
 >;
 
 function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx: ProdCellCtx): React.ReactNode {
@@ -232,29 +164,22 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
         <div onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
-            className="po-table-link"
-            style={{ ...tableLinkButtonReset, fontWeight: 900, textDecoration: "none" }}
+            className="erp-table-link"
+            style={{ ...UI.tableLinkButtonReset, fontWeight: 900, textDecoration: "none" }}
             onClick={() => {
-              ctx.onOpenDetailInWorkspaceTab?.(row.id, row.vp_code ?? undefined);
-              ctx.onOpenDetail(row.id);
+              if (ctx.onOpenDetailInWorkspaceTab) {
+                ctx.onOpenDetailInWorkspaceTab(row.id, row.vp_code ?? undefined);
+              } else {
+                ctx.onOpenDetail(row.id);
+              }
             }}
           >
             {row.vp_code}
           </button>
-          {ctx.onPreviewProductionOrderById ? (
-            <button
-              type="button"
-              className="po-lift"
-              style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
-              onClick={() => ctx.onPreviewProductionOrderById!(row.id)}
-            >
-              Náhled
-            </button>
-          ) : null}
           <button
             type="button"
-            className="po-lift"
-            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+            className="erp-row-lift"
+            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "4px 10px", fontSize: 12 }}
             onClick={(e) => {
               e.stopPropagation();
               void openProductionOrderPdfInNewTab(row.id).catch((err) =>
@@ -268,11 +193,13 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
             <span
               style={{
                 marginLeft: 8,
-                fontSize: 11,
+                display: "inline-flex",
+                alignItems: "center",
+                fontSize: 12,
                 fontWeight: 800,
                 color: UI.colors.problemFg,
                 background: UI.colors.problemBg,
-                padding: "2px 8px",
+                padding: "4px 10px",
                 borderRadius: 6,
               }}
             >
@@ -291,8 +218,8 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
           {row.gpn && ctx.onOpenPortfolioItemId ? (
             <button
               type="button"
-              className="po-table-link"
-              style={{ ...tableLinkButtonReset, textDecoration: "none" }}
+              className="erp-table-link"
+              style={{ ...UI.tableLinkButtonReset, textDecoration: "none" }}
               onClick={async () => {
                 if (row.portfolio_item_id != null) {
                   ctx.onOpenPortfolioItemId!(row.portfolio_item_id);
@@ -318,8 +245,8 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
           {row.portfolio_item_id != null && ctx.onPreviewPortfolioById ? (
             <button
               type="button"
-              className="po-lift"
-              style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
+              className="erp-row-lift"
+              style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "4px 10px", fontSize: 12 }}
               onClick={() => ctx.onPreviewPortfolioById!(row.portfolio_item_id!)}
             >
               Náhled
@@ -338,7 +265,7 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
     case "status": {
       const label = formatProductionOrderOverviewOperationalStatus(row);
       return (
-        <span className="po-status-badge" style={productionOrderStatusBadgeStyle(label)}>
+        <span className="erp-status-badge" style={productionOrderStatusBadgeStyle(label)}>
           {label}
         </span>
       );
@@ -359,8 +286,8 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
             {row.customer_order_id != null && ctx.onOpenCustomerOrderCard ? (
               <button
                 type="button"
-                className="po-lift"
-                style={{ ...UI.buttons.secondary, padding: "2px 8px", fontSize: 11 }}
+                className="erp-row-lift"
+                style={{ ...UI.buttons.secondary, padding: "4px 10px", fontSize: 12 }}
                 onClick={() => ctx.onOpenCustomerOrderCard!(row.customer_order_id!)}
               >
                 Náhled
@@ -395,7 +322,6 @@ export default function ProductionOrdersPage({
   onOpenPortfolioItemId,
   onOpenCustomerOrderCard,
   onPreviewPortfolioById,
-  onPreviewProductionOrderById,
 }: Props) {
   const [rows, setRows] = useState<ProductionOrderOverviewRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -514,13 +440,25 @@ export default function ProductionOrdersPage({
     [textFilteredRows, tb.sort],
   );
 
+  // Klientská pagination nad již setříděným/filtrovaným polem.
+  // Backend `/production-orders` podporuje server-side limit/offset/total, zde zatím
+  // držíme plný dataset kvůli universal search + sortingu přes všechny řádky.
+  const paginationResetKey = `${workflowListFilter}|${overviewOrderType}|${activeQuickFilters.join(",")}|${searchQuery}|${tb.sort?.key ?? ""}|${tb.sort?.direction ?? ""}`;
+  const {
+    pagedRows: pagedDisplayRows,
+    pageSize,
+    setPageSize,
+    offset,
+    setOffset,
+    total: pagedTotal,
+  } = useClientPagination(sortedDisplayRows, { resetKey: paginationResetKey });
+
   const prodCtx: ProdCellCtx = {
     onOpenDetail,
     onOpenDetailInWorkspaceTab,
     onOpenPortfolioItemId,
     onOpenCustomerOrderCard,
     onPreviewPortfolioById,
-    onPreviewProductionOrderById,
   };
 
   const summaryTiles = useMemo(() => {
@@ -552,8 +490,7 @@ export default function ProductionOrdersPage({
   }, [rows.length, displayRows]);
 
   return (
-    <PageContainer className="production-orders-overview" style={{ paddingTop: 10, background: UI.colors.pageBg, minHeight: "100%" }}>
-      <style>{PRODUCTION_ORDERS_PAGE_STYLES}</style>
+    <PageContainer className="erp-overview-page" style={{ paddingTop: 10, background: UI.colors.pageBg, minHeight: "100%" }}>
       <PageHeader
         title="Výrobní příkazy"
         subtitle="Přehled všech VP napříč zákaznickými i interními zakázkami — stav, termíny a metriky v jedné tabulce."
@@ -562,21 +499,16 @@ export default function ProductionOrdersPage({
       <div style={{ ...UI.summaryTilesGridOuter, marginTop: 4 }}>
         <div style={UI.summaryTilesGridThree}>
           {summaryTiles.map((t) => {
-            const grayDepth = "linear-gradient(180deg, #ffffff 0%, #f3f4f6 52%, #e8ecf1 100%)";
-            const kpiBg =
-              t.kpiKind === "total"
-                ? `linear-gradient(135deg, rgba(37, 99, 235, 0.07) 0%, transparent 42%), ${grayDepth}`
-                : t.kpiKind === "filtered"
-                  ? `linear-gradient(135deg, rgba(148, 163, 184, 0.14) 0%, transparent 45%), ${grayDepth}`
-                  : `linear-gradient(135deg, rgba(220, 38, 38, 0.06) 0%, transparent 42%), ${grayDepth}`;
+            const kpiKind =
+              t.kpiKind === "total" ? "primary" : t.kpiKind === "filtered" ? "neutral" : "danger";
             return (
             <div
               key={t.label}
-              className="po-kpi-tile"
+              className="erp-kpi-tile"
               style={{
                 ...UI.overviewKpiTile,
                 borderLeftColor: t.accent,
-                background: kpiBg,
+                background: erpKpiTileBackground(kpiKind),
                 boxShadow: `${UI.overviewKpiTile.boxShadow as string}, inset 0 1px 0 rgba(255, 255, 255, 0.9)`,
               }}
             >
@@ -614,8 +546,11 @@ export default function ProductionOrdersPage({
                     <button
                       type="button"
                       onClick={() => {
-                        onOpenDetailInWorkspaceTab?.(n.source_production_order_id, n.source_vp_code ?? undefined);
-                        onOpenDetail(n.source_production_order_id);
+                        if (onOpenDetailInWorkspaceTab) {
+                          onOpenDetailInWorkspaceTab(n.source_production_order_id, n.source_vp_code ?? undefined);
+                        } else {
+                          onOpenDetail(n.source_production_order_id);
+                        }
                       }}
                       style={linkButtonReset}
                     >
@@ -626,11 +561,14 @@ export default function ProductionOrdersPage({
                       <button
                         type="button"
                         onClick={() => {
-                          onOpenDetailInWorkspaceTab?.(
-                            n.customer_production_order_id!,
-                            n.customer_vp_code ?? undefined
-                          );
-                          onOpenDetail(n.customer_production_order_id!);
+                          if (onOpenDetailInWorkspaceTab) {
+                            onOpenDetailInWorkspaceTab(
+                              n.customer_production_order_id!,
+                              n.customer_vp_code ?? undefined
+                            );
+                          } else {
+                            onOpenDetail(n.customer_production_order_id!);
+                          }
                         }}
                         style={linkButtonReset}
                       >
@@ -723,7 +661,7 @@ export default function ProductionOrdersPage({
               <div style={UI.overviewSecondaryFilterRow}>
                 <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 360px", minWidth: 240 }}>
                   <input
-                    className="po-overview-search"
+                    className="erp-overview-search"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onFocus={() => setSearchFocused(true)}
@@ -748,7 +686,7 @@ export default function ProductionOrdersPage({
             {!loading && !error && rows.length > 0 ? (
               <>
                 {tb.loadError ? <div style={UI.overviewStateWarn}>{tb.loadError}</div> : null}
-                <div className="po-table-wrap" style={UI.overviewTableWrap}>
+                <div className="erp-table-wrap" style={UI.overviewTableWrap}>
                   <table style={UI.table}>
                     <thead>
                       <tr style={UI.overviewTableHeadRow}>
@@ -769,12 +707,15 @@ export default function ProductionOrdersPage({
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedDisplayRows.map((row) => (
+                      {pagedDisplayRows.map((row) => (
                         <tr
                           key={row.id}
                           onClick={() => {
-                            onOpenDetailInWorkspaceTab?.(row.id, row.vp_code ?? undefined);
-                            onOpenDetail(row.id);
+                            if (onOpenDetailInWorkspaceTab) {
+                              onOpenDetailInWorkspaceTab(row.id, row.vp_code ?? undefined);
+                            } else {
+                              onOpenDetail(row.id);
+                            }
                           }}
                           style={{ background: UI.colors.card }}
                         >
@@ -830,6 +771,15 @@ export default function ProductionOrdersPage({
                     </tbody>
                   </table>
                 </div>
+                <ErpPagination
+                  pageSize={pageSize}
+                  onPageSizeChange={setPageSize}
+                  offset={offset}
+                  onOffsetChange={setOffset}
+                  total={pagedTotal}
+                  currentCount={pagedDisplayRows.length}
+                  disabled={loading}
+                />
               </>
             ) : null}
           </div>

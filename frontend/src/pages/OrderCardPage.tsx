@@ -1,7 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
 import SimpleModal from "../components/SimpleModal";
-import { UI } from "../styles/ui";
+import {
+  erpDetailIdentLabel,
+  erpDetailIdentValue,
+  erpDetailRowLabel,
+  erpDetailRowValue,
+  erpDetailSectionEyebrow,
+  erpDetailStateCard,
+  UI,
+} from "../styles/ui";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
 import {
   getPortfolioItems,
@@ -25,8 +33,35 @@ import {
   type RestockConflictStrategy,
 } from "../services/ordersApi";
 import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
+import type { TableColumnDef } from "../overview/tableLayoutMerge";
+import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
+import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
+import TableLayoutModal from "../components/overview/TableLayoutModal";
 import { buildErpUrl } from "../utils/erpDeepLink";
-import { canPerformAction, readStoredErpRole } from "../auth/rbac";
+import { canPerformAction, hasPermission, readStoredErpRole } from "../auth/rbac";
+import InlineBanner from "../components/InlineBanner";
+import { interpretError, runWriteAction, type WriteFeedback } from "../utils/writeActionFeedback";
+
+const ORDER_CARD_ITEMS_DEFAULTS: readonly TableColumnDef[] = [
+  { key: "line_no", label: "Řádek", defaultWidth: 70 },
+  { key: "gpn", label: "GPN", defaultWidth: 120 },
+  { key: "name", label: "Název", defaultWidth: 180 },
+  { key: "drawing_number", label: "Výkres", defaultWidth: 130, defaultVisible: false },
+  { key: "drawing_revision", label: "Revize", defaultWidth: 90, defaultVisible: false },
+  { key: "qty", label: "Množství", defaultWidth: 100 },
+  { key: "sale_price", label: "Prodejní cena / ks", defaultWidth: 150 },
+  { key: "due", label: "Termín", defaultWidth: 110 },
+  { key: "vp", label: "Výrobní příkazy", defaultWidth: 180 },
+  { key: "reported", label: "Vykázaný čas", defaultWidth: 120 },
+  { key: "completion", label: "Hotovo", defaultWidth: 90 },
+  { key: "labor", label: "Náklad práce", defaultWidth: 120 },
+  { key: "performance", label: "Výkonnost", defaultWidth: 100 },
+  { key: "actions", label: "Akce", defaultWidth: 160 },
+] as const;
+
+const ORDER_CARD_ITEMS_COL_LABELS: Record<string, string> = Object.fromEntries(
+  ORDER_CARD_ITEMS_DEFAULTS.map((c) => [c.key, c.label])
+);
 
 type Props = {
   customerOrderId: number;
@@ -36,6 +71,10 @@ type Props = {
   onOrderDeleted?: () => void;
   /** Titulek záložky po načtení detailu (číslo zakázky z API). */
   onWorkspaceTabTitle?: (title: string) => void;
+  /** Otevření detailu výrobního příkazu (pracovní záložka). */
+  onOpenProductionOrderDetail?: (productionOrderId: number, vpCode?: string) => void;
+  /** Otevření detailu portfolio položky (pracovní záložka). */
+  onOpenPortfolioById?: (portfolioItemId: number) => void;
 };
 
 type OrderSubtab =
@@ -152,16 +191,24 @@ export default function OrderCardPage({
   onOpenItemDetail,
   onOrderDeleted,
   onWorkspaceTabTitle,
+  onOpenProductionOrderDetail,
+  onOpenPortfolioById,
 }: Props) {
   const [data, setData] = useState<OrderDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<WriteFeedback | null>(null);
+  /** Po write akcích zespodu stránky posune výřez tak, aby byl inline banner vidět (main má `overflow: auto`). */
+  const writeFeedbackAnchorRef = useRef<HTMLDivElement>(null);
 
   const [hoveredItemId, setHoveredItemId] = useState<number | null>(null);
   const [activeOrderSubtab, setActiveOrderSubtab] = useState<OrderSubtab>("Přehled");
   const [hoverOrderSubtab, setHoverOrderSubtab] = useState<OrderSubtab | null>(null);
   const [query, setQuery] = useState("");
   const [activeFilters, setActiveFilters] = useState<Array<"Po termínu" | "Dokončená" | "Dodací list" | "Fakturováno">>([]);
+  const tb = usePersistedTableLayout("order_card_items", ORDER_CARD_ITEMS_DEFAULTS);
+  const showDrawingNumber = tb.columns.find((c) => c.key === "drawing_number")?.visible === true;
+  const showDrawingRevision = tb.columns.find((c) => c.key === "drawing_revision")?.visible === true;
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [savingItem, setSavingItem] = useState(false);
   const [itemError, setItemError] = useState<string | null>(null);
@@ -203,26 +250,40 @@ export default function OrderCardPage({
   const editInitialGpnRef = useRef("");
 
   const erpRole = useMemo(() => readStoredErpRole(), []);
-  const canOrdersWrite = canPerformAction(erpRole, "orders.write");
-  const canOrdersStorno = canPerformAction(erpRole, "orders.storno");
+  const canOrdersWrite = canPerformAction(erpRole, "orders.write") && hasPermission("edit_orders");
+  const canOrdersStorno = canPerformAction(erpRole, "orders.storno") && hasPermission("edit_orders");
+  const canCreateProductionOrders = hasPermission("create_production_orders");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const res = await getOrderDetail(customerOrderId);
       setData(res);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Nepodařilo se načíst zakázku.");
-      setData(null);
+      const msg = e instanceof Error ? e.message : "Nepodařilo se načíst zakázku.";
+      if (silent) {
+        setActionFeedback(interpretError(e, msg));
+      } else {
+        setError(msg);
+        setData(null);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [customerOrderId]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!actionFeedback) return;
+    writeFeedbackAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [actionFeedback]);
 
   useEffect(() => {
     if (!onWorkspaceTabTitle || !data?.job) return;
@@ -371,12 +432,26 @@ export default function OrderCardPage({
 
   async function handleStornoOrder() {
     if (!window.confirm("Stornovat celou zakázku? Záznamy zůstanou v historii, aktivní rezervace materiálu se uvolní.")) return;
-    try {
-      await stornoCustomerOrder(customerOrderId);
-      onOrderDeleted?.();
-      onBack();
-    } catch (e: unknown) {
-      window.alert(e instanceof Error ? e.message : "Storno se nezdařilo.");
+    setActionFeedback(null);
+    const fb = await runWriteAction(
+      () => stornoCustomerOrder(customerOrderId),
+      {
+        successMessage: "Zakázka byla stornována.",
+        errorMessage: "Storno zakázky se nezdařilo.",
+      },
+    );
+    if (fb.kind === "success") {
+      setActionFeedback(fb);
+      // Krátká pauza, aby uživatel viděl zelený banner před návratem na přehled.
+      await new Promise((r) => setTimeout(r, 750));
+      (onOrderDeleted ?? onBack)();
+      return;
+    }
+    // info (např. „již stornováno"), warning, error → ukázat banner inline
+    setActionFeedback(fb);
+    if (fb.kind === "info") {
+      // Idempotentní stav — data refreshneme, ať uživatel vidí aktuální stav.
+      await load({ silent: true });
     }
   }
 
@@ -499,12 +574,18 @@ export default function OrderCardPage({
 
   async function handleStornoItem(jobItemId: number) {
     if (!window.confirm("Zrušit tuto položku zakázky? (storno — historie zůstane)")) return;
-    try {
-      await stornoJobItem(jobItemId);
+    setActionFeedback(null);
+    const fb = await runWriteAction(
+      () => stornoJobItem(jobItemId),
+      {
+        successMessage: "Položka zakázky byla zrušena.",
+        errorMessage: "Zrušení položky zakázky se nezdařilo.",
+      },
+    );
+    setActionFeedback(fb);
+    if (fb.kind === "success" || fb.kind === "info") {
       if (editingItemId === jobItemId) cancelItemEdit();
-      await load();
-    } catch (e: unknown) {
-      window.alert(e instanceof Error ? e.message : "Zrušení položky se nezdařilo.");
+      await load({ silent: true });
     }
   }
 
@@ -592,7 +673,7 @@ export default function OrderCardPage({
 
   if (loading) {
     return (
-      <div style={{ ...UI.container, paddingTop: 10 }}>
+      <div className="erp-overview-page" style={{ ...UI.container, paddingTop: 10 }}>
         <div style={{ ...UI.card, padding: 24, borderRadius: 14 }}>
           <div style={UI.sectionSubtitle}>Načítám kartu zakázky…</div>
         </div>
@@ -602,7 +683,7 @@ export default function OrderCardPage({
 
   if (error || !data) {
     return (
-      <div style={{ ...UI.container, paddingTop: 10 }}>
+      <div className="erp-overview-page" style={{ ...UI.container, paddingTop: 10 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <DetailPageHeader
             title="Karta zakázky"
@@ -641,10 +722,78 @@ export default function OrderCardPage({
 
   const conflictLines = (restockPreviewSnapshot?.lines ?? []).filter((l) => l.needs_user_choice);
 
+  const dangerButton: React.CSSProperties = {
+    ...UI.buttons.secondary,
+    color: UI.colors.problemFg,
+    borderColor: "#FCA5A5",
+    background: "#FEF2F2",
+  };
+
+  const inlineFormCard: React.CSSProperties = {
+    ...UI.card,
+    padding: 14,
+    borderRadius: 12,
+    background: UI.colors.neutralBg,
+    border: `1px solid ${UI.colors.border}`,
+    marginBottom: 14,
+  };
+
+  const tableSectionCard: React.CSSProperties = {
+    ...UI.card,
+    borderRadius: 14,
+    padding: 18,
+  };
+
+  const sectionHeader: React.CSSProperties = {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 14,
+    flexWrap: "wrap",
+  };
+
+  const sectionHeaderTitle: React.CSSProperties = {
+    fontSize: 16,
+    fontWeight: 900,
+    color: UI.colors.textPrimary,
+    letterSpacing: 0.1,
+  };
+
+  const sectionHeaderSub: React.CSSProperties = {
+    fontSize: 12,
+    fontWeight: 700,
+    color: UI.colors.textSecondary,
+  };
+
+  const tableHeadCell: React.CSSProperties = {
+    ...UI.th,
+    whiteSpace: "nowrap",
+    padding: "10px 12px",
+  };
+
+  const tableBodyCell: React.CSSProperties = {
+    ...UI.td,
+    padding: "10px 12px",
+    verticalAlign: "middle" as const,
+  };
+
+  const rowStripeBg = "#FAFBFD";
+
+  const itemsAggregate = {
+    count: items.length,
+    totalQty: kusyCelkem,
+    totalCzk: items.reduce((acc, it) => {
+      const qty = Number(it.qty) || 0;
+      const price = Number(it.sale_price_per_piece ?? 0) || 0;
+      return acc + qty * price;
+    }, 0),
+  };
+
   return (
     <>
-    <div style={{ ...UI.container, paddingTop: 10 }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className="erp-overview-page" style={{ ...UI.container, paddingTop: 10 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
         <DetailPageHeader
           preHeader={
             !orderWorkflowActive ? (
@@ -662,12 +811,54 @@ export default function OrderCardPage({
               </div>
             ) : null
           }
-          title="Karta zakázky"
-          subtitle="Detail zakázky a její položky"
+          title={
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: 28,
+                  fontWeight: 1000,
+                  color: UI.colors.primary,
+                  letterSpacing: 0.3,
+                  lineHeight: 1.05,
+                }}
+              >
+                {zakazkaLabel}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: UI.colors.textPrimary }}>
+                {zakaznikLabel}
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: UI.colors.textSecondary, marginTop: 2 }}>
+                Karta zakázky — detail a položky
+              </div>
+            </div>
+          }
+          headerAside={
+            <span
+              className="erp-status-badge"
+              style={{
+                ...UI.statusBadgeBase,
+                ...(orderWorkflowActive ? UI.statusBadgeOk : UI.statusBadgeProblem),
+              }}
+            >
+              {orderWorkflowActive ? "Aktivní" : "Stornováno"}
+            </span>
+          }
           actions={
             <>
-              <button type="button" onClick={onBack} style={UI.buttons.secondary}>
-                Zpět na přehled
+              <button
+                type="button"
+                style={UI.buttons.primary}
+                onClick={handleCreateVp}
+                disabled={
+                  vpPreviewLoading ||
+                  creatingVp ||
+                  !orderWorkflowActive ||
+                  !canOrdersWrite ||
+                  !canCreateProductionOrders
+                }
+                title={!canCreateProductionOrders ? "Chybí oprávnění create_production_orders" : undefined}
+              >
+                {vpPreviewLoading ? "Kontroluji sklad a výrobu…" : creatingVp ? "Vytvářím VP…" : "Vytvořit VP"}
               </button>
               <button
                 type="button"
@@ -676,116 +867,175 @@ export default function OrderCardPage({
               >
                 Otevřít v novém okně
               </button>
-              <button
-                type="button"
-                style={UI.buttons.secondary}
-                onClick={() => openHeaderEdit(data)}
-                disabled={!orderWorkflowActive || !canOrdersWrite}
-              >
-                Upravit zakázku
-              </button>
-              <button
-                type="button"
-                style={UI.buttons.secondary}
-                onClick={handleStornoOrder}
-                disabled={!orderWorkflowActive || !canOrdersStorno}
-              >
-                Stornovat zakázku
-              </button>
-              <button
-                type="button"
-                style={UI.buttons.secondary}
-                onClick={handleCreateVp}
-                disabled={vpPreviewLoading || creatingVp || !orderWorkflowActive || !canOrdersWrite}
-              >
-                {vpPreviewLoading ? "Kontroluji sklad a výrobu…" : creatingVp ? "Vytvářím VP…" : "Vytvořit VP"}
-              </button>
-              <button
-                type="button"
-                style={UI.buttons.primary}
-                disabled={!orderWorkflowActive || !canOrdersWrite}
-                onClick={() => {
-                  setShowAddItemForm((v) => {
-                    if (v) return false;
-                    setFormGpn("");
-                    setFormName("");
-                    setFormQty("1");
-                    setFormDueDate("");
-                    setUserPickedPortfolioId(null);
-                    setItemError(null);
-                    setGpnLookupDone(false);
-                    return true;
-                  });
-                }}
-              >
-                Přidat položku
-              </button>
-              <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
-                Import položek
+              <button type="button" onClick={onBack} style={UI.buttons.secondary}>
+                Zpět na přehled
               </button>
             </>
           }
-          summaryTiles={
-            <div style={UI.summaryTilesGrid}>
-              <div style={{ ...UI.summaryTile, minWidth: 220, flex: "1 1 220px" }}>
-                <div style={UI.summaryTileLabel}>Zakázka</div>
-                <div style={UI.summaryTileValue}>{zakazkaLabel}</div>
-              </div>
-
-              <div style={{ ...UI.summaryTile, minWidth: 220, flex: "1 1 220px" }}>
-                <div style={UI.summaryTileLabel}>Zákazník</div>
-                <div style={UI.summaryTileValue}>{zakaznikLabel}</div>
-              </div>
-
-              <div style={{ ...UI.summaryTile, minWidth: 220, flex: "1 1 220px" }}>
-                <div style={UI.summaryTileLabel}>Objednávka</div>
-                <div style={UI.summaryTileValue}>{objednavkaLabel}</div>
-              </div>
-
-              <div style={{ ...UI.summaryTile, minWidth: 190, flex: "1 1 190px" }}>
-                <div style={UI.summaryTileLabel}>Datum</div>
-                <div style={UI.summaryTileValue}>{datumLabel}</div>
-              </div>
-
-              <div style={{ ...UI.summaryTile, minWidth: 200, flex: "1 1 200px" }}>
-                <div style={UI.summaryTileLabel}>Prodejní cena</div>
-                <div style={UI.summaryTileValue}>{formatCzk(totalSalesPrice)}</div>
-              </div>
-
+          context={
+            <div style={erpDetailStateCard}>
+              <div style={erpDetailSectionEyebrow}>Kontext</div>
               <div
                 style={{
-                  ...UI.summaryTile,
-                  minWidth: 240,
-                  flex: "1 1 240px",
-                  borderColor: "#e5e7eb",
-                  background: "#f8fafc",
-                  justifyContent: "space-between",
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  gap: 14,
                 }}
               >
-                <div style={UI.summaryTileLabel}>Položky</div>
-                <div style={{ display: "grid", gap: 10 }}>
-                  <div>
-                    <div style={UI.summaryTileSubValue}>Položek celkem</div>
-                    <div style={UI.summaryTileValue}>{polozekCelkem}</div>
+                <div>
+                  <div style={erpDetailRowLabel}>Zakázka</div>
+                  <div style={erpDetailRowValue}>{zakazkaLabel}</div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Zákazník</div>
+                  <div style={erpDetailRowValue}>{zakaznikLabel}</div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Objednávka</div>
+                  <div style={erpDetailRowValue}>{objednavkaLabel}</div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Datum</div>
+                  <div style={erpDetailRowValue}>{datumLabel}</div>
+                </div>
+              </div>
+            </div>
+          }
+          summaryTiles={
+            <div
+              style={{
+                padding: "12px 14px",
+                borderRadius: 12,
+                background: UI.colors.card,
+                border: `1px solid ${UI.colors.border}`,
+              }}
+            >
+              <div style={{ ...erpDetailSectionEyebrow, color: UI.colors.neutralFg, marginBottom: 8 }}>
+                Souhrn zakázky
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <div>
+                  <div style={erpDetailIdentLabel}>Položek celkem</div>
+                  <div style={{ ...erpDetailIdentValue, fontVariantNumeric: "tabular-nums" }}>
+                    {polozekCelkem}
                   </div>
-                  <div>
-                    <div style={UI.summaryTileSubValue}>Kusů celkem</div>
-                    <div style={UI.summaryTileValue}>{kusyCelkem}</div>
+                </div>
+                <div>
+                  <div style={erpDetailIdentLabel}>Kusů celkem</div>
+                  <div style={{ ...erpDetailIdentValue, fontVariantNumeric: "tabular-nums" }}>
+                    {kusyCelkem}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailIdentLabel}>Prodejní cena</div>
+                  <div style={{ ...erpDetailIdentValue, fontVariantNumeric: "tabular-nums" }}>
+                    {formatCzk(totalSalesPrice)}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailIdentLabel}>Fáze</div>
+                  <div style={erpDetailIdentValue}>{orderPhaseLabelCs(orderOp?.current_phase)}</div>
+                </div>
+                <div>
+                  <div style={erpDetailIdentLabel}>Hotovo</div>
+                  <div style={{ ...erpDetailIdentValue, fontVariantNumeric: "tabular-nums" }}>
+                    {formatLinePct(orderOp?.completion_percent)}
                   </div>
                 </div>
               </div>
             </div>
           }
         />
+        {actionFeedback ? (
+          <div ref={writeFeedbackAnchorRef} style={{ scrollMarginTop: 8 }}>
+            <InlineBanner
+              kind={actionFeedback.kind}
+              message={actionFeedback.message}
+              onClose={() => setActionFeedback(null)}
+            />
+          </div>
+        ) : null}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 12,
+            padding: "10px 16px",
+            borderRadius: 12,
+            background: UI.colors.neutralBg,
+            border: `1px solid ${UI.colors.border}`,
+          }}
+        >
+          <div
+            style={{
+              ...erpDetailSectionEyebrow,
+              color: UI.colors.neutralFg,
+              marginRight: 4,
+              flexShrink: 0,
+            }}
+          >
+            Akce zakázky
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              style={UI.buttons.secondary}
+              onClick={() => openHeaderEdit(data)}
+              disabled={!orderWorkflowActive || !canOrdersWrite}
+            >
+              Upravit zakázku
+            </button>
+            <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
+              Import položek
+            </button>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            <div
+              aria-hidden
+              style={{
+                width: 1,
+                height: 22,
+                background: UI.colors.divider,
+              }}
+            />
+            <button
+              type="button"
+              style={dangerButton}
+              onClick={handleStornoOrder}
+              disabled={!orderWorkflowActive || !canOrdersStorno}
+            >
+              Stornovat zakázku
+            </button>
+          </div>
+        </div>
+
         {vpError ? (
-          <div style={{ ...UI.card, borderRadius: 12, padding: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontWeight: 700 }}>
+          <div
+            style={{
+              ...UI.card,
+              borderRadius: 12,
+              padding: 12,
+              border: "1px solid #fecaca",
+              background: "#fef2f2",
+              color: "#991b1b",
+              fontWeight: 700,
+            }}
+          >
             {vpError}
           </div>
         ) : null}
 
         {showEditHeader ? (
-          <div style={{ ...UI.card, padding: 12, borderRadius: 14, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Upravit hlavičku zakázky</div>
+          <div style={inlineFormCard}>
+            <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Úprava</div>
+            <div style={{ ...sectionHeaderTitle, marginBottom: 12 }}>Hlavička zakázky</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
               <div>
                 <div style={UI.inputs.label}>Zákazník</div>
@@ -878,73 +1128,47 @@ export default function OrderCardPage({
         </div>
 
         {activeOrderSubtab === "Přehled" ? (
-          <>
-          <div
-            style={{
-              ...UI.card,
-              borderRadius: 14,
-              padding: 16,
-              marginBottom: 14,
-              border: "1px solid #e2e8f0",
-              background: "#fafafa",
-            }}
-          >
-            <div style={{ fontSize: 16, fontWeight: 1000, color: "#0f172a", marginBottom: 12 }}>Provozní metriky zakázky</div>
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14, fontWeight: 600 }}>
-              Součet přes aktivní položky a aktivní výrobní příkazy (VP). Stornované nebo uzavřené toky nejsou zahrnuty.
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                gap: 14,
-              }}
-            >
+          <div style={tableSectionCard}>
+            <div style={sectionHeader}>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  Vykázaný čas
-                </div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>
-                  {formatOrderReportedHours(orderOp?.reported_time_min)}
-                </div>
+                <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Položky</div>
+                <div style={sectionHeaderTitle}>Položky zakázky</div>
+                {itemsAggregate.count > 0 ? (
+                  <div style={{ ...sectionHeaderSub, marginTop: 4 }}>
+                    {itemsAggregate.count}{" "}
+                    {itemsAggregate.count === 1 ? "položka" : itemsAggregate.count < 5 ? "položky" : "položek"} ·{" "}
+                    {formatQty(itemsAggregate.totalQty)} ks · {formatCzk(itemsAggregate.totalCzk)}
+                  </div>
+                ) : null}
               </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  Hotovo
-                </div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: "#2563eb", marginTop: 4 }}>{formatLinePct(orderOp?.completion_percent)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  Náklad práce
-                </div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>{formatLineLabor(orderOp?.direct_labor_cost)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  Výkonnost
-                </div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>{formatLinePct(orderOp?.performance_percent)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>Fáze</div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>{orderPhaseLabelCs(orderOp?.current_phase)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>Poloha</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginTop: 4 }}>{orderOp?.current_location?.trim() || "—"}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <button
+                  type="button"
+                  style={UI.buttons.primary}
+                  disabled={!orderWorkflowActive || !canOrdersWrite}
+                  onClick={() => {
+                    setShowAddItemForm((v) => {
+                      if (v) return false;
+                      setFormGpn("");
+                      setFormName("");
+                      setFormQty("1");
+                      setFormDueDate("");
+                      setUserPickedPortfolioId(null);
+                      setItemError(null);
+                      setGpnLookupDone(false);
+                      return true;
+                    });
+                  }}
+                >
+                  {showAddItemForm ? "Zavřít formulář" : "Přidat položku"}
+                </button>
               </div>
             </div>
-            {orderOp?.operational_summary_cs ? (
-              <div style={{ marginTop: 14, fontSize: 14, fontWeight: 700, color: "#334155" }}>{orderOp.operational_summary_cs}</div>
-            ) : null}
-          </div>
-          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
-            <div style={{ fontSize: 16, fontWeight: 1000, color: "#0f172a", marginBottom: 10 }}>Položky zakázky</div>
 
             {editingItemId != null ? (
-              <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#fefce8", border: "1px solid #fde047" }}>
-                <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Upravit položku</div>
+              <div style={inlineFormCard}>
+                <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Úprava</div>
+                <div style={{ ...sectionHeaderTitle, marginBottom: 12 }}>Položka zakázky</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
                   <div>
                     <div style={UI.inputs.label}>GPN / Výkres</div>
@@ -1022,8 +1246,9 @@ export default function OrderCardPage({
             ) : null}
 
             {showAddItemForm ? (
-              <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Přidat položku</div>
+              <div style={inlineFormCard}>
+                <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Nová položka</div>
+                <div style={{ ...sectionHeaderTitle, marginBottom: 12 }}>Přidat do zakázky</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
                   <div>
                     <div style={UI.inputs.label}>GPN / Výkres</div>
@@ -1101,22 +1326,12 @@ export default function OrderCardPage({
             ) : null}
 
             {items.length === 0 ? (
-              <div
-                style={{
-                  textAlign: "center",
-                  color: "#64748b",
-                  fontWeight: 700,
-                  padding: "24px 12px",
-                  background: "#f8fafc",
-                  borderRadius: 12,
-                  border: "1px solid #e2e8f0",
-                }}
-              >
+              <div style={UI.overviewEmptyInCard}>
                 K této objednávce nejsou evidovány žádné položky.
               </div>
             ) : (
               <>
-                <div style={UI.ordersFilterBar}>
+                <div style={{ ...UI.ordersFilterBar, marginBottom: 12 }}>
                   <div style={UI.ordersFilterSearchWrap}>
                     <input
                       value={query}
@@ -1146,147 +1361,229 @@ export default function OrderCardPage({
                         </button>
                       );
                     })}
+                    <OverviewSloupceButton onClick={() => tb.openPanel()} disabled={tb.loading} />
                   </div>
                 </div>
 
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <div style={UI.overviewTableWrap}>
+                  <table style={UI.table}>
                     <thead>
-                      <tr style={{ background: "#f8fafc" }}>
-                        {[
-                          "GPN",
-                          "Název",
-                          "Množství",
-                          "Prodejní cena / ks",
-                          "Termín",
-                          "Výrobní příkazy",
-                          "Vykázaný čas",
-                          "Hotovo",
-                          "Náklad práce",
-                          "Výkonnost",
-                          "Portfolio",
-                          "Akce",
-                        ].map((h) => (
-                          <th
-                            key={h}
-                            style={{
-                              ...UI.th,
-                              fontSize: 13,
-                              padding: "10px 10px",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {h}
-                          </th>
-                        ))}
+                      <tr style={UI.overviewTableHeadRow}>
+                        {(
+                          [
+                            { key: "line_no", label: "Řádek", align: "right" as const, show: true },
+                            { key: "gpn", label: "GPN", align: "left" as const, show: true },
+                            { key: "name", label: "Název", align: "left" as const, show: true },
+                            { key: "drawing_number", label: "Výkres", align: "left" as const, show: showDrawingNumber },
+                            { key: "drawing_revision", label: "Revize", align: "left" as const, show: showDrawingRevision },
+                            { key: "qty", label: "Množství", align: "right" as const, show: true },
+                            { key: "sale_price", label: "Prodejní cena / ks", align: "right" as const, show: true },
+                            { key: "due", label: "Termín", align: "left" as const, show: true },
+                            { key: "vp", label: "Výrobní příkazy", align: "left" as const, show: true },
+                            { key: "reported", label: "Vykázaný čas", align: "right" as const, show: true },
+                            { key: "completion", label: "Hotovo", align: "right" as const, show: true },
+                            { key: "labor", label: "Náklad práce", align: "right" as const, show: true },
+                            { key: "performance", label: "Výkonnost", align: "right" as const, show: true },
+                            { key: "actions", label: "Akce", align: "left" as const, show: true },
+                          ] as const
+                        )
+                          .filter((h) => h.show)
+                          .map((h) => (
+                            <th
+                              key={h.key}
+                              style={{
+                                ...tableHeadCell,
+                                textAlign: h.align,
+                              }}
+                            >
+                              {h.label}
+                            </th>
+                          ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredItems.map((item) => (
-                        <tr
-                          key={item.job_item_id}
-                          onClick={() => onOpenItemDetail(item.job_item_id, "orders")}
-                          onMouseEnter={() => setHoveredItemId(item.job_item_id)}
-                          onMouseLeave={() => setHoveredItemId((id) => (id === item.job_item_id ? null : id))}
-                          style={{
-                            cursor: "pointer",
-                            background: hoveredItemId === item.job_item_id ? "#eff6ff" : "#fff",
-                          }}
-                        >
-                          <td
+                      {filteredItems.map((item, idx) => {
+                        const rowBg = idx % 2 === 1 ? rowStripeBg : UI.colors.card;
+                        const isHover = hoveredItemId === item.job_item_id;
+                        const numCell: React.CSSProperties = {
+                          ...tableBodyCell,
+                          whiteSpace: "nowrap",
+                          textAlign: "right",
+                          fontVariantNumeric: "tabular-nums",
+                        };
+                        const txtCell: React.CSSProperties = {
+                          ...tableBodyCell,
+                          whiteSpace: "nowrap",
+                        };
+                        const vpList = relevantProductionOrders(item, orderKind);
+                        const hasVp = vpList.length > 0;
+                        const portfolioId = item.effective_portfolio_item_id ?? item.portfolio_item_id ?? null;
+                        return (
+                          <tr
+                            key={item.job_item_id}
+                            onClick={() => onOpenItemDetail(item.job_item_id, "orders")}
+                            onMouseEnter={() => setHoveredItemId(item.job_item_id)}
+                            onMouseLeave={() => setHoveredItemId((id) => (id === item.job_item_id ? null : id))}
                             style={{
-                              ...UI.td,
-                              padding: "10px 10px",
-                              whiteSpace: "nowrap",
-                              borderBottom: "1px solid #f1f5f9",
-                              fontWeight: 800,
+                              cursor: "pointer",
+                              background: isHover ? "#EFF6FF" : rowBg,
+                              boxShadow: isHover
+                                ? `inset 3px 0 0 0 ${UI.colors.primary}`
+                                : "none",
+                              transition: "background 120ms ease, box-shadow 120ms ease",
                             }}
                           >
-                            {item.gpn}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", borderBottom: "1px solid #f1f5f9" }}>
-                            {item.description ?? "—"}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
-                            {item.qty} ks
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
-                            {formatCzk(item.sale_price_per_piece)}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
-                            {item.due_date ?? "—"}
-                          </td>
-                          <td
-                            style={{
-                              ...UI.td,
-                              padding: "10px 10px",
-                              borderBottom: "1px solid #f1f5f9",
-                              fontWeight: 700,
-                              color: relevantProductionOrders(item, orderKind).length > 0 ? "#15803d" : "#64748b",
-                            }}
-                          >
-                            {formatVpCodes(item, orderKind)}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
-                            {formatLineReportedMin(item.reported_time_min)}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
-                            {formatLinePct(item.completion_percent)}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
-                            {formatLineLabor(item.direct_labor_cost)}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}>
-                            {formatLinePct(item.performance_percent)}
-                          </td>
-                          <td
-                            style={{
-                              ...UI.td,
-                              padding: "10px 10px",
-                              whiteSpace: "nowrap",
-                              borderBottom: "1px solid #f1f5f9",
-                              fontWeight: 900,
-                              color: "#0f172a",
-                            }}
-                          >
-                            {item.portfolio_item_id != null ? "Navázáno na portfolio" : "Bez vazby na portfolio"}
-                          </td>
-                          <td
-                            style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                              <button
-                                type="button"
-                                style={UI.buttons.secondary}
-                                disabled={
-                                  !orderWorkflowActive ||
-                                  !isBusinessWorkflowActive(item.workflow_status) ||
-                                  !canOrdersWrite
+                            <td style={{ ...numCell, fontWeight: 800, color: UI.colors.textPrimary }}>
+                              {item.line_no}
+                            </td>
+                            <td
+                              style={{ ...txtCell, fontWeight: 800, color: UI.colors.textPrimary }}
+                              onClick={(e) => {
+                                if (portfolioId != null && onOpenPortfolioById) {
+                                  e.stopPropagation();
                                 }
-                                onClick={() => openItemEdit(item)}
-                              >
-                                Upravit
-                              </button>
-                              <button
-                                type="button"
-                                style={UI.buttons.secondary}
-                                disabled={
-                                  !orderWorkflowActive ||
-                                  !isBusinessWorkflowActive(item.workflow_status) ||
-                                  !canOrdersStorno
-                                }
-                                onClick={() => handleStornoItem(item.job_item_id)}
-                              >
-                                Zrušit
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                              }}
+                            >
+                              {portfolioId != null && onOpenPortfolioById ? (
+                                <button
+                                  type="button"
+                                  className="erp-table-link"
+                                  onClick={() => onOpenPortfolioById(portfolioId)}
+                                  title="Otevřít portfolio položky"
+                                  style={{
+                                    background: "none",
+                                    border: "none",
+                                    padding: 0,
+                                    margin: 0,
+                                    cursor: "pointer",
+                                    font: "inherit",
+                                    color: UI.colors.primary,
+                                    fontWeight: 800,
+                                    textDecoration: "underline",
+                                    textUnderlineOffset: 3,
+                                  }}
+                                >
+                                  {item.gpn}
+                                </button>
+                              ) : (
+                                item.gpn
+                              )}
+                            </td>
+                            <td style={{ ...tableBodyCell, whiteSpace: "normal" }}>
+                              {item.description ?? "—"}
+                            </td>
+                            {showDrawingNumber ? (
+                              <td style={txtCell}>
+                                {item.drawing_number?.trim() ? item.drawing_number : "—"}
+                              </td>
+                            ) : null}
+                            {showDrawingRevision ? (
+                              <td style={txtCell}>
+                                {item.drawing_revision?.trim() ? item.drawing_revision : "—"}
+                              </td>
+                            ) : null}
+                            <td style={numCell}>{item.qty} ks</td>
+                            <td style={numCell}>{formatCzk(item.sale_price_per_piece)}</td>
+                            <td style={txtCell}>{item.due_date ?? "—"}</td>
+                            <td style={txtCell} onClick={(e) => e.stopPropagation()}>
+                              {hasVp ? (
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    flexWrap: "wrap",
+                                    gap: 6,
+                                    alignItems: "center",
+                                  }}
+                                >
+                                  {vpList.map((po, i) => {
+                                    const code = po.vp_code?.trim() || `VP#${po.id}`;
+                                    const canOpen = !!onOpenProductionOrderDetail;
+                                    return (
+                                      <span
+                                        key={po.id}
+                                        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                                      >
+                                        {i > 0 ? (
+                                          <span style={{ color: UI.colors.textSecondary }}>·</span>
+                                        ) : null}
+                                        <button
+                                          type="button"
+                                          className={canOpen ? "erp-table-link" : undefined}
+                                          disabled={!canOpen}
+                                          onClick={() => onOpenProductionOrderDetail?.(po.id, po.vp_code ?? undefined)}
+                                          title={canOpen ? "Otevřít detail výrobního příkazu" : undefined}
+                                          style={{
+                                            background: "none",
+                                            border: "none",
+                                            padding: 0,
+                                            margin: 0,
+                                            cursor: canOpen ? "pointer" : "default",
+                                            font: "inherit",
+                                            color: "#15803D",
+                                            fontWeight: 800,
+                                            textDecoration: canOpen ? "underline" : "none",
+                                            textUnderlineOffset: 3,
+                                          }}
+                                        >
+                                          {code}
+                                        </button>
+                                      </span>
+                                    );
+                                  })}
+                                </span>
+                              ) : (
+                                <span style={{ color: UI.colors.textSecondary, fontWeight: 700 }}>—</span>
+                              )}
+                            </td>
+                            <td style={numCell}>{formatLineReportedMin(item.reported_time_min)}</td>
+                            <td style={numCell}>{formatLinePct(item.completion_percent)}</td>
+                            <td style={numCell}>{formatLineLabor(item.direct_labor_cost)}</td>
+                            <td style={numCell}>{formatLinePct(item.performance_percent)}</td>
+                            <td
+                              style={txtCell}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                <button
+                                  type="button"
+                                  style={UI.buttons.secondary}
+                                  disabled={
+                                    !orderWorkflowActive ||
+                                    !isBusinessWorkflowActive(item.workflow_status) ||
+                                    !canOrdersWrite
+                                  }
+                                  onClick={() => openItemEdit(item)}
+                                >
+                                  Upravit
+                                </button>
+                                <button
+                                  type="button"
+                                  style={dangerButton}
+                                  disabled={
+                                    !orderWorkflowActive ||
+                                    !isBusinessWorkflowActive(item.workflow_status) ||
+                                    !canOrdersStorno
+                                  }
+                                  onClick={() => handleStornoItem(item.job_item_id)}
+                                >
+                                  Zrušit
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                       {filteredItems.length === 0 ? (
                         <tr>
-                          <td colSpan={12} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
+                          <td
+                            colSpan={12 + (showDrawingNumber ? 1 : 0) + (showDrawingRevision ? 1 : 0)}
+                            style={{
+                              ...tableBodyCell,
+                              textAlign: "center",
+                              color: UI.colors.textSecondary,
+                              padding: "14px 10px",
+                            }}
+                          >
                             Žádné výsledky.
                           </td>
                         </tr>
@@ -1301,14 +1598,14 @@ export default function OrderCardPage({
                       marginTop: 16,
                       padding: "12px 14px",
                       borderRadius: 12,
-                      border: "1px solid #e2e8f0",
-                      background: "#f8fafc",
+                      border: `1px solid ${UI.colors.border}`,
+                      background: UI.colors.neutralBg,
                       fontSize: 13,
-                      color: "#475569",
-                      lineHeight: 1.5,
+                      color: UI.colors.textSecondary,
+                      lineHeight: 1.55,
                     }}
                   >
-                    <strong style={{ color: "#0f172a" }}>Výrobní příkazy</strong> se zakládají podle{" "}
+                    <strong style={{ color: UI.colors.textPrimary }}>Výrobní příkazy</strong> se zakládají podle{" "}
                     <strong>logistické varianty portfolia</strong> u řádku (výběr při zadání GPN / úpravě položky):{" "}
                     <em>Sklad</em> = jen interní doplnění skladu, <em>Výroba zákazník</em> = přímá výroba pro zákazníka,{" "}
                     <em>Sklad zákazník</em> = čerpání skladu, případně rezervace běžícího doplnění (modal) a doplnění.
@@ -1317,7 +1614,6 @@ export default function OrderCardPage({
               </>
             )}
           </div>
-          </>
         ) : (
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
             <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 0 }}>
@@ -1547,6 +1843,24 @@ export default function OrderCardPage({
         })}
       </div>
     </SimpleModal>
+    <TableLayoutModal
+      open={tb.panelOpen}
+      title="Sloupce — položky zakázky"
+      columns={tb.columns}
+      onColumnsChange={tb.setColumns}
+      sort={tb.sort}
+      onSortChange={tb.setSort}
+      sortableKeys={tb.sortableKeys}
+      columnLabels={ORDER_CARD_ITEMS_COL_LABELS}
+      density={tb.density}
+      onDensityChange={tb.setDensity}
+      onCancel={tb.closePanelCancel}
+      onSave={() => void tb.savePanel()}
+      onResetLocal={tb.resetLocalToDefaults}
+      onResetAndSave={() => void tb.resetAndSave()}
+      saving={tb.saving}
+      errorMessage={tb.saveError}
+    />
     </>
   );
 }

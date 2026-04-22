@@ -1,4 +1,13 @@
-export type TableColumnDef = { key: string; label: string; defaultWidth?: number };
+export type TableColumnDef = {
+  key: string;
+  label: string;
+  defaultWidth?: number;
+  /**
+   * Pokud je `false`, sloupec je po prvním otevření výchozí skrytý
+   * (lze ho zapnout přes Sloupce). Výchozí chování je `true`.
+   */
+  defaultVisible?: boolean;
+};
 
 export type TableColumnState = {
   key: string;
@@ -22,7 +31,7 @@ export function buildDefaultColumns(defs: readonly TableColumnDef[]): TableColum
     key: d.key,
     label: d.label,
     order: i,
-    visible: true,
+    visible: d.defaultVisible !== false,
     width: d.defaultWidth ?? null,
   }));
 }
@@ -64,7 +73,7 @@ export function mergeLayoutWithDefaults(
         key: def.key,
         label: def.label,
         order: ord++,
-        visible: true,
+        visible: def.defaultVisible !== false,
         width: def.defaultWidth ?? null,
       });
     }

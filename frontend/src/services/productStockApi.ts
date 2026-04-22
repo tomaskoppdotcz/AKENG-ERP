@@ -77,7 +77,10 @@ export type ProductStockMovementUpdatePayload = Partial<ProductStockMovementCrea
 export async function getProductStockItems(): Promise<ProductStockItem[]> {
   const res = await akengFetch(`${BASE}/items`);
   if (!res.ok) throw new Error(await readErrorMessage(res, "Nepodařilo se načíst sklad výrobků."));
-  return res.json();
+  const data = await res.json();
+  // Endpoint vrací { items, total, limit, offset }; pro kompatibilitu držíme array-return.
+  if (Array.isArray(data)) return data as ProductStockItem[];
+  return Array.isArray(data?.items) ? (data.items as ProductStockItem[]) : [];
 }
 
 export async function createProductStockItem(payload: ProductStockItemCreatePayload): Promise<ProductStockItem> {

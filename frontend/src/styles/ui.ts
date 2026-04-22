@@ -1,3 +1,5 @@
+import type React from "react";
+
 /**
  * AKENG ERP — kanonické barvy pro přehledy a karty (2026).
  * Používejte `UI.colors.*` nebo přímo tokeny z `ERP_COLORS` pro konzistenci napříč moduly.
@@ -377,39 +379,39 @@ export const UI = {
     padding: "6px 13px",
     borderRadius: 999,
     fontSize: 12,
-    fontWeight: 600,
-    letterSpacing: "0.02em",
+    fontWeight: 800,
+    letterSpacing: "0.03em",
     width: "fit-content" as const,
     lineHeight: 1.25,
     border: "1px solid transparent",
     boxShadow:
-      "0 1px 4px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255,255,255,0.65), inset 0 0 0 1px rgba(15, 23, 42, 0.04)",
+      "0 1px 4px rgba(15, 23, 42, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.75), inset 0 0 0 1px rgba(15, 23, 42, 0.1)",
     transition: "background 0.18s ease, color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease",
   },
   statusBadgeRunning: {
-    color: "#1E40AF",
+    color: "#172554",
     background: ERP_COLORS.runningBg,
-    borderColor: "rgba(37, 99, 235, 0.5)",
+    borderColor: "rgba(37, 99, 235, 0.55)",
   },
   statusBadgeOk: {
-    color: "#166534",
+    color: "#14532D",
     background: ERP_COLORS.okBg,
-    borderColor: "rgba(22, 163, 74, 0.48)",
+    borderColor: "rgba(22, 163, 74, 0.55)",
   },
   statusBadgeWait: {
-    color: "#9A3412",
+    color: "#7C2D12",
     background: ERP_COLORS.waitBg,
-    borderColor: "rgba(245, 158, 11, 0.5)",
+    borderColor: "rgba(245, 158, 11, 0.55)",
   },
   statusBadgeProblem: {
-    color: "#991B1B",
+    color: "#7F1D1D",
     background: ERP_COLORS.problemBg,
-    borderColor: "rgba(220, 38, 38, 0.5)",
+    borderColor: "rgba(220, 38, 38, 0.55)",
   },
   statusBadgeNeutral: {
-    color: "#334155",
+    color: "#0F172A",
     background: ERP_COLORS.neutralBg,
-    borderColor: "rgba(100, 116, 139, 0.35)",
+    borderColor: "rgba(100, 116, 139, 0.4)",
   },
 
   buttons: {
@@ -673,6 +675,25 @@ export const UI = {
     overflowX: "auto" as const,
     width: "100%",
   },
+  /**
+   * Vnitřní padding buněk přehledových tabulek — musí odpovídat `usePersistedTableLayout` (hustota sloupců).
+   * Portfolio / VP / Zakázky používají `cellPaddingPx`; stránky bez persisted layout berou „comfortable“.
+   */
+  overviewTableCellPadding: {
+    comfortable: 10,
+    compact: 6,
+  } as const,
+  /** Společný reset pro `button.erp-table-link` v buňkách (hover z `ERP_GLOBAL_POLISH_CSS`). */
+  tableLinkButtonReset: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    margin: 0,
+    cursor: "pointer",
+    font: "inherit",
+    textUnderlineOffset: "3px",
+    fontWeight: 800,
+  } satisfies React.CSSProperties,
   overviewTableHeadRow: {
     background: ERP_COLORS.tableHeadBg,
     boxShadow: "inset 0 -1px 0 rgba(15, 23, 42, 0.05)",
@@ -735,4 +756,206 @@ export const UI = {
     boxSizing: "border-box" as const,
   },
 };
+
+/** Odstín KPI dlaždice: primární modrá / neutrální / úspěch / výstraha / problém. */
+export type ErpKpiAccentKind = "primary" | "neutral" | "success" | "warning" | "danger" | "info";
+
+/**
+ * Pozadí KPI dlaždice ve stylu ProductionOrdersPage: bílá → světle šedá s jemným barevným nádechem
+ * v levém horním rohu. Používejte s `UI.overviewKpiTile` a `borderLeftColor`.
+ */
+export function erpKpiTileBackground(kind: ErpKpiAccentKind): string {
+  const grayDepth = "linear-gradient(180deg, #ffffff 0%, #f3f4f6 52%, #e8ecf1 100%)";
+  const wash: Record<ErpKpiAccentKind, string> = {
+    primary: "rgba(37, 99, 235, 0.07)",
+    info: "rgba(37, 99, 235, 0.07)",
+    neutral: "rgba(148, 163, 184, 0.14)",
+    success: "rgba(22, 163, 74, 0.08)",
+    warning: "rgba(245, 158, 11, 0.09)",
+    danger: "rgba(220, 38, 38, 0.06)",
+  };
+  return `linear-gradient(135deg, ${wash[kind]} 0%, transparent 44%), ${grayDepth}`;
+}
+
+/**
+ * Sdílené "premium" vizuální tokeny pro detailové stránky (ProductionOrderDetailPage styl).
+ * Použití:
+ *   - `erpDetailStateCard` jako wrapper dominantního „Aktuální stav / Poloha" bloku
+ *   - `erpDetailStateAccent` jako `border`
+ *   - `erpDetailKpiPanel` jako wrapper řádku provozních metrik
+ *   - `erpDetailSectionEyebrow` jako malý ALL CAPS nadtitulek sekce
+ *   - `erpDetailRowLabel` / `erpDetailRowValue` pro stav (poloha, operace…)
+ *   - `erpDetailKpiLabel` / `erpDetailKpiValue` pro KPI hodnoty
+ */
+export const erpDetailStateAccent = ERP_COLORS.primaryLight;
+export const erpDetailStateBg =
+  "linear-gradient(145deg, rgba(37, 99, 235, 0.09) 0%, rgba(241, 245, 249, 0.92) 52%, #ffffff 100%)";
+export const erpDetailKpiPanelBg = ERP_COLORS.neutralBg;
+
+export const erpDetailSectionEyebrow: React.CSSProperties = {
+  textTransform: "uppercase",
+  letterSpacing: 0.8,
+  fontSize: 11,
+  fontWeight: 800,
+  color: ERP_COLORS.primary,
+  marginBottom: 8,
+};
+
+export const erpDetailRowLabel: React.CSSProperties = {
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+  fontSize: 11,
+  fontWeight: 700,
+  color: ERP_COLORS.neutralFg,
+  marginBottom: 4,
+};
+
+export const erpDetailRowValue: React.CSSProperties = {
+  fontSize: 17,
+  fontWeight: 800,
+  color: ERP_COLORS.textPrimary,
+  lineHeight: 1.25,
+};
+
+export const erpDetailKpiLabel: React.CSSProperties = {
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+  fontSize: 10,
+  fontWeight: 700,
+  color: ERP_COLORS.neutralFg,
+};
+
+export const erpDetailKpiValue: React.CSSProperties = {
+  fontSize: 22,
+  fontWeight: 900,
+  color: ERP_COLORS.textPrimary,
+  lineHeight: 1.1,
+  marginTop: 4,
+};
+
+export const erpDetailStateCard: React.CSSProperties = {
+  padding: "16px 18px",
+  borderRadius: 14,
+  background: erpDetailStateBg,
+  border: `1px solid ${erpDetailStateAccent}`,
+  boxShadow: "0 6px 18px rgba(15, 23, 42, 0.06)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+export const erpDetailKpiPanel: React.CSSProperties = {
+  padding: "14px 16px",
+  borderRadius: 12,
+  background: erpDetailKpiPanelBg,
+  border: `1px solid ${ERP_COLORS.border}`,
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+export const erpDetailKpiRow: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  gap: 14,
+};
+
+export const erpDetailIdentGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 10,
+};
+
+export const erpDetailIdentLabel: React.CSSProperties = {
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+  fontSize: 10.5,
+  fontWeight: 700,
+  color: ERP_COLORS.neutralFg,
+  marginBottom: 2,
+};
+
+export const erpDetailIdentValue: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: ERP_COLORS.textPrimary,
+  lineHeight: 1.25,
+};
+
+/** Mapování barvy akcentu (levého pruhu) na kind pozadí — praktické pro rychlé použití v dlaždicích. */
+export function erpKpiAccentKindFromColor(accent: string): ErpKpiAccentKind {
+  const a = accent.toLowerCase();
+  if (a === ERP_COLORS.primary.toLowerCase() || a === "#2563eb" || a === "#1d4ed8") return "primary";
+  if (a === ERP_COLORS.okFg.toLowerCase() || a === "#16a34a") return "success";
+  if (a === ERP_COLORS.waitFg.toLowerCase() || a === "#f59e0b") return "warning";
+  if (a === ERP_COLORS.problemFg.toLowerCase() || a === "#dc2626") return "danger";
+  return "neutral";
+}
+
+/**
+ * Sdílená „premium“ polish CSS (hover lift, tabulkové hovery, status badges, odkazy, KPI).
+ * Injektujeme jednou v ErpAppShell; stránky se přihlásí class="erp-overview-page".
+ */
+export const ERP_GLOBAL_POLISH_CSS = `
+.erp-overview-page .erp-kpi-tile,
+.erp-overview-page .po-kpi-tile {
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, box-shadow;
+}
+.erp-overview-page .erp-kpi-tile:hover,
+.erp-overview-page .po-kpi-tile:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+.erp-overview-page button.erp-row-lift:not(:disabled):hover,
+.erp-overview-page button.po-lift:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+}
+.erp-overview-page .erp-table-wrap table tbody tr,
+.erp-overview-page .po-table-wrap table tbody tr {
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
+}
+.erp-overview-page .erp-table-wrap table tbody tr:hover,
+.erp-overview-page .po-table-wrap table tbody tr:hover {
+  background-color: #F1F5F9 !important;
+  box-shadow: inset 4px 0 0 #1D4ED8, 0 1px 0 rgba(15, 23, 42, 0.04);
+}
+.erp-overview-page .erp-overview-search::placeholder,
+.erp-overview-page .po-overview-search::placeholder {
+  color: #475569;
+  opacity: 1;
+}
+.erp-overview-page .erp-overview-search::-webkit-input-placeholder,
+.erp-overview-page .po-overview-search::-webkit-input-placeholder {
+  color: #475569;
+}
+.erp-overview-page .erp-overview-search::-moz-placeholder,
+.erp-overview-page .po-overview-search::-moz-placeholder {
+  color: #475569;
+  opacity: 1;
+}
+.erp-overview-page .erp-status-badge,
+.erp-overview-page .po-status-badge {
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  cursor: default;
+}
+.erp-overview-page .erp-status-badge:hover,
+.erp-overview-page .po-status-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+.erp-overview-page button.erp-table-link,
+.erp-overview-page button.po-table-link {
+  color: #1D4ED8;
+  text-decoration: none;
+  text-underline-offset: 3px;
+  transition: color 0.15s ease, text-decoration 0.15s ease;
+}
+.erp-overview-page button.erp-table-link:hover,
+.erp-overview-page button.po-table-link:hover {
+  color: #1E3A8A;
+  text-decoration: underline;
+}
+`.trim();
 

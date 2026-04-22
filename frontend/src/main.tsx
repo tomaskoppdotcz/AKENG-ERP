@@ -33,6 +33,38 @@ function KioskRoot() {
     }
     window.history.replaceState({}, "", "/");
   }
+  if (path === "/work-reports/new" || path.endsWith("/work-reports/new")) {
+    try {
+      sessionStorage.setItem("akeng_pending_work_report_new", "1");
+    } catch {
+      /* ignore */
+    }
+    window.history.replaceState({}, "", "/");
+  }
+  const workReportPath = path.match(/^\/work-reports\/(\d+)$/);
+  if (workReportPath) {
+    const workReportId = Number(workReportPath[1]);
+    if (Number.isFinite(workReportId) && workReportId > 0) {
+      try {
+        sessionStorage.setItem("akeng_pending_work_report", JSON.stringify({ workReportId }));
+      } catch {
+        /* ignore */
+      }
+      window.history.replaceState({}, "", "/");
+    }
+  }
+  const workReportEditPath = path.match(/^\/work-reports\/(\d+)\/edit$/);
+  if (workReportEditPath) {
+    const workReportId = Number(workReportEditPath[1]);
+    if (Number.isFinite(workReportId) && workReportId > 0) {
+      try {
+        sessionStorage.setItem("akeng_pending_work_report_edit", JSON.stringify({ workReportId }));
+      } catch {
+        /* ignore */
+      }
+      window.history.replaceState({}, "", "/");
+    }
+  }
   const params = new URLSearchParams(window.location.search);
   const machine = params.get("machine") || "";
   if (path === "/kiosk/admin" || path.endsWith("/kiosk/admin")) {

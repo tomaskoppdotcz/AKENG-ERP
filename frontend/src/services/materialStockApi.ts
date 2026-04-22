@@ -111,7 +111,10 @@ export async function getMaterialStockItems(opts?: { forJobItemId?: number }): P
   const suffix = q.toString() ? `?${q.toString()}` : "";
   const res = await akengFetch(`${API_BASE}/material-stock/items${suffix}`);
   if (!res.ok) throw new Error("Nepodařilo se načíst sklad materiálu.");
-  return res.json();
+  const data = await res.json();
+  // Endpoint vrací { items, total, limit, offset }; pro kompatibilitu držíme array-return.
+  if (Array.isArray(data)) return data as MaterialStockItem[];
+  return Array.isArray(data?.items) ? (data.items as MaterialStockItem[]) : [];
 }
 
 export type MaterialIssueProposal = {

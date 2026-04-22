@@ -8,6 +8,7 @@ import {
   type TableColumnState,
 } from "../overview/tableLayoutMerge";
 import { getTableLayout, putTableLayout } from "../services/tableLayoutsApi";
+import { UI } from "../styles/ui";
 
 function cloneColumns(cols: TableColumnState[]): TableColumnState[] {
   return cols.map((c) => ({ ...c }));
@@ -34,7 +35,8 @@ export function usePersistedTableLayout(pageKey: string, defaults: readonly Tabl
     return [...columns].filter((c) => c.visible).sort((a, b) => a.order - b.order);
   }, [columns]);
 
-  const cellPaddingPx = density === "compact" ? 6 : 10;
+  const cellPaddingPx =
+    density === "compact" ? UI.overviewTableCellPadding.compact : UI.overviewTableCellPadding.comfortable;
 
   useEffect(() => {
     let cancelled = false;

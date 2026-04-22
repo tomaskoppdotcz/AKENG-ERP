@@ -1,8 +1,39 @@
+import { attachHttpErrorMeta } from "../utils/writeActionFeedback";
 import type { ErpWorkflowListFilter } from "./ordersApi";
 import { akengFetch } from "./akengFetch";
 
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+async function readJsonErrorDetail(res: Response, fallback: string): Promise<string> {
+  try {
+    const j = await res.json();
+    if (typeof j.detail === "string") return j.detail;
+    if (j.detail && typeof j.detail === "object" && typeof j.detail.message === "string") {
+      return j.detail.message;
+    }
+    if (Array.isArray(j.detail)) {
+      const parts = j.detail.map((x: { msg?: string }) => x.msg).filter(Boolean);
+      if (parts.length) return parts.join("; ");
+    }
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+async function readOptionalJsonBody(res: Response): Promise<unknown> {
+  if (res.status === 204 || res.status === 205) return undefined;
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) return undefined;
+  try {
+    const text = await res.text();
+    if (!text.trim()) return undefined;
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
 
 export type ProductionOrderOverviewRow = {
   id: number;
@@ -127,7 +158,13 @@ export type ProductionOrderDetail = {
   line_no: number | null;
   gpn: string | null;
   description: string | null;
+  /** Z `portfolio_items.drawing_no` resolved přes portfolio_item_id. */
+  drawing_number?: string | null;
+  /** Z `portfolio_items.revision` resolved přes portfolio_item_id. */
+  drawing_revision?: string | null;
   portfolio_item_id: number | null;
+  /** GPN navázané portfolio položky (z `portfolio_items.gpn`). */
+  portfolio_item_gpn?: string | null;
   portfolio_item_name: string | null;
   portfolio_item_logistic_mode: string | null;
   logistic_mode: string | null;
@@ -207,18 +244,13 @@ export async function getProductionOrderDetail(productionOrderId: number): Promi
   return res.json();
 }
 
-export async function stornoProductionOrder(productionOrderId: number): Promise<void> {
+export async function stornoProductionOrder(productionOrderId: number): Promise<unknown> {
   const res = await akengFetch(`${API_BASE}/production-orders/${productionOrderId}/storno`, { method: "POST" });
   if (!res.ok) {
-    let message = "Storno výrobního příkazu se nepodařilo.";
-    try {
-      const data = await res.json();
-      if (typeof data?.detail === "string") message = data.detail;
-    } catch {
-      // ignore
-    }
-    throw new Error(message);
+    const message = await readJsonErrorDetail(res, "Storno výrobního příkazu se nepodařilo.");
+    throw attachHttpErrorMeta(new Error(message), res);
   }
+  return readOptionalJsonBody(res);
 }
 
 export async function regenerateProductionOrderFromTp(
@@ -228,14 +260,8 @@ export async function regenerateProductionOrderFromTp(
     method: "POST",
   });
   if (!res.ok) {
-    let message = "Přegenerování VP z TP se nepodařilo.";
-    try {
-      const data = await res.json();
-      if (typeof data?.detail === "string") message = data.detail;
-    } catch {
-      // ignore
-    }
-    throw new Error(message);
+    const message = await readJsonErrorDetail(res, "Přegenerování VP z TP se nepodařilo.");
+    throw attachHttpErrorMeta(new Error(message), res);
   }
   return res.json();
 }
@@ -252,7 +278,8 @@ export async function startProductionOrderOperation(productionOrderId: number, o
     method: "POST",
   });
   if (!res.ok) {
-    throw new Error("Nepodařilo se zahájit operaci.");
+    const message = await readJsonErrorDetail(res, "Nepodařilo se zahájit operaci.");
+    throw attachHttpErrorMeta(new Error(message), res);
   }
 }
 
@@ -267,7 +294,8 @@ export async function reportProductionOrderOperation(
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new Error("Nepodařilo se odvést operaci.");
+    const message = await readJsonErrorDetail(res, "Nepodařilo se odvést operaci.");
+    throw attachHttpErrorMeta(new Error(message), res);
   }
   return res.json();
 }
@@ -285,14 +313,8 @@ export async function receiveFinishedGoodsToStock(
     }),
   });
   if (!res.ok) {
-    let message = "Příjem na sklad se nepodařil.";
-    try {
-      const data = await res.json();
-      if (typeof data?.detail === "string") message = data.detail;
-    } catch {
-      // ignore
-    }
-    throw new Error(message);
+    const message = await readJsonErrorDetail(res, "Příjem na sklad se nepodařil.");
+    throw attachHttpErrorMeta(new Error(message), res);
   }
   return res.json();
 }
@@ -314,7 +336,7 @@ export async function openProductionOrderPdfInNewTab(productionOrderId: number):
     } catch {
       // ignore
     }
-    throw new Error(message);
+    throw attachHttpErrorMeta(new Error(message), res);
   }
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);

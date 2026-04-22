@@ -2,7 +2,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import PageContainer from "../components/layout/PageContainer";
 import PageHeader from "../components/layout/PageHeader";
 import PageSection from "../components/layout/PageSection";
-import { UI } from "../styles/ui";
+import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
+import TableLayoutModal from "../components/overview/TableLayoutModal";
+import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
+import type { TableColumnDef } from "../overview/tableLayoutMerge";
+import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
+import { erpKpiTileBackground, UI } from "../styles/ui";
 import { getCustomers, type CustomerListItem } from "../services/masterLibrariesApi";
 import {
   copyPortfolioItem,
@@ -40,30 +45,55 @@ function logisticLabel(mode: string | null | undefined): string {
   return "Výroba zákazník";
 }
 
-/** Pořadí variant pod jedním GPN: výroba → sklad zákazník → sklad (interní). */
-const LOGISTIC_MODE_SORT: Record<string, number> = {
-  vyroba_zakaznik: 0,
-  sklad_zakaznik: 1,
-  sklad: 2,
-};
-
-function sortPortfolioItemsByLogisticMode(a: PortfolioItem, b: PortfolioItem): number {
-  const oa = LOGISTIC_MODE_SORT[(a.logistic_mode ?? "").trim()] ?? 99;
-  const ob = LOGISTIC_MODE_SORT[(b.logistic_mode ?? "").trim()] ?? 99;
-  if (oa !== ob) return oa - ob;
-  return a.id - b.id;
+function logisticBadgeStyle(mode: string | null | undefined): React.CSSProperties {
+  const base = UI.statusBadgeBase;
+  const m = (mode ?? "").trim();
+  if (m === "sklad") return { ...base, ...UI.statusBadgeOk };
+  if (m === "sklad_zakaznik") return { ...base, ...UI.statusBadgeRunning };
+  if (m === "vyroba_zakaznik") return { ...base, ...UI.statusBadgeWait };
+  return { ...base, ...UI.statusBadgeNeutral };
 }
 
-function allSame<T>(items: PortfolioItem[], pick: (i: PortfolioItem) => T): boolean {
-  if (items.length <= 1) return true;
-  const first = pick(items[0]);
-  return items.every((i) => pick(i) === first);
+function tpBadgeStyle(hasTp: boolean): React.CSSProperties {
+  const base = UI.statusBadgeBase;
+  return hasTp ? { ...base, ...UI.statusBadgeOk } : { ...base, ...UI.statusBadgeProblem };
+}
+
+function activeBadgeStyle(active: boolean): React.CSSProperties {
+  const base = UI.statusBadgeBase;
+  return active ? { ...base, ...UI.statusBadgeOk } : { ...base, ...UI.statusBadgeNeutral };
 }
 
 function formatCzk(value: number | null | undefined): string {
   if (value == null) return "—";
   return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
 }
+
+const PORTFOLIO_TABLE_DEFAULTS: readonly TableColumnDef[] = [
+  { key: "gpn", label: "GPN", defaultWidth: 130 },
+  { key: "name", label: "Název", defaultWidth: 200 },
+  { key: "drawing_number", label: "Výkres", defaultWidth: 130 },
+  { key: "revision", label: "Revize", defaultWidth: 90 },
+  { key: "customer", label: "Zákazník", defaultWidth: 160 },
+  { key: "group", label: "Skupina", defaultWidth: 140 },
+  { key: "material", label: "Materiál", defaultWidth: 120 },
+  { key: "logistic", label: "Logistický režim", defaultWidth: 160 },
+  { key: "sale_price", label: "Prodejní cena / ks", defaultWidth: 140 },
+  { key: "tp", label: "TP", defaultWidth: 80 },
+  { key: "status", label: "Stav", defaultWidth: 110 },
+  { key: "actions", label: "Akce", defaultWidth: 220 },
+] as const;
+
+const PORTFOLIO_COL_LABELS: Record<string, string> = Object.fromEntries(
+  PORTFOLIO_TABLE_DEFAULTS.map((c) => [c.key, c.label]),
+);
+
+const LOGISTIC_MODE_OPTIONS: Array<{ id: string; label: string }> = [
+  { id: "all", label: "Vše" },
+  { id: "vyroba_zakaznik", label: "Výroba zákazník" },
+  { id: "sklad_zakaznik", label: "Sklad zákazník" },
+  { id: "sklad", label: "Sklad" },
+];
 
 export default function PortfolioPage({
   onOpenItemDetail,
@@ -73,17 +103,20 @@ export default function PortfolioPage({
 }: Props) {
   const [items, setItems] = useState<PortfolioItem[]>([]);
   const [loading, setLoading] = useState(true);
-  /** Master zákazníci pro dropdown (musí být deklaráno před jakýmkoli useMemo/JSX, které je používá). */
   const [customers, setCustomers] = useState<CustomerListItem[]>([]);
   const [customersLoading, setCustomersLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [hoveredId, setHoveredId] = useState<number | null>(null);
-  const [expandedGpnKeys, setExpandedGpnKeys] = useState<Set<string>>(() => new Set());
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+
+  const [customerFilterId, setCustomerFilterId] = useState<string>("all");
+  const [groupFilterId, setGroupFilterId] = useState<string>("all");
+  const [logisticFilter, setLogisticFilter] = useState<string>("all");
+  const [activeOnly, setActiveOnly] = useState<boolean>(false);
+
+  /** CRUD form state. */
   const [showForm, setShowForm] = useState(false);
-  /** Režim úpravy existující položky (null = nová položka nebo kopie). */
   const [editingId, setEditingId] = useState<number | null>(null);
-  /** Zdroj pro kopírování (POST …/copy); vzájemně se vylučuje s editingId. */
   const [copySourceId, setCopySourceId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [formGpn, setFormGpn] = useState("");
@@ -98,7 +131,10 @@ export default function PortfolioPage({
   const [formLogisticMode, setFormLogisticMode] = useState("vyroba_zakaznik");
   const [formSalePrice, setFormSalePrice] = useState("");
   const [formActive, setFormActive] = useState(true);
+
   const customerRows = Array.isArray(customers) ? customers : [];
+
+  const tb = usePersistedTableLayout("portfolio_table", PORTFOLIO_TABLE_DEFAULTS);
 
   async function loadItems() {
     setLoading(true);
@@ -107,7 +143,7 @@ export default function PortfolioPage({
       const rows = await getPortfolioItems();
       setItems(rows);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Nepodarilo se nacist portfolio.");
+      setError(e instanceof Error ? e.message : "Nepodařilo se načíst portfolio.");
       setItems([]);
     } finally {
       setLoading(false);
@@ -128,7 +164,7 @@ export default function PortfolioPage({
   useEffect(() => {
     const q = initialSearchQuery?.trim();
     if (!q) return;
-    setQuery(q);
+    setSearchQuery(q);
     onConsumedInitialSearch?.();
   }, [initialSearchQuery, onConsumedInitialSearch]);
 
@@ -188,7 +224,7 @@ export default function PortfolioPage({
     }
   }, [portfolioGroups, formPortfolioGroupId]);
 
-  function buildPortfolioSearchHaystack(i: PortfolioItem): string {
+  function portfolioSearchHaystack(i: PortfolioItem): string {
     return buildSearchHaystack(
       i.gpn,
       i.scan_code,
@@ -204,48 +240,121 @@ export default function PortfolioPage({
       logisticLabel(i.logistic_mode),
       i.sale_price_per_piece != null ? String(i.sale_price_per_piece) : "",
       formatCzk(i.sale_price_per_piece),
-      i.active_template_id
+      i.active_template_id,
     );
   }
 
-  const filtered = useMemo(() => {
-    if (!normalizeSearchText(query)) return items;
-    return items.filter((i) => matchesSearchQuery(query, buildPortfolioSearchHaystack(i)));
-  }, [items, query]);
-
-  const portfolioGpnGroups = useMemo(() => {
-    const map = new Map<string, PortfolioItem[]>();
-    for (const item of filtered) {
-      const gpnRaw = (item.gpn ?? "").trim();
-      const gpnKey = gpnRaw.toLowerCase() || "—";
-      const key = `${item.customer_id}\0${gpnKey}`;
-      const arr = map.get(key);
-      if (arr) arr.push(item);
-      else map.set(key, [item]);
+  const customerOptions = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const i of items) {
+      if (!seen.has(i.customer_id)) {
+        seen.set(i.customer_id, (i.customer_name ?? `Zákazník #${i.customer_id}`).trim() || `Zákazník #${i.customer_id}`);
+      }
     }
-    const groups: { key: string; items: PortfolioItem[] }[] = [];
-    for (const [key, rawItems] of map) {
-      groups.push({ key, items: [...rawItems].sort(sortPortfolioItemsByLogisticMode) });
-    }
-    groups.sort((a, b) => {
-      const ca = (a.items[0].customer_name ?? "").toLowerCase();
-      const cb = (b.items[0].customer_name ?? "").toLowerCase();
-      if (ca !== cb) return ca.localeCompare(cb, "cs");
-      const ga = (a.items[0].gpn ?? "").trim().toLowerCase();
-      const gb = (b.items[0].gpn ?? "").trim().toLowerCase();
-      return ga.localeCompare(gb, "cs");
-    });
-    return groups;
-  }, [filtered]);
+    return Array.from(seen.entries())
+      .map(([id, name]) => ({ id: String(id), label: name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "cs"));
+  }, [items]);
 
-  function togglePortfolioGpnGroup(key: string) {
-    setExpandedGpnKeys((prev) => {
-      const n = new Set(prev);
-      if (n.has(key)) n.delete(key);
-      else n.add(key);
-      return n;
+  const groupOptions = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const i of items) {
+      if (i.group_id != null && !seen.has(i.group_id)) {
+        seen.set(i.group_id, (i.group_name ?? `Skupina #${i.group_id}`).trim() || `Skupina #${i.group_id}`);
+      }
+    }
+    return Array.from(seen.entries())
+      .map(([id, name]) => ({ id: String(id), label: name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "cs"));
+  }, [items]);
+
+  const filteredRows = useMemo(() => {
+    const q = searchQuery;
+    const hasText = !!normalizeSearchText(q);
+    return items.filter((i) => {
+      if (customerFilterId !== "all" && String(i.customer_id) !== customerFilterId) return false;
+      if (groupFilterId !== "all") {
+        if (i.group_id == null) return false;
+        if (String(i.group_id) !== groupFilterId) return false;
+      }
+      if (logisticFilter !== "all" && (i.logistic_mode ?? "").trim() !== logisticFilter) return false;
+      if (activeOnly && i.is_active === false) return false;
+      if (hasText && !matchesSearchQuery(q, portfolioSearchHaystack(i))) return false;
+      return true;
     });
-  }
+  }, [items, searchQuery, customerFilterId, groupFilterId, logisticFilter, activeOnly]);
+
+  const sortedRows = useMemo(
+    () =>
+      sortRowsWithConfig(filteredRows, tb.sort, (row, key) => {
+        switch (key) {
+          case "gpn":
+            return row.gpn ?? "";
+          case "name":
+            return row.name ?? "";
+          case "drawing_number":
+            return row.drawing_no ?? "";
+          case "revision":
+            return row.revision ?? "";
+          case "customer":
+            return row.customer_name ?? "";
+          case "group":
+            return row.group_name ?? "";
+          case "material":
+            return row.material_default ?? "";
+          case "logistic":
+            return logisticLabel(row.logistic_mode);
+          case "sale_price":
+            return row.sale_price_per_piece != null && Number.isFinite(Number(row.sale_price_per_piece))
+              ? Number(row.sale_price_per_piece)
+              : -1;
+          case "tp":
+            return row.active_template_id != null ? 1 : 0;
+          case "status":
+            return row.is_active === false ? 0 : 1;
+          default:
+            return "";
+        }
+      }),
+    [filteredRows, tb.sort],
+  );
+
+  const kpi = useMemo(() => {
+    const total = filteredRows.length;
+    const active = filteredRows.filter((i) => i.is_active !== false).length;
+    const bezTp = filteredRows.filter((i) => i.active_template_id == null).length;
+    const naSklade = filteredRows.filter((i) => (i.logistic_mode ?? "").trim() === "sklad").length;
+    return [
+      {
+        label: "Celkem položek",
+        value: String(total),
+        accent: UI.colors.primary,
+        kind: "primary" as const,
+        hint: "Počet položek v aktuálním filtru.",
+      },
+      {
+        label: "Aktivní",
+        value: String(active),
+        accent: UI.colors.okFg,
+        kind: "success" as const,
+        hint: "Položky s příznakem Aktivní.",
+      },
+      {
+        label: "Bez TP",
+        value: String(bezTp),
+        accent: UI.colors.problemFg,
+        kind: "danger" as const,
+        hint: "Položky bez aktivní technologie.",
+      },
+      {
+        label: "Na skladě",
+        value: String(naSklade),
+        accent: UI.colors.neutralFg,
+        kind: "neutral" as const,
+        hint: "Položky v režimu Sklad.",
+      },
+    ] as const;
+  }, [filteredRows]);
 
   const customerSelectHasCurrent = useMemo(() => {
     const id = Number(formCustomerId);
@@ -253,28 +362,11 @@ export default function PortfolioPage({
     return customerRows.some((c) => c.id === id);
   }, [formCustomerId, customerRows]);
 
-  const kpi = useMemo(() => {
-    const celkemPolozek = filtered.length;
-    const skupinyPortfolio = new Set(filtered.map((i) => i.group_id).filter((v): v is number => v != null)).size;
-    const skupinyGpn = portfolioGpnGroups.length;
-    const sTechnologii = filtered.filter((i) => i.active_template_id != null).length;
-    const bezTechnologie = filtered.filter((i) => i.active_template_id == null).length;
-    const revize = "A / B / C";
-
-    return [
-      { label: "Celkem položek", value: String(celkemPolozek) },
-      { label: "Skupiny GPN (řádky)", value: String(skupinyGpn) },
-      { label: "Skupiny portfolia", value: String(skupinyPortfolio) },
-      { label: "Revize", value: revize },
-      { label: "S technologií", value: String(sTechnologii) },
-      { label: "Bez technologie", value: String(bezTechnologie) },
-    ] as const;
-  }, [filtered, portfolioGpnGroups.length]);
-
-  const customerIdOptions = useMemo(
+  const customerIdOptionsForForm = useMemo(
     () => Array.from(new Set(items.map((i) => i.customer_id))).sort((a, b) => a - b),
-    [items]
+    [items],
   );
+
   function openCreateForm() {
     setEditingId(null);
     setCopySourceId(null);
@@ -284,9 +376,9 @@ export default function PortfolioPage({
     setFormCustomerId(
       firstMaster != null
         ? String(firstMaster.id)
-        : customerIdOptions[0] != null
-          ? String(customerIdOptions[0])
-          : ""
+        : customerIdOptionsForForm[0] != null
+          ? String(customerIdOptionsForForm[0])
+          : "",
     );
     setFormPortfolioGroupId(null);
     setFormDrawingNo("");
@@ -314,12 +406,6 @@ export default function PortfolioPage({
     setShowForm(true);
   }
 
-  function closeForm() {
-    setShowForm(false);
-    setEditingId(null);
-    setCopySourceId(null);
-  }
-
   function openCopyForm(item: PortfolioItem) {
     setEditingId(null);
     setCopySourceId(item.id);
@@ -336,6 +422,12 @@ export default function PortfolioPage({
     setFormActive(item.is_active ?? true);
     setError(null);
     setShowForm(true);
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingId(null);
+    setCopySourceId(null);
   }
 
   async function handleSave() {
@@ -397,11 +489,111 @@ export default function PortfolioPage({
     }
   }
 
+  function openItem(item: PortfolioItem) {
+    if (onOpenItemInWorkspaceTab) onOpenItemInWorkspaceTab(item);
+    else onOpenItemDetail?.(item);
+  }
+
+  function renderCell(key: string, row: PortfolioItem): React.ReactNode {
+    switch (key) {
+      case "gpn":
+        return (
+          <span onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="erp-table-link"
+              style={{ ...UI.tableLinkButtonReset, fontWeight: 900, textDecoration: "none" }}
+              onClick={() => openItem(row)}
+            >
+              {dash(row.gpn)}
+            </button>
+          </span>
+        );
+      case "name":
+        return dash(row.name);
+      case "drawing_number":
+        return dash(row.drawing_no);
+      case "revision":
+        return dash(row.revision);
+      case "customer":
+        return dash(row.customer_name);
+      case "group":
+        return dash(row.group_name);
+      case "material":
+        return dash(row.material_default);
+      case "logistic":
+        return (
+          <span className="erp-status-badge" style={logisticBadgeStyle(row.logistic_mode)}>
+            {logisticLabel(row.logistic_mode)}
+          </span>
+        );
+      case "sale_price":
+        return formatCzk(row.sale_price_per_piece);
+      case "tp": {
+        const hasTp = row.active_template_id != null;
+        return (
+          <span className="erp-status-badge" style={tpBadgeStyle(hasTp)}>
+            {hasTp ? "ANO" : "NE"}
+          </span>
+        );
+      }
+      case "status": {
+        const active = row.is_active !== false;
+        return (
+          <span className="erp-status-badge" style={activeBadgeStyle(active)}>
+            {active ? "Aktivní" : "Neaktivní"}
+          </span>
+        );
+      }
+      case "actions":
+        return (
+          <span
+            onClick={(e) => e.stopPropagation()}
+            style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}
+          >
+            <button
+              type="button"
+              className="erp-row-lift"
+              style={{ ...UI.buttons.secondary, padding: "4px 10px", fontSize: 12 }}
+              onClick={() => openEditForm(row)}
+            >
+              Upravit
+            </button>
+            <button
+              type="button"
+              className="erp-row-lift"
+              style={{ ...UI.buttons.secondary, padding: "4px 10px", fontSize: 12 }}
+              onClick={() => openCopyForm(row)}
+            >
+              Kopírovat
+            </button>
+            <button
+              type="button"
+              className="erp-row-lift"
+              style={{ ...UI.buttons.secondary, padding: "4px 10px", fontSize: 12 }}
+              onClick={() => handleDelete(row.id)}
+            >
+              Smazat
+            </button>
+          </span>
+        );
+      default:
+        return "—";
+    }
+  }
+
+  const hasAnyFilter =
+    customerFilterId !== "all" ||
+    groupFilterId !== "all" ||
+    logisticFilter !== "all" ||
+    activeOnly ||
+    normalizeSearchText(searchQuery).length > 0;
+
   return (
-    <PageContainer style={{ paddingTop: 10 }}>
+    <PageContainer className="erp-overview-page" style={{ paddingTop: 10, background: UI.colors.pageBg, minHeight: "100%" }}>
       <PageHeader
-        title="Portfolio"
-        subtitle="Přehled portfolia výrobků"
+        title="Portfolio výrobků"
+        subtitle="Přehled portfolia napříč zákazníky — GPN, výkresy, revize, logistický režim a stav technologie."
         actions={
           <>
             <button
@@ -412,420 +604,416 @@ export default function PortfolioPage({
             >
               Nová položka
             </button>
-            <button type="button" style={UI.buttons.secondary} onClick={() => {}}>
-              Import
-            </button>
           </>
         }
       />
 
-      <div style={UI.summaryTilesGridOuter}>
+      <div style={{ ...UI.summaryTilesGridOuter, marginTop: 4 }}>
         <div
           style={{
-            ...UI.summaryTilesGridSix,
-            gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
-            minWidth: 0,
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: 12,
+            alignItems: "stretch",
+            minWidth: 720,
             width: "100%",
+            boxSizing: "border-box",
           }}
         >
-          {kpi.map((tile) => (
-            <div key={tile.label} style={UI.summaryTile}>
-              <div style={UI.summaryTileLabel}>{tile.label}</div>
-              <div style={UI.summaryTileValue}>{tile.value}</div>
+          {kpi.map((t) => (
+            <div
+              key={t.label}
+              className="erp-kpi-tile"
+              style={{
+                ...UI.overviewKpiTile,
+                borderLeftColor: t.accent,
+                background: erpKpiTileBackground(t.kind),
+                boxShadow: `${UI.overviewKpiTile.boxShadow as string}, inset 0 1px 0 rgba(255, 255, 255, 0.9)`,
+              }}
+            >
+              <div style={UI.overviewKpiLabel}>{t.label}</div>
+              <div style={{ ...UI.overviewKpiValue, fontSize: 31, lineHeight: 1.05 }}>{t.value}</div>
+              <div style={UI.overviewKpiHint}>{t.hint}</div>
             </div>
           ))}
         </div>
       </div>
 
-      <PageSection>
-        <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
-          {showForm ? (
-            <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-              <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: copySourceId != null ? 6 : 10 }}>
-                {copySourceId != null
-                  ? "Kopie portfolio položky"
-                  : editingId == null
-                    ? "Nová portfolio položka"
-                    : "Upravit portfolio položku"}
+      {showForm ? (
+        <PageSection gapTop={12}>
+          <div
+            style={{
+              ...UI.card,
+              borderRadius: 14,
+              padding: 16,
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          >
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: copySourceId != null ? 6 : 10 }}>
+              {copySourceId != null
+                ? "Kopie portfolio položky"
+                : editingId == null
+                  ? "Nová portfolio položka"
+                  : "Upravit portfolio položku"}
+            </div>
+            {copySourceId != null ? (
+              <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10, fontWeight: 600 }}>
+                Zdroj: {items.find((i) => i.id === copySourceId)?.gpn ?? `#${copySourceId}`}
               </div>
-              {copySourceId != null ? (
-                <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10, fontWeight: 600 }}>
-                  Zdroj: {items.find((i) => i.id === copySourceId)?.gpn ?? `#${copySourceId}`}
-                </div>
-              ) : null}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-                <div>
-                  <div style={UI.inputs.label}>GPN</div>
-                  <input value={formGpn} onChange={(e) => setFormGpn(e.target.value)} style={UI.inputs.base} />
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Název</div>
-                  <input value={formName} onChange={(e) => setFormName(e.target.value)} style={UI.inputs.base} />
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Zákazník</div>
-                  <select
-                    value={formCustomerId}
-                    onChange={(e) => setFormCustomerId(e.target.value)}
-                    style={UI.inputs.base}
-                    disabled={customersLoading || customerRows.length === 0}
-                  >
-                    {customersLoading ? (
-                      <option value="">Načítám…</option>
-                    ) : customerRows.length === 0 ? (
-                      <option value="">Žádný zákazník</option>
-                    ) : (
-                      <>
-                        <option value="">Vyberte zákazníka</option>
-                        {!customerSelectHasCurrent && formCustomerId.trim() ? (
-                          <option value={formCustomerId}>Zákazník #{formCustomerId}</option>
-                        ) : null}
-                        {customerRows.map((c) => (
-                          <option key={c.id} value={String(c.id)}>
-                            {c.name}
-                            {!c.is_active ? " (neaktivní)" : ""}
-                          </option>
-                        ))}
-                      </>
-                    )}
-                  </select>
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Skupina</div>
-                  <select
-                    value={formPortfolioGroupId == null ? "" : String(formPortfolioGroupId)}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setFormPortfolioGroupId(v === "" ? null : Number(v));
-                    }}
-                    style={UI.inputs.base}
-                    disabled={
-                      groupsLoading ||
-                      !formCustomerId.trim() ||
-                      !Number.isFinite(Number(formCustomerId)) ||
-                      Number(formCustomerId) <= 0
-                    }
-                  >
-                    <option value="">Bez skupiny</option>
-                    {portfolioGroups.map((g) => (
-                      <option key={g.id} value={String(g.id)}>
-                        {g.code ? `${g.name} (${g.code})` : g.name}
-                      </option>
-                    ))}
-                  </select>
-                  {groupsLoading ? (
-                    <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>Načítám skupiny…</div>
-                  ) : null}
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Výkres</div>
-                  <input value={formDrawingNo} onChange={(e) => setFormDrawingNo(e.target.value)} style={UI.inputs.base} />
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Revize</div>
-                  <input value={formRevision} onChange={(e) => setFormRevision(e.target.value)} style={UI.inputs.base} />
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Materiál</div>
-                  <input
-                    value={formMaterialDefault}
-                    onChange={(e) => setFormMaterialDefault(e.target.value)}
-                    style={UI.inputs.base}
-                  />
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Logistický režim</div>
-                  <select value={formLogisticMode} onChange={(e) => setFormLogisticMode(e.target.value)} style={UI.inputs.base}>
-                    <option value="vyroba_zakaznik">Výroba zákazník</option>
-                    <option value="sklad_zakaznik">Sklad zákazník</option>
-                    <option value="sklad">Sklad</option>
-                  </select>
-                </div>
-                <div>
-                  <div style={UI.inputs.label}>Prodejní cena / ks (bez DPH)</div>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="any"
-                    value={formSalePrice}
-                    onChange={(e) => setFormSalePrice(e.target.value)}
-                    style={UI.inputs.base}
-                    placeholder="—"
-                  />
-                </div>
-                <div style={{ display: "flex", alignItems: "center", paddingTop: 20 }}>
-                  <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}>
-                    <input type="checkbox" checked={formActive} onChange={(e) => setFormActive(e.target.checked)} />
-                    Aktivní
-                  </label>
-                </div>
+            ) : null}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+              <div>
+                <div style={UI.inputs.label}>GPN</div>
+                <input value={formGpn} onChange={(e) => setFormGpn(e.target.value)} style={UI.inputs.base} />
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <button
-                  type="button"
-                  style={{ ...UI.buttons.primary, ...(saving ? { opacity: 0.7, cursor: "wait" } : {}) }}
-                  onClick={handleSave}
-                  disabled={saving}
+              <div>
+                <div style={UI.inputs.label}>Název</div>
+                <input value={formName} onChange={(e) => setFormName(e.target.value)} style={UI.inputs.base} />
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Zákazník</div>
+                <select
+                  value={formCustomerId}
+                  onChange={(e) => setFormCustomerId(e.target.value)}
+                  style={UI.inputs.base}
+                  disabled={customersLoading || customerRows.length === 0}
                 >
-                  {saving
-                    ? "Ukládám..."
-                    : copySourceId != null
-                      ? "Uložit kopii"
-                      : editingId == null
-                        ? "Uložit položku"
-                        : "Uložit změny"}
-                </button>
-                <button type="button" style={UI.buttons.secondary} onClick={closeForm} disabled={saving}>
-                  Zrušit
-                </button>
+                  {customersLoading ? (
+                    <option value="">Načítám…</option>
+                  ) : customerRows.length === 0 ? (
+                    <option value="">Žádný zákazník</option>
+                  ) : (
+                    <>
+                      <option value="">Vyberte zákazníka</option>
+                      {!customerSelectHasCurrent && formCustomerId.trim() ? (
+                        <option value={formCustomerId}>Zákazník #{formCustomerId}</option>
+                      ) : null}
+                      {customerRows.map((c) => (
+                        <option key={c.id} value={String(c.id)}>
+                          {c.name}
+                          {!c.is_active ? " (neaktivní)" : ""}
+                        </option>
+                      ))}
+                    </>
+                  )}
+                </select>
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Skupina</div>
+                <select
+                  value={formPortfolioGroupId == null ? "" : String(formPortfolioGroupId)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setFormPortfolioGroupId(v === "" ? null : Number(v));
+                  }}
+                  style={UI.inputs.base}
+                  disabled={
+                    groupsLoading ||
+                    !formCustomerId.trim() ||
+                    !Number.isFinite(Number(formCustomerId)) ||
+                    Number(formCustomerId) <= 0
+                  }
+                >
+                  <option value="">Bez skupiny</option>
+                  {portfolioGroups.map((g) => (
+                    <option key={g.id} value={String(g.id)}>
+                      {g.code ? `${g.name} (${g.code})` : g.name}
+                    </option>
+                  ))}
+                </select>
+                {groupsLoading ? (
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>Načítám skupiny…</div>
+                ) : null}
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Výkres</div>
+                <input value={formDrawingNo} onChange={(e) => setFormDrawingNo(e.target.value)} style={UI.inputs.base} />
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Revize</div>
+                <input value={formRevision} onChange={(e) => setFormRevision(e.target.value)} style={UI.inputs.base} />
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Materiál</div>
+                <input
+                  value={formMaterialDefault}
+                  onChange={(e) => setFormMaterialDefault(e.target.value)}
+                  style={UI.inputs.base}
+                />
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Logistický režim</div>
+                <select value={formLogisticMode} onChange={(e) => setFormLogisticMode(e.target.value)} style={UI.inputs.base}>
+                  <option value="vyroba_zakaznik">Výroba zákazník</option>
+                  <option value="sklad_zakaznik">Sklad zákazník</option>
+                  <option value="sklad">Sklad</option>
+                </select>
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Prodejní cena / ks (bez DPH)</div>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="any"
+                  value={formSalePrice}
+                  onChange={(e) => setFormSalePrice(e.target.value)}
+                  style={UI.inputs.base}
+                  placeholder="—"
+                />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", paddingTop: 20 }}>
+                <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}>
+                  <input type="checkbox" checked={formActive} onChange={(e) => setFormActive(e.target.checked)} />
+                  Aktivní
+                </label>
               </div>
             </div>
-          ) : null}
-
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Hledat GPN, název, výkres, revizi…"
-              style={UI.inputs.base}
-            />
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button
+                type="button"
+                style={{ ...UI.buttons.primary, ...(saving ? { opacity: 0.7, cursor: "wait" } : {}) }}
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving
+                  ? "Ukládám..."
+                  : copySourceId != null
+                    ? "Uložit kopii"
+                    : editingId == null
+                      ? "Uložit položku"
+                      : "Uložit změny"}
+              </button>
+              <button type="button" style={UI.buttons.secondary} onClick={closeForm} disabled={saving}>
+                Zrušit
+              </button>
+            </div>
           </div>
+        </PageSection>
+      ) : null}
 
-          {loading ? <div style={UI.sectionSubtitle}>Načítám portfolio...</div> : null}
-          {error ? <div style={{ color: "#b91c1c", fontWeight: 700 }}>{error}</div> : null}
-
-          {!loading && !error && items.length === 0 ? (
+      <PageSection gapTop={16}>
+        <div style={UI.overviewMainCard}>
+          <div style={UI.overviewCardHeaderBand}>
             <div
               style={{
-                textAlign: "center",
-                color: "#64748b",
-                fontWeight: 700,
-                padding: "24px 12px",
-                border: "1px solid #e2e8f0",
-                borderRadius: 12,
-                background: "#f8fafc",
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 0,
               }}
             >
-              Portfolio je zatím prázdné. Po vytvoření reálných položek v backendu se zde zobrazí seznam.
-            </div>
-          ) : null}
+              <OverviewSloupceButton onClick={() => tb.openPanel()} disabled={loading} />
 
-          {!loading && !error && items.length > 0 ? (
-            <div style={{ overflowX: "auto" }}>
-              <table style={UI.table}>
-                <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    <th style={{ ...UI.th, width: 44, fontSize: 13, padding: "10px 6px" }} aria-label="Rozbalit varianty" />
-                    {[
-                      "GPN",
-                      "Scan kód",
-                      "Název",
-                      "Zákazník",
-                      "Skupina",
-                      "Výkres",
-                      "Revize",
-                      "Materiál",
-                      "Logistický režim",
-                      "Prodejní cena / ks",
-                      "Technologie",
-                      "Akce",
-                    ].map((h) => (
-                      <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {portfolioGpnGroups.map((g) => {
-                    const exp = expandedGpnKeys.has(g.key);
-                    const first = g.items[0];
-                    const variantSummary = g.items.map((i) => logisticLabel(i.logistic_mode)).join(" · ");
-                    const nameCell =
-                      g.items.length > 1 && !allSame(g.items, (i) => (i.name ?? "").trim())
-                        ? `${dash(first.name)} (+${g.items.length} variant)`
-                        : dash(first.name);
-                    const drawingCell = allSame(g.items, (i) => (i.drawing_no ?? "").trim())
-                      ? dash(first.drawing_no)
-                      : "různé";
-                    const revCell = allSame(g.items, (i) => (i.revision ?? "").trim())
-                      ? dash(first.revision)
-                      : "různé";
-                    const matCell = allSame(g.items, (i) => (i.material_default ?? "").trim())
-                      ? dash(first.material_default)
-                      : "různé";
-                    const priceCell = allSame(g.items, (i) => i.sale_price_per_piece)
-                      ? formatCzk(first.sale_price_per_piece)
-                      : "různé";
-                    const allTp = g.items.every((i) => i.active_template_id != null);
-                    const anyTp = g.items.some((i) => i.active_template_id != null);
-                    return (
-                      <React.Fragment key={g.key}>
-                        <tr style={{ background: "#f8fafc", borderLeft: "4px solid #0ea5e9" }}>
-                          <td style={{ ...UI.td, padding: "8px 6px", verticalAlign: "middle" }}>
-                            <button
-                              type="button"
-                              style={UI.buttons.secondary}
-                              onClick={() => togglePortfolioGpnGroup(g.key)}
-                              aria-expanded={exp}
-                              title={exp ? "Sbalit varianty logistiky" : "Rozbalit varianty logistiky"}
-                            >
-                              {exp ? "▼" : "▶"}
-                            </button>
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
-                            {dash(first.gpn)}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", color: "#64748b" }}>
-                            {g.items.length > 1 ? `${g.items.length}×` : dash(first.scan_code)}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px" }}>{nameCell}</td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                            {dash(first.customer_name)}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{dash(first.group_name)}</td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{drawingCell}</td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{revCell}</td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{matCell}</td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontSize: 12, fontWeight: 700 }}>
-                            {variantSummary}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{priceCell}</td>
-                          <td
+              <span style={{ fontSize: 13, fontWeight: 800, color: UI.colors.tableHeadText, marginLeft: 6 }}>
+                Zákazník:
+              </span>
+              <select
+                value={customerFilterId}
+                onChange={(e) => {
+                  setCustomerFilterId(e.target.value);
+                  setGroupFilterId("all");
+                }}
+                style={{ ...UI.inputs.base, minWidth: 180, maxWidth: 240 }}
+                disabled={loading}
+              >
+                <option value="all">Vše</option>
+                {customerOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+
+              <span style={{ fontSize: 13, fontWeight: 800, color: UI.colors.tableHeadText }}>Skupina:</span>
+              <select
+                value={groupFilterId}
+                onChange={(e) => setGroupFilterId(e.target.value)}
+                style={{ ...UI.inputs.base, minWidth: 160, maxWidth: 220 }}
+                disabled={loading || groupOptions.length === 0}
+              >
+                <option value="all">Vše</option>
+                {groupOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+
+              <span style={{ fontSize: 13, fontWeight: 800, color: UI.colors.tableHeadText }}>Logistický režim:</span>
+              {LOGISTIC_MODE_OPTIONS.map((o) => {
+                const active = logisticFilter === o.id;
+                return (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => setLogisticFilter(o.id)}
+                    disabled={loading}
+                    style={{ ...UI.ordersFilterChip, ...(active ? UI.ordersFilterChipActive : {}) }}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => setActiveOnly((v) => !v)}
+                disabled={loading}
+                style={{ ...UI.ordersFilterChip, ...(activeOnly ? UI.ordersFilterChipActiveOk : {}) }}
+                title="Skrýt neaktivní položky"
+              >
+                Jen aktivní
+              </button>
+
+              {hasAnyFilter ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomerFilterId("all");
+                    setGroupFilterId("all");
+                    setLogisticFilter("all");
+                    setActiveOnly(false);
+                    setSearchQuery("");
+                  }}
+                  style={{ ...UI.buttons.secondary, padding: "6px 12px", fontSize: 12 }}
+                >
+                  Vynulovat filtry
+                </button>
+              ) : null}
+            </div>
+
+            {!loading && items.length > 0 ? (
+              <div style={UI.overviewSecondaryFilterRow}>
+                <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 360px", minWidth: 240 }}>
+                  <input
+                    className="erp-overview-search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onFocus={() => setSearchFocused(true)}
+                    onBlur={() => setSearchFocused(false)}
+                    placeholder="Hledat GPN, název, výkres, revizi, zákazníka, materiál…"
+                    aria-label="Fulltextové hledání v portfoliu"
+                    style={{
+                      ...UI.inputs.overviewSearch,
+                      ...(searchFocused ? UI.inputs.overviewSearchFocus : {}),
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div style={UI.overviewCardBody}>
+            {loading ? <div style={UI.overviewStateLoading}>Načítám portfolio…</div> : null}
+            {!loading && error ? <div style={UI.overviewStateError}>{error}</div> : null}
+            {!loading && !error && items.length === 0 ? (
+              <div style={UI.overviewEmptyInCard}>
+                Portfolio je zatím prázdné. Po vytvoření reálných položek se zde zobrazí seznam.
+              </div>
+            ) : null}
+
+            {!loading && !error && items.length > 0 ? (
+              <>
+                {tb.loadError ? <div style={UI.overviewStateWarn}>{tb.loadError}</div> : null}
+                <div className="erp-table-wrap" style={UI.overviewTableWrap}>
+                  <table style={UI.table}>
+                    <thead>
+                      <tr style={UI.overviewTableHeadRow}>
+                        {tb.visibleColumns.map((col) => (
+                          <th
+                            key={col.key}
                             style={{
-                              ...UI.td,
-                              padding: "10px 10px",
+                              ...UI.th,
                               whiteSpace: "nowrap",
-                              fontWeight: 900,
-                              color: allTp ? "#15803d" : anyTp ? "#ca8a04" : "#dc2626",
+                              padding: `${tb.cellPaddingPx}px`,
+                              width: col.width ?? undefined,
+                              textAlign: col.key === "sale_price" ? "right" : "left",
                             }}
                           >
-                            {allTp ? "ANO" : anyTp ? "ČÁST." : "NE"}
-                          </td>
-                          <td style={{ ...UI.td, padding: "10px 10px", color: "#64748b", fontSize: 12 }}>
-                            Rozbalte řádek
+                            {col.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedRows.map((row) => (
+                        <tr
+                          key={row.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openItem(row)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openItem(row);
+                            }
+                          }}
+                          style={{ cursor: "pointer", background: UI.colors.card }}
+                        >
+                          {tb.visibleColumns.map((col) => (
+                            <td
+                              key={col.key}
+                              style={{
+                                ...UI.td,
+                                padding: `${tb.cellPaddingPx}px`,
+                                whiteSpace: col.key === "name" ? "normal" : "nowrap",
+                                textAlign: col.key === "sale_price" ? "right" : "left",
+                                fontVariantNumeric: col.key === "sale_price" ? ("tabular-nums" as const) : undefined,
+                                fontWeight: col.key === "gpn" ? 900 : undefined,
+                                color: UI.colors.textPrimary,
+                              }}
+                            >
+                              {renderCell(col.key, row)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                      {filteredRows.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={Math.max(1, tb.visibleColumns.length)}
+                            style={{
+                              ...UI.td,
+                              textAlign: "center",
+                              color: UI.colors.textSecondary,
+                              padding: "24px 12px",
+                            }}
+                          >
+                            Žádné výsledky pro zvolené filtry nebo hledání.
                           </td>
                         </tr>
-                        {exp ? (
-                          <tr>
-                            <td colSpan={13} style={{ ...UI.td, background: "#fff", padding: 12 }}>
-                              <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8, color: "#0f172a" }}>
-                                Varianty logistiky (stejné GPN a zákazník)
-                              </div>
-                              <div style={{ overflowX: "auto" }}>
-                                <table style={{ ...UI.table, width: "100%" }}>
-                                  <thead>
-                                    <tr style={{ background: "#f1f5f9" }}>
-                                      {[
-                                        "Logistický režim",
-                                        "Scan kód",
-                                        "Název",
-                                        "Skupina",
-                                        "Výkres",
-                                        "Revize",
-                                        "Materiál",
-                                        "Prodejní cena / ks",
-                                        "Technologie",
-                                        "Akce",
-                                      ].map((h) => (
-                                        <th key={h} style={{ ...UI.th, fontSize: 11 }}>
-                                          {h}
-                                        </th>
-                                      ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {g.items.map((item) => (
-                                      <tr
-                                        key={item.id}
-                                        onClick={() => {
-                                          if (onOpenItemInWorkspaceTab) onOpenItemInWorkspaceTab(item);
-                                          else onOpenItemDetail?.(item);
-                                        }}
-                                        onMouseEnter={() => setHoveredId(item.id)}
-                                        onMouseLeave={() => setHoveredId((id) => (id === item.id ? null : id))}
-                                        style={{
-                                          cursor: "pointer",
-                                          background: hoveredId === item.id ? "#eff6ff" : "#fff",
-                                        }}
-                                      >
-                                        <td style={{ ...UI.td, fontWeight: 800, whiteSpace: "nowrap" }}>
-                                          {logisticLabel(item.logistic_mode)}
-                                        </td>
-                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.scan_code)}</td>
-                                        <td style={UI.td}>{dash(item.name)}</td>
-                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.group_name)}</td>
-                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.drawing_no)}</td>
-                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.revision)}</td>
-                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{dash(item.material_default)}</td>
-                                        <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{formatCzk(item.sale_price_per_piece)}</td>
-                                        <td
-                                          style={{
-                                            ...UI.td,
-                                            whiteSpace: "nowrap",
-                                            fontWeight: 900,
-                                            color: item.active_template_id != null ? "#15803d" : "#dc2626",
-                                          }}
-                                        >
-                                          {item.active_template_id != null ? "ANO" : "NE"}
-                                        </td>
-                                        <td
-                                          style={{
-                                            ...UI.td,
-                                            whiteSpace: "nowrap",
-                                            display: "flex",
-                                            gap: 6,
-                                            flexWrap: "wrap",
-                                          }}
-                                          onClick={(e) => e.stopPropagation()}
-                                        >
-                                          <button
-                                            type="button"
-                                            style={UI.buttons.secondary}
-                                            onClick={() => openCopyForm(item)}
-                                          >
-                                            Kopírovat
-                                          </button>
-                                          <button
-                                            type="button"
-                                            style={UI.buttons.secondary}
-                                            onClick={() => openEditForm(item)}
-                                          >
-                                            Upravit
-                                          </button>
-                                          <button
-                                            type="button"
-                                            style={UI.buttons.secondary}
-                                            onClick={() => handleDelete(item.id)}
-                                          >
-                                            Smazat
-                                          </button>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </td>
-                          </tr>
-                        ) : null}
-                      </React.Fragment>
-                    );
-                  })}
-                  {filtered.length === 0 ? (
-                    <tr>
-                      <td colSpan={13} style={{ ...UI.td, textAlign: "center", color: "#64748b", padding: "14px 10px" }}>
-                        Žádné výsledky.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : null}
+          </div>
         </div>
+
+        <TableLayoutModal
+          open={tb.panelOpen}
+          title="Sloupce — portfolio"
+          columns={tb.columns}
+          onColumnsChange={tb.setColumns}
+          sort={tb.sort}
+          onSortChange={tb.setSort}
+          sortableKeys={tb.sortableKeys}
+          columnLabels={PORTFOLIO_COL_LABELS}
+          density={tb.density}
+          onDensityChange={tb.setDensity}
+          onCancel={tb.closePanelCancel}
+          onSave={() => void tb.savePanel()}
+          onResetLocal={tb.resetLocalToDefaults}
+          onResetAndSave={() => void tb.resetAndSave()}
+          saving={tb.saving}
+          errorMessage={tb.saveError}
+        />
       </PageSection>
     </PageContainer>
   );
 }
-

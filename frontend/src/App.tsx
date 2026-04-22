@@ -10,7 +10,6 @@ import PortfolioPage from "./pages/PortfolioPage";
 import MaterialStockPage from "./pages/MaterialStockPage";
 import ProductStockPage from "./pages/ProductStockPage";
 import ProductionOrdersPage from "./pages/ProductionOrdersPage";
-import ProductionOrderDetailPage from "./pages/ProductionOrderDetailPage";
 import MaterialRequirementsPage from "./pages/MaterialRequirementsPage";
 import MaterialPurchaseOrdersPage from "./pages/MaterialPurchaseOrdersPage";
 import PlannerPage from "./pages/PlannerPage";
@@ -41,18 +40,308 @@ import { ERP_NAV_GROUPS } from "./navigation/erpNavConfig";
 import { applyNavOrder } from "./navigation/applyNavOrder";
 import { getNavSidebarOrder } from "./services/navSidebarOrderApi";
 import NavSidebarOrderPage from "./pages/NavSidebarOrderPage";
+import UsersLibraryPage from "./pages/UsersLibraryPage";
 import {
   filterNavGroupsByRole,
   readStoredErpRole,
   writeStoredErpRole,
   type ErpRole,
 } from "./auth/rbac";
+import { getAuthToken } from "./auth/authToken";
+import { setUiActorIdentifier } from "./auth/uiActor";
+import { refreshCurrentUser, useCurrentUser } from "./auth/useCurrentUser";
+import { changeMyPassword, logout as apiLogout } from "./services/authApi";
 
 function ModulePlaceholderPage({ moduleName }: { moduleName: string }) {
   return (
     <div style={{ paddingTop: 18 }}>
       <div style={UI.sectionTitle}>{moduleName}</div>
       <div style={UI.sectionSubtitle}>Modul je ve vývoji</div>
+    </div>
+  );
+}
+
+function TopBarSessionBadge({
+  user,
+  onLogout,
+}: {
+  user: { username: string | null; displayName: string | null; loaded: boolean };
+  onLogout: () => void;
+}) {
+  const label = (user.displayName || user.username || "").trim();
+  const initials = label
+    ? label
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((p) => p[0])
+        .filter(Boolean)
+        .join("")
+        .toUpperCase()
+    : "??";
+
+  const [pwdOpen, setPwdOpen] = useState(false);
+  const [pwdOld, setPwdOld] = useState("");
+  const [pwdNew, setPwdNew] = useState("");
+  const [pwdConfirm, setPwdConfirm] = useState("");
+  const [pwdSaving, setPwdSaving] = useState(false);
+  const [pwdError, setPwdError] = useState<string | null>(null);
+  const [pwdSuccess, setPwdSuccess] = useState<string | null>(null);
+
+  function openPwdDialog() {
+    setPwdOpen(true);
+    setPwdOld("");
+    setPwdNew("");
+    setPwdConfirm("");
+    setPwdError(null);
+    setPwdSuccess(null);
+  }
+
+  function closePwdDialog() {
+    setPwdOpen(false);
+    setPwdSaving(false);
+  }
+
+  async function handleChangePassword() {
+    const oldValue = pwdOld;
+    const newValue = pwdNew.trim();
+    if (newValue.length < 4) {
+      setPwdError("Nové heslo musí mít alespoň 4 znaky.");
+      return;
+    }
+    if (newValue !== pwdConfirm.trim()) {
+      setPwdError("Nové heslo a potvrzení se neshodují.");
+      return;
+    }
+    setPwdError(null);
+    setPwdSuccess(null);
+    setPwdSaving(true);
+    try {
+      await changeMyPassword(oldValue, newValue);
+      setPwdSuccess("Heslo bylo úspěšně změněno.");
+      setPwdOld("");
+      setPwdNew("");
+      setPwdConfirm("");
+    } catch (e: unknown) {
+      setPwdError(e instanceof Error ? e.message : "Změna hesla selhala.");
+    } finally {
+      setPwdSaving(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {label ? (
+        <div
+          title={label}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "3px 8px 3px 3px",
+            borderRadius: 999,
+            background: "#F1F5F9",
+            border: "1px solid #E2E8F0",
+            color: "#334155",
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: "0.02em",
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: "50%",
+              background: "linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)",
+              color: "#FFFFFF",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 10,
+              fontWeight: 900,
+              letterSpacing: 0,
+            }}
+          >
+            {initials}
+          </span>
+          <span
+            style={{
+              maxWidth: 180,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {label}
+          </span>
+        </div>
+      ) : null}
+      <button
+        type="button"
+        onClick={openPwdDialog}
+        title="Změnit heslo"
+        style={{
+          padding: "4px 10px",
+          fontSize: 11,
+          fontWeight: 800,
+          color: "#334155",
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 8,
+          cursor: "pointer",
+          letterSpacing: "0.02em",
+        }}
+      >
+        Heslo
+      </button>
+      <button
+        type="button"
+        onClick={onLogout}
+        title="Odhlásit se"
+        style={{
+          padding: "4px 10px",
+          fontSize: 11,
+          fontWeight: 800,
+          color: "#334155",
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 8,
+          cursor: "pointer",
+          letterSpacing: "0.02em",
+        }}
+      >
+        Odhlásit
+      </button>
+
+      {pwdOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={closePwdDialog}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 420,
+              background: "#ffffff",
+              borderRadius: 14,
+              border: "1px solid #e2e8f0",
+              padding: 18,
+              boxShadow: "0 24px 60px -24px rgba(15, 23, 42, 0.35)",
+              fontSize: 13,
+              color: "#0F172A",
+            }}
+          >
+            <div style={{ fontWeight: 900, fontSize: 16, color: "#0F172A" }}>Změna hesla</div>
+            <div style={{ marginTop: 2, color: "#64748B", fontSize: 12 }}>
+              {label ? `Přihlášen jako ${label}.` : ""} Nové heslo se aplikuje
+              okamžitě; stávající sessions zůstanou platné.
+            </div>
+
+            <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+              <div>
+                <div style={UI.inputs.label}>Stávající heslo</div>
+                <input
+                  type="password"
+                  value={pwdOld}
+                  onChange={(e) => setPwdOld(e.target.value)}
+                  style={UI.inputs.base}
+                  autoComplete="current-password"
+                  autoFocus
+                />
+                <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>
+                  Nechejte prázdné, pokud heslo ještě nemáte nastavené.
+                </div>
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Nové heslo</div>
+                <input
+                  type="password"
+                  value={pwdNew}
+                  onChange={(e) => setPwdNew(e.target.value)}
+                  style={UI.inputs.base}
+                  autoComplete="new-password"
+                />
+              </div>
+              <div>
+                <div style={UI.inputs.label}>Potvrdit nové heslo</div>
+                <input
+                  type="password"
+                  value={pwdConfirm}
+                  onChange={(e) => setPwdConfirm(e.target.value)}
+                  style={UI.inputs.base}
+                  autoComplete="new-password"
+                />
+              </div>
+            </div>
+
+            {pwdError ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: "#FEF2F2",
+                  border: "1px solid #FECACA",
+                  color: "#B91C1C",
+                  fontWeight: 700,
+                  fontSize: 13,
+                }}
+              >
+                {pwdError}
+              </div>
+            ) : null}
+
+            {pwdSuccess ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: "#ECFDF5",
+                  border: "1px solid #A7F3D0",
+                  color: "#047857",
+                  fontWeight: 700,
+                  fontSize: 13,
+                }}
+              >
+                {pwdSuccess}
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={closePwdDialog}
+                disabled={pwdSaving}
+              >
+                Zavřít
+              </button>
+              <button
+                type="button"
+                style={{ ...UI.buttons.primary, ...(pwdSaving ? { opacity: 0.7, cursor: "wait" } : {}) }}
+                onClick={handleChangePassword}
+                disabled={pwdSaving}
+              >
+                {pwdSaving ? "Ukládám…" : "Změnit heslo"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -67,17 +356,16 @@ function SystemSettingsPlaceholder({ title }: { title: string }) {
 }
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // Pokud máme uložený bearer token v localStorage, předpokládáme aktivní
+  // session (validaci provede `refreshCurrentUser()` — pokud /users/me selže,
+  // session se považuje za vadnou a uživatel se odhlásí).
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => Boolean(getAuthToken()));
   const [erpRole, setErpRole] = useState<ErpRole | null>(() => readStoredErpRole());
   const [activeModule, setActiveModule] = useState<string>("Nástěnka");
 
-  const [selectedProductionOrderId, setSelectedProductionOrderId] = useState<number | null>(null);
   const [ordersInitialCustomerOrderId, setOrdersInitialCustomerOrderId] = useState<number | null>(null);
   const [previewDrawer, setPreviewDrawer] = useState<ErpPreviewDrawerState>(null);
   const [portfolioInitialSearch, setPortfolioInitialSearch] = useState<string | null>(null);
-  const [productionWideSplit, setProductionWideSplit] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(min-width: 1320px)").matches
-  );
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState<string | null>(null);
   const [navSidebarOrder, setNavSidebarOrder] = useState<Record<string, string[]> | null>(null);
@@ -96,6 +384,7 @@ export default function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
     void loadNavSidebarOrder();
+    void refreshCurrentUser();
   }, [isAuthenticated, loadNavSidebarOrder]);
 
   const openWorkspaceTab = useCallback((input: OpenWorkspaceInput) => {
@@ -139,6 +428,78 @@ export default function App() {
     } catch {
       try {
         sessionStorage.removeItem("akeng_pending_module");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [isAuthenticated, openWorkspaceTab]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    try {
+      const raw = sessionStorage.getItem("akeng_pending_work_report_edit");
+      if (!raw) return;
+      sessionStorage.removeItem("akeng_pending_work_report_edit");
+      const o = JSON.parse(raw) as { workReportId?: number };
+      const wid = o?.workReportId;
+      if (typeof wid === "number" && Number.isFinite(wid) && wid > 0) {
+        openWorkspaceTab({
+          kind: "module",
+          moduleKey: "Výroba výkazy",
+          title: "Výkazy práce",
+        });
+        openWorkspaceTab({ kind: "workReportEdit", workReportId: wid });
+        setActiveModule("Výroba výkazy");
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem("akeng_pending_work_report_edit");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [isAuthenticated, openWorkspaceTab]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    try {
+      const raw = sessionStorage.getItem("akeng_pending_work_report");
+      if (!raw) return;
+      sessionStorage.removeItem("akeng_pending_work_report");
+      const o = JSON.parse(raw) as { workReportId?: number };
+      const wid = o?.workReportId;
+      if (typeof wid === "number" && Number.isFinite(wid) && wid > 0) {
+        openWorkspaceTab({
+          kind: "module",
+          moduleKey: "Výroba výkazy",
+          title: "Výkazy práce",
+        });
+        openWorkspaceTab({ kind: "workReport", workReportId: wid });
+        setActiveModule("Výroba výkazy");
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem("akeng_pending_work_report");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [isAuthenticated, openWorkspaceTab]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    try {
+      const flag = sessionStorage.getItem("akeng_pending_work_report_new");
+      if (flag == null) return;
+      sessionStorage.removeItem("akeng_pending_work_report_new");
+      if (flag === "1" || flag === "true") {
+        openWorkspaceTab({ kind: "module", moduleKey: "Výroba výkazy", title: "Výkazy práce" });
+        openWorkspaceTab({ kind: "workReportNew" });
+        setActiveModule("Výroba výkazy");
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem("akeng_pending_work_report_new");
       } catch {
         /* ignore */
       }
@@ -319,6 +680,10 @@ export default function App() {
     }
     if (tab.kind === "materialPurchaseOrder") {
       setActiveModule("Nákup materiálu");
+      return;
+    }
+    if (tab.kind === "workReport" || tab.kind === "workReportEdit" || tab.kind === "workReportNew") {
+      setActiveModule("Výroba výkazy");
     }
   }, [isAuthenticated, activeWorkspaceTabId, workspaceTabs]);
 
@@ -330,24 +695,13 @@ export default function App() {
     setOrdersInitialCustomerOrderId(null);
   }, [isAuthenticated, ordersInitialCustomerOrderId, openWorkspaceTab]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(min-width: 1320px)");
-    const apply = () => setProductionWideSplit(mq.matches);
-    apply();
-    mq.addEventListener("change", apply);
-    return () => mq.removeEventListener("change", apply);
-  }, []);
-
   function resetDetailStack() {
-    setSelectedProductionOrderId(null);
     setOrdersInitialCustomerOrderId(null);
   }
 
   const openPortfolioByItemId = useCallback(
     (portfolioItemId: number) => {
       void getPortfolioItem(portfolioItemId).then((item) => {
-        setSelectedProductionOrderId(null);
         openWorkspaceTab({
           kind: "portfolio",
           portfolioItemId: item.id,
@@ -406,6 +760,13 @@ export default function App() {
       stripQuery();
       return;
     }
+    if (link.view === "workReport") {
+      openWorkspaceTab({ kind: "module", moduleKey: "Výroba výkazy", title: "Výkazy práce" });
+      openWorkspaceTab({ kind: "workReport", workReportId: link.workReportId });
+      setActiveModule("Výroba výkazy");
+      stripQuery();
+      return;
+    }
     if (link.view === "portfolioSearch") {
       setPortfolioInitialSearch(link.gpn);
       openWorkspaceTab({ kind: "module", moduleKey: "Portfolio", title: "Portfolio výrobků" });
@@ -415,12 +776,34 @@ export default function App() {
     }
   }, [isAuthenticated, openWorkspaceTab]);
 
-  const baseNavGroups = useMemo(() => filterNavGroupsByRole(erpRole, ERP_NAV_GROUPS), [erpRole]);
+  const currentUser = useCurrentUser();
+
+  const baseNavGroups = useMemo(
+    () => filterNavGroupsByRole(erpRole, ERP_NAV_GROUPS),
+    [erpRole]
+  );
+
+  const permissionFilteredNav = useMemo(() => {
+    if (!currentUser.loaded || currentUser.hasFullAccess) return baseNavGroups;
+    const canManageUsers = currentUser.permissions.has("manage_users");
+    return baseNavGroups
+      .map((g) => {
+        if (g.id !== "settings") return g;
+        const items = g.items.filter((it) => {
+          if (it.moduleKey === "SYS uživatelé" || it.moduleKey === "SYS role") {
+            return canManageUsers;
+          }
+          return true;
+        });
+        return { ...g, items };
+      })
+      .filter((g) => g.items.length > 0);
+  }, [baseNavGroups, currentUser]);
 
   const sidebarNavGroups = useMemo(() => {
-    if (navSidebarOrder === null) return baseNavGroups;
-    return applyNavOrder(baseNavGroups, navSidebarOrder);
-  }, [baseNavGroups, navSidebarOrder]);
+    if (navSidebarOrder === null) return permissionFilteredNav;
+    return applyNavOrder(permissionFilteredNav, navSidebarOrder);
+  }, [permissionFilteredNav, navSidebarOrder]);
 
   function handleLogin(role: ErpRole | null) {
     writeStoredErpRole(role);
@@ -432,10 +815,24 @@ export default function App() {
     setActiveModule("Nástěnka");
   }
 
+  const handleLogout = useCallback(async () => {
+    try {
+      await apiLogout();
+    } catch {
+      /* ignore — lokální stav stejně vyčistíme */
+    }
+    writeStoredErpRole(null);
+    setUiActorIdentifier("");
+    setErpRole(null);
+    setIsAuthenticated(false);
+    setWorkspaceTabs([]);
+    setActiveWorkspaceTabId(null);
+    setActiveModule("Nástěnka");
+  }, []);
+
   function handleTopNavNavigate(moduleKey: string, tabTitle?: string) {
     setPreviewDrawer(null);
     setPortfolioInitialSearch(null);
-    setSelectedProductionOrderId(null);
     setOrdersInitialCustomerOrderId(null);
     const title = (tabTitle?.trim() || moduleKey).trim();
     openWorkspaceTab({ kind: "module", moduleKey, title });
@@ -448,7 +845,7 @@ export default function App() {
 
   if (!isAuthenticated) {
     return (
-      <div style={{ minHeight: "100vh", background: UI.erpShell.background, fontFamily: "Arial, Helvetica, sans-serif" }}>
+      <div style={{ minHeight: "100vh", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <LoginPage onLogin={handleLogin} />
       </div>
     );
@@ -487,8 +884,7 @@ export default function App() {
             openWorkspaceTab({ kind: "portfolio", portfolioItemId, item: null })
           }
           onOpenProductionOrderDetail={(productionOrderId) => {
-            setSelectedProductionOrderId(productionOrderId);
-            openWorkspaceTab({ kind: "module", moduleKey: "Výroba", title: "Výrobní příkazy" });
+            openWorkspaceTab({ kind: "productionOrder", productionOrderId });
           }}
           onOpenProductionOrderInWorkspaceTab={(productionOrderId, vpCode) =>
             openWorkspaceTab({ kind: "productionOrder", productionOrderId, title: vpCode })
@@ -559,72 +955,13 @@ export default function App() {
       return <ModulePlaceholderPage moduleName="Nabídky" />;
     }
     if (moduleKey === "Výroba" || moduleKey === "Zakázky výrobní příkazy") {
-      if (
-        productionWideSplit &&
-        selectedProductionOrderId !== null
-      ) {
-        return (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 40%)",
-              gap: 16,
-              alignItems: "start",
-            }}
-          >
-            <div style={{ minWidth: 0 }}>
-              <ProductionOrdersPage
-                onOpenDetail={(productionOrderId) => {
-                  setSelectedProductionOrderId(productionOrderId);
-                }}
-                onOpenDetailInWorkspaceTab={(productionOrderId, titleHint) =>
-                  openWorkspaceTab({ kind: "productionOrder", productionOrderId, title: titleHint })
-                }
-                onOpenPortfolioItemId={openPortfolioByItemId}
-                onOpenCustomerOrderCard={(customerOrderId) => {
-                  openWorkspaceTab({ kind: "orderCard", customerOrderId });
-                  setActiveModule("Zakázky");
-                }}
-                onPreviewPortfolioById={(portfolioItemId) => setPreviewDrawer({ kind: "portfolio", portfolioItemId })}
-                onPreviewProductionOrderById={(productionOrderId) =>
-                  setPreviewDrawer({ kind: "productionOrder", productionOrderId })
-                }
-              />
-            </div>
-            <div
-              style={{
-                position: "sticky",
-                top: 12,
-                alignSelf: "start",
-                maxHeight: "calc(100vh - 96px)",
-                overflowY: "auto",
-                minWidth: 0,
-              }}
-            >
-              <ProductionOrderDetailPage
-                productionOrderId={selectedProductionOrderId}
-                onBack={() => {
-                  setSelectedProductionOrderId(null);
-                }}
-                onOpenPortfolioItemId={openPortfolioByItemId}
-                onOpenCustomerOrderCard={(customerOrderId) => {
-                  setSelectedProductionOrderId(null);
-                  openWorkspaceTab({ kind: "orderCard", customerOrderId });
-                  setActiveModule("Zakázky");
-                }}
-                onPreviewPortfolioById={(portfolioItemId) => setPreviewDrawer({ kind: "portfolio", portfolioItemId })}
-              />
-            </div>
-          </div>
-        );
-      }
+      const openVpDetailTab = (productionOrderId: number, titleHint?: string) =>
+        openWorkspaceTab({ kind: "productionOrder", productionOrderId, title: titleHint });
       return (
         <ProductionOrdersPage
-          onOpenDetail={(productionOrderId) => {
-            setSelectedProductionOrderId(productionOrderId);
-          }}
+          onOpenDetail={(productionOrderId) => openVpDetailTab(productionOrderId)}
           onOpenDetailInWorkspaceTab={(productionOrderId, titleHint) =>
-            openWorkspaceTab({ kind: "productionOrder", productionOrderId, title: titleHint })
+            openVpDetailTab(productionOrderId, titleHint)
           }
           onOpenPortfolioItemId={openPortfolioByItemId}
           onOpenCustomerOrderCard={(customerOrderId) => {
@@ -632,9 +969,6 @@ export default function App() {
             setActiveModule("Zakázky");
           }}
           onPreviewPortfolioById={(portfolioItemId) => setPreviewDrawer({ kind: "portfolio", portfolioItemId })}
-          onPreviewProductionOrderById={(productionOrderId) =>
-            setPreviewDrawer({ kind: "productionOrder", productionOrderId })
-          }
         />
       );
     }
@@ -647,7 +981,21 @@ export default function App() {
       return <ModulePlaceholderPage moduleName="Operace ve výrobě" />;
     }
     if (moduleKey === "Výroba výkazy") {
-      return <WorkReportsPage />;
+      return (
+        <WorkReportsPage
+          onOpenProductionOrderInWorkspaceTab={(productionOrderId, titleHint) =>
+            openWorkspaceTab({ kind: "productionOrder", productionOrderId, title: titleHint })
+          }
+          onOpenWorkReportDetail={(workReportId, titleHint) =>
+            openWorkspaceTab({
+              kind: "workReport",
+              workReportId,
+              title: titleHint?.trim() || undefined,
+            })
+          }
+          onOpenNewWorkReport={() => openWorkspaceTab({ kind: "workReportNew" })}
+        />
+      );
     }
     if (moduleKey === "Výroba kooperace") {
       return <ModulePlaceholderPage moduleName="Kooperace" />;
@@ -766,11 +1114,8 @@ export default function App() {
     if (moduleKey === "SYS konfigurace") {
       return <SystemSettingsPlaceholder title="Konfigurace systému" />;
     }
-    if (moduleKey === "SYS uživatelé") {
-      return <SystemSettingsPlaceholder title="Uživatelé" />;
-    }
-    if (moduleKey === "SYS role") {
-      return <SystemSettingsPlaceholder title="Role" />;
+    if (moduleKey === "SYS uživatelé" || moduleKey === "SYS role") {
+      return <UsersLibraryPage />;
     }
     if (moduleKey === "SYS číselné řady") {
       return <SystemSettingsPlaceholder title="Číselné řady" />;
@@ -805,7 +1150,12 @@ export default function App() {
       contextLine={topBarContextLine}
       onNavigate={handleTopNavNavigate}
       navGroups={sidebarNavGroups}
-      rightSlot={<GlobalShellScanLookup onResolve={applyScanLookupResult} />}
+      rightSlot={
+        <>
+          <GlobalShellScanLookup onResolve={applyScanLookupResult} />
+          <TopBarSessionBadge user={currentUser} onLogout={handleLogout} />
+        </>
+      }
     >
       <WorkspaceTabBar
         tabs={workspaceTabs.map((t) => ({ key: t.key, title: t.title }))}

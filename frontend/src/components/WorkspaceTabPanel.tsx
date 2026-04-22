@@ -7,6 +7,9 @@ import ProductStockDetailPage from "../pages/ProductStockDetailPage";
 import ProductionOrderDetailPage from "../pages/ProductionOrderDetailPage";
 import PortfolioItemDetailPage from "../pages/PortfolioItemDetailPage";
 import MaterialPurchaseOrderDetailPage from "../pages/MaterialPurchaseOrderDetailPage";
+import WorkReportDetailPage from "../pages/WorkReportDetailPage";
+import WorkReportCreatePage from "../pages/WorkReportCreatePage";
+import WorkReportEditPage from "../pages/WorkReportEditPage";
 import { getMaterialLibraryItems } from "../services/materialLibraryApi";
 import { getMaterialStockItems } from "../services/materialStockApi";
 import { getPortfolioItem, type PortfolioItem } from "../services/portfolioApi";
@@ -331,6 +334,12 @@ export default function WorkspaceTabPanel({
             openWorkspaceTab({ kind: "orderItem", jobItemId, source });
           }}
           onOrderDeleted={onCloseThisTab}
+          onOpenProductionOrderDetail={(productionOrderId) => {
+            openWorkspaceTab({ kind: "productionOrder", productionOrderId });
+          }}
+          onOpenPortfolioById={(portfolioItemId) => {
+            openWorkspaceTab({ kind: "portfolio", portfolioItemId });
+          }}
         />
       );
     case "orderItem":
@@ -364,6 +373,9 @@ export default function WorkspaceTabPanel({
               moduleKey: "Požadavky materiálu",
               title: "Požadavky materiálu",
             });
+          }}
+          onOpenWorkReportDetail={(workReportId) => {
+            openWorkspaceTab({ kind: "workReport", workReportId });
           }}
         />
       );
@@ -415,6 +427,43 @@ export default function WorkspaceTabPanel({
           materialPurchaseOrderId={tab.materialPurchaseOrderId}
           onBack={onCloseThisTab}
           onWorkspaceTabTitle={updateThisTabTitle}
+        />
+      );
+    case "workReport":
+      return (
+        <WorkReportDetailPage
+          workReportId={tab.workReportId}
+          onBack={onCloseThisTab}
+          onWorkspaceTabTitle={updateThisTabTitle}
+          onEdit={(workReportId) => {
+            openWorkspaceTab({ kind: "workReportEdit", workReportId });
+          }}
+          onOpenProductionOrderDetail={(productionOrderId) => {
+            openWorkspaceTab({ kind: "productionOrder", productionOrderId });
+          }}
+        />
+      );
+    case "workReportEdit":
+      return (
+        <WorkReportEditPage
+          workReportId={tab.workReportId}
+          onCancel={onCloseThisTab}
+          onWorkspaceTabTitle={updateThisTabTitle}
+          onSaved={({ workReportId }) => {
+            openWorkspaceTab({ kind: "workReport", workReportId });
+            onCloseThisTab();
+          }}
+        />
+      );
+    case "workReportNew":
+      return (
+        <WorkReportCreatePage
+          onCancel={onCloseThisTab}
+          onWorkspaceTabTitle={updateThisTabTitle}
+          onCreated={({ workReportId, titleForTab }) => {
+            openWorkspaceTab({ kind: "workReport", workReportId, title: titleForTab });
+            onCloseThisTab();
+          }}
         />
       );
     default: {

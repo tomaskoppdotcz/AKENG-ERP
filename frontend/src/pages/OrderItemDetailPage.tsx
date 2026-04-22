@@ -1,6 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
-import { UI } from "../styles/ui";
+import {
+  erpDetailKpiLabel,
+  erpDetailKpiPanel,
+  erpDetailKpiRow,
+  erpDetailKpiValue,
+  erpDetailRowLabel,
+  erpDetailRowValue,
+  erpDetailSectionEyebrow,
+  erpDetailStateCard,
+  UI,
+} from "../styles/ui";
 import {
   createMaterialReservation,
   getMaterialIssuesForJobItem,
@@ -37,12 +47,15 @@ type Props = {
   onPreviewPortfolioById?: (portfolioItemId: number) => void;
   onPreviewProductionOrderById?: (productionOrderId: number) => void;
   onOpenMaterialRequirements?: () => void;
+  onOpenWorkReportDetail?: (workReportId: number) => void;
 };
 
 type ItemSubtab =
   | "Dokumenty"
   | "Technologický postup"
-  | "Výkazy"
+  | "Výrobní příkazy"
+  | "Výkazy práce"
+  | "Průběh výroby"
   | "Neshody"
   | "Zmetky"
   | "Reklamace"
@@ -55,7 +68,9 @@ type ItemSubtab =
 const SUBTABS: ItemSubtab[] = [
   "Dokumenty",
   "Technologický postup",
-  "Výkazy",
+  "Výrobní příkazy",
+  "Výkazy práce",
+  "Průběh výroby",
   "Neshody",
   "Zmetky",
   "Reklamace",
@@ -119,6 +134,24 @@ function formatItemLaborCzk(v: number | null | undefined): string {
   } catch {
     return `${Math.round(Number(v))} Kč`;
   }
+}
+
+function formatCompactDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("cs-CZ", { dateStyle: "short", timeStyle: "short" });
+}
+
+function formatDurationMinutes(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  return `${Math.round(Number(value))} min`;
+}
+
+function asNonEmptyText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function labelAggregatedPhase(phase: string | null | undefined): string {
@@ -189,9 +222,8 @@ export default function OrderItemDetailPage({
   onOpenPortfolioItem,
   onOpenProductionOrderDetail,
   onOpenCustomerOrderCard,
-  onPreviewPortfolioById,
-  onPreviewProductionOrderById,
   onOpenMaterialRequirements,
+  onOpenWorkReportDetail,
 }: Props) {
   const [activeTab, setActiveTab] = useState<ItemSubtab>("Technologický postup");
   const [hoverTab, setHoverTab] = useState<ItemSubtab | null>(null);
@@ -392,9 +424,6 @@ export default function OrderItemDetailPage({
     }
   }
 
-  const stavLabel = "Neuvedeno";
-  const stavBadgeStyle = { background: "#f1f5f9", color: "#475569", border: "1px solid #cbd5e1" };
-
   if (pageLoading) {
     return (
       <div style={UI.container}>
@@ -469,10 +498,6 @@ export default function OrderItemDetailPage({
       : (item.production_orders ?? []).filter(
           (po) => po.source_type === "stock_allocation" || po.source_type === "order_allocation"
         );
-  const vpLabel =
-    linkedProductionOrders.length > 0
-      ? linkedProductionOrders.map((po) => po.vp_code).filter(Boolean).join(", ")
-      : (item.vp_code ?? "—");
 
   async function openPortfolioFromGpn() {
     if (!onOpenPortfolioItem) return;
@@ -502,9 +527,6 @@ export default function OrderItemDetailPage({
     }
   }
 
-  const portfolioPreviewId =
-    matchedPortfolioItem?.id ?? item.effective_portfolio_item_id ?? item.portfolio_item_id ?? null;
-
   const linkedPoIdsForMaterialTab = new Set(linkedProductionOrders.map((p) => p.id));
   const materialLinkedVpsForTab =
     vpReqForIssue?.filter(
@@ -514,6 +536,10 @@ export default function OrderItemDetailPage({
   const materialTabUncovered = materialLinkedVpsForTab.some((v) => v.coverage !== "covered");
   const materialTabShowIssueAction = materialLinkedVpsForTab.some(vpHasPendingMaterialIssue);
   const materialTabAnyMovements = materialIssueRows.length > 0;
+  const reportedDurationMin = item.total_duration_min ?? item.reported_time_min;
+  const laborCost = item.labor_cost ?? item.direct_labor_cost;
+  const hasOkNokTotals = item.total_ok_qty != null || item.total_nok_qty != null;
+  const linkedWorkReports = Array.isArray(item.work_reports) ? item.work_reports : [];
 
   const materialIssueStateBadge = (() => {
     const base: React.CSSProperties = {
@@ -579,92 +605,9 @@ export default function OrderItemDetailPage({
             </button>
           }
           subtitle={source === "drawings" ? "Detail položky napříč zakázkami" : item.description ?? "—"}
-          headerAside={
-            <>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                  flexWrap: "wrap",
-                  padding: "6px 12px",
-                  borderRadius: 999,
-                  fontSize: 12,
-                  fontWeight: 800,
-                  ...(linkedProductionOrders.length > 0 || (item.vp_code && vpLabel !== "—")
-                    ? {
-                        background: "#dcfce7",
-                        color: "#15803d",
-                        border: "1px solid #86efac",
-                      }
-                    : {
-                        background: "#f1f5f9",
-                        color: "#64748b",
-                        border: "1px solid #e2e8f0",
-                      }),
-                }}
-              >
-                <span style={{ whiteSpace: "nowrap" }}>VP:</span>
-                {linkedProductionOrders.length > 0 ? (
-                  linkedProductionOrders.map((po, idx) => (
-                    <span key={po.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      {idx > 0 ? <span style={{ color: "#64748b" }}>·</span> : null}
-                      <button
-                        type="button"
-                        disabled={!onOpenProductionOrderDetail}
-                        onClick={() => onOpenProductionOrderDetail?.(po.id)}
-                        style={{
-                          ...linkButtonReset,
-                          color: "#15803d",
-                          fontWeight: 900,
-                          fontSize: 12,
-                        }}
-                      >
-                        {po.vp_code}
-                      </button>
-                    </span>
-                  ))
-                ) : item.vp_code && onOpenProductionOrderDetail ? (
-                  (() => {
-                    const po = (item.production_orders ?? []).find((p) => p.vp_code === item.vp_code);
-                    if (!po) return <span style={{ color: "#15803d" }}>{item.vp_code}</span>;
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => onOpenProductionOrderDetail(po.id)}
-                        style={{
-                          ...linkButtonReset,
-                          color: "#15803d",
-                          fontWeight: 900,
-                          fontSize: 12,
-                        }}
-                      >
-                        {item.vp_code}
-                      </button>
-                    );
-                  })()
-                ) : (
-                  <span>{vpLabel}</span>
-                )}
-              </span>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  padding: "6px 12px",
-                  borderRadius: 999,
-                  fontSize: 12,
-                  fontWeight: 800,
-                  ...stavBadgeStyle,
-                }}
-              >
-                Stav: {stavLabel}
-              </span>
-            </>
-          }
           actions={
             <>
-              <button onClick={onBack} style={UI.buttonSecondary}>
+              <button onClick={onBack} style={UI.buttons.secondary}>
                 {source === "orders" ? "Zpět na zakázku" : "Zpět na výkresy"}
               </button>
               <button
@@ -678,96 +621,252 @@ export default function OrderItemDetailPage({
               </button>
             </>
           }
-          summaryTiles={
-            <div style={UI.summaryTilesGrid}>
-              <div style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
-                <div style={UI.summaryTileLabel}>Zakázka</div>
-                <div style={UI.summaryTileValue}>
-                  {onOpenCustomerOrderCard ? (
-                    <button type="button" style={linkButtonReset} onClick={() => onOpenCustomerOrderCard(detail.customerOrderId)}>
-                      {order.job?.zakazka ?? "—"}
-                    </button>
-                  ) : (
-                    order.job?.zakazka ?? "—"
-                  )}
+          context={
+            <div style={erpDetailStateCard}>
+              <div style={erpDetailSectionEyebrow}>Identita položky</div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <div>
+                  <div style={erpDetailRowLabel}>Zakázka</div>
+                  <div style={{ ...erpDetailRowValue, fontWeight: 700 }}>
+                    {onOpenCustomerOrderCard ? (
+                      <button
+                        type="button"
+                        className="erp-table-link"
+                        style={{
+                          ...linkButtonReset,
+                          color: UI.colors.textPrimary,
+                          fontWeight: 700,
+                          fontSize: "inherit",
+                          textDecoration: "underline",
+                          textUnderlineOffset: 3,
+                        }}
+                        onClick={() => onOpenCustomerOrderCard(detail.customerOrderId)}
+                      >
+                        {order.job?.zakazka ?? "—"}
+                      </button>
+                    ) : (
+                      order.job?.zakazka ?? "—"
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Řádek</div>
+                  <div
+                    style={{
+                      ...erpDetailRowValue,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: UI.colors.textSecondary,
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {item.line_no ?? "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>GPN</div>
+                  <div>
+                    {onOpenPortfolioItem ? (
+                      <button
+                        type="button"
+                        className="erp-table-link"
+                        onClick={() => void openPortfolioFromGpn()}
+                        title="Otevřít portfolio položku"
+                        style={{
+                          ...linkButtonReset,
+                          fontSize: 16,
+                          fontWeight: 900,
+                          color: UI.colors.primary,
+                          textDecoration: "underline",
+                          textUnderlineOffset: 3,
+                        }}
+                      >
+                        {item.gpn}
+                      </button>
+                    ) : (
+                      <span
+                        style={{
+                          fontSize: 16,
+                          fontWeight: 900,
+                          color: UI.colors.primary,
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {item.gpn}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Výkres</div>
+                  <div style={erpDetailRowValue}>
+                    {item.drawing_number?.trim() ? item.drawing_number : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Revize</div>
+                  <div style={erpDetailRowValue}>
+                    {item.drawing_revision?.trim() ? item.drawing_revision : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Název</div>
+                  <div style={erpDetailRowValue}>
+                    {item.description?.trim() ? item.description : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Množství</div>
+                  <div style={{ ...erpDetailRowValue, fontVariantNumeric: "tabular-nums" }}>
+                    {item.qty} ks
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Termín</div>
+                  <div style={erpDetailRowValue}>{item.due_date ?? "—"}</div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Materiál</div>
+                  <div style={erpDetailRowValue}>
+                    {item.material_default?.trim() ? item.material_default : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Cena / ks</div>
+                  <div style={{ ...erpDetailRowValue, fontVariantNumeric: "tabular-nums" }}>
+                    {formatCenaZaKs(item.sale_price_per_piece ?? undefined)}
+                  </div>
                 </div>
               </div>
-              {(
-                [
-                  ["Řádek", String(item.line_no)],
-                  ["Množství", `${item.qty} ks`],
-                  ["Termín", item.due_date ?? "—"],
-                  ["Materiál", item.material_default ?? "—"],
-                  ["Cena / ks", formatCenaZaKs(item.sale_price_per_piece ?? undefined)],
-                ] as const
-              ).map(([label, value]) => (
-                <div key={label} style={{ ...UI.summaryTile, flex: "1 1 200px", minWidth: 160, maxWidth: "100%" }}>
-                  <div style={UI.summaryTileLabel}>{label}</div>
-                  <div style={UI.summaryTileValue}>{value}</div>
+            </div>
+          }
+          summaryTiles={
+            <div style={erpDetailKpiPanel}>
+              <div style={{ ...erpDetailSectionEyebrow, color: UI.colors.neutralFg }}>
+                Souhrn položky
+              </div>
+              <div style={erpDetailKpiRow}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={erpDetailKpiLabel}>Vykázaný čas</div>
+                  <div style={{ ...erpDetailKpiValue, fontVariantNumeric: "tabular-nums" }}>
+                    {formatItemReportedMin(reportedDurationMin)}
+                  </div>
                 </div>
-              ))}
+                <div style={{ minWidth: 0 }}>
+                  <div style={erpDetailKpiLabel}>Náklad práce</div>
+                  <div style={{ ...erpDetailKpiValue, fontVariantNumeric: "tabular-nums" }}>
+                    {formatItemLaborCzk(laborCost)}
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={erpDetailKpiLabel}>Hotovo</div>
+                  <div style={{ ...erpDetailKpiValue, fontVariantNumeric: "tabular-nums" }}>
+                    {formatItemPct(item.completion_percent)}
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={erpDetailKpiLabel}>Výkonnost</div>
+                  <div style={{ ...erpDetailKpiValue, fontVariantNumeric: "tabular-nums" }}>
+                    {formatItemPct(item.performance_percent)}
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  marginTop: 2,
+                  paddingTop: 10,
+                  borderTop: `1px solid ${UI.colors.divider}`,
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "baseline",
+                  columnGap: 20,
+                  rowGap: 6,
+                  fontSize: 12.5,
+                  color: UI.colors.textSecondary,
+                  lineHeight: 1.4,
+                }}
+              >
+                <span style={{ minWidth: 0, display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+                  <span
+                    style={{
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      color: UI.colors.neutralFg,
+                    }}
+                  >
+                    Souhrn VP:
+                  </span>
+                  <span style={{ fontWeight: 700, color: UI.colors.textSecondary }}>
+                    {item.operational_summary_cs?.trim() ? item.operational_summary_cs : "—"}
+                  </span>
+                </span>
+                <span style={{ minWidth: 0, display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+                  <span
+                    style={{
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      color: UI.colors.neutralFg,
+                    }}
+                  >
+                    Dominantní fáze:
+                  </span>
+                  <span style={{ fontWeight: 700, color: UI.colors.textSecondary }}>
+                    {labelAggregatedPhase(item.current_phase)}
+                  </span>
+                </span>
+                <span style={{ minWidth: 0, display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+                  <span
+                    style={{
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      color: UI.colors.neutralFg,
+                    }}
+                  >
+                    Poloha:
+                  </span>
+                  <span style={{ fontWeight: 700, color: UI.colors.textSecondary }}>
+                    {item.current_location?.trim() ? item.current_location : "—"}
+                  </span>
+                </span>
+                {hasOkNokTotals ? (
+                  <span style={{ minWidth: 0, display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+                    <span
+                      style={{
+                        textTransform: "uppercase",
+                        letterSpacing: 0.5,
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                        color: UI.colors.neutralFg,
+                      }}
+                    >
+                      OK/NOK:
+                    </span>
+                    <span style={{ fontWeight: 700, color: UI.colors.textSecondary, fontVariantNumeric: "tabular-nums" }}>
+                      {item.total_ok_qty ?? 0} / {item.total_nok_qty ?? 0}
+                    </span>
+                  </span>
+                ) : null}
+              </div>
             </div>
           }
         />
 
-        <div style={{ ...UI.card, borderRadius: 14 }}>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>Provozní metriky položky</div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-              gap: 14,
-            }}
-          >
-            <div>
-              <div style={UI.statLabel}>Vykázaný čas</div>
-              <div style={UI.statValue}>{formatItemReportedMin(item.reported_time_min)}</div>
-            </div>
-            <div>
-              <div style={UI.statLabel}>Náklad práce</div>
-              <div style={UI.statValue}>{formatItemLaborCzk(item.direct_labor_cost)}</div>
-            </div>
-            <div>
-              <div style={UI.statLabel}>Hotovo</div>
-              <div style={UI.statValue}>{formatItemPct(item.completion_percent)}</div>
-            </div>
-            <div>
-              <div style={UI.statLabel}>Výkonnost</div>
-              <div style={UI.statValue}>{formatItemPct(item.performance_percent)}</div>
-            </div>
-          </div>
-          {(item.operational_summary_cs || item.current_phase || item.current_location) && (
-            <div
-              style={{
-                marginTop: 14,
-                paddingTop: 14,
-                borderTop: "1px solid #e2e8f0",
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-                gap: 12,
-              }}
-            >
-              {item.operational_summary_cs ? (
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <div style={UI.statLabel}>Souhrn VP</div>
-                  <div style={{ ...UI.statValue, fontSize: 15 }}>{item.operational_summary_cs}</div>
-                </div>
-              ) : null}
-              <div>
-                <div style={UI.statLabel}>Dominantní fáze</div>
-                <div style={UI.statValue}>{labelAggregatedPhase(item.current_phase)}</div>
-              </div>
-              <div>
-                <div style={UI.statLabel}>Poloha (běžící VP)</div>
-                <div style={UI.statValue}>{item.current_location?.trim() ? item.current_location : "—"}</div>
-              </div>
-            </div>
-          )}
-        </div>
-
         {orderKind === "customer" ? (
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
-            <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Pokrytí položky</div>
+            <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Sekce</div>
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Pokrytí položky</div>
             {!(item.coverage_rows && item.coverage_rows.length > 0) ? (
               <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600 }}>
                 Zatím nejsou evidované žádné řádky pokrytí položky.
@@ -811,136 +910,6 @@ export default function OrderItemDetailPage({
             )}
           </div>
         ) : null}
-
-        <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>
-            Navázané výrobní příkazy
-          </div>
-          {linkedProductionOrders.length === 0 ? (
-            <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600 }}>
-              K této položce zatím nejsou navázané žádné výrobní příkazy.
-            </div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={UI.table}>
-                <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    {["VP", "Typ zdroje", "Logistický režim", "Množství", "Stav"].map((h) => (
-                      <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {linkedProductionOrders.map((po) => (
-                    <tr key={po.id}>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
-                        <button
-                          type="button"
-                          disabled={!onOpenProductionOrderDetail}
-                          onClick={() => onOpenProductionOrderDetail?.(po.id)}
-                          style={{ ...linkButtonReset, fontWeight: 800 }}
-                        >
-                          {po.vp_code}
-                        </button>
-                        {onPreviewProductionOrderById ? (
-                          <button
-                            type="button"
-                            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
-                            onClick={() => onPreviewProductionOrderById(po.id)}
-                          >
-                            Náhled
-                          </button>
-                        ) : null}
-                      </td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.source_type ?? "—"}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.logistic_mode ?? "—"}</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.quantity} ks</td>
-                      <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.status ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* Sekce 3 — průběh (bez demo dat; napojení na výrobu později) */}
-        <div
-          style={{
-            paddingTop: 4,
-            borderTop: "1px solid #e2e8f0",
-          }}
-        >
-          <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a", marginBottom: 8 }}>Průběh výroby</div>
-          <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600, lineHeight: 1.5 }}>
-            Údaj o průběhu zatím není k dispozici z backendu. Po napojení na výrobní data se zde zobrazí stav operací.
-          </div>
-        </div>
-
-        {/* Související moduly */}
-        <div
-          style={{
-            ...UI.card,
-            borderRadius: 14,
-            padding: 14,
-            border: "1px solid #e2e8f0",
-            background: "#fafbfc",
-          }}
-        >
-          <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Související odkazy</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-            {portfolioTechLoading ? (
-              <span style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>Ověřuji portfolio…</span>
-            ) : matchedPortfolioItem ? (
-              <>
-                <button
-                  type="button"
-                  style={{
-                    ...UI.buttons.primary,
-                    ...(!onOpenPortfolioItem ? { opacity: 0.5, cursor: "not-allowed" } : {}),
-                  }}
-                  disabled={!onOpenPortfolioItem}
-                  onClick={() => onOpenPortfolioItem?.(matchedPortfolioItem)}
-                >
-                  Otevřít portfolio
-                </button>
-                {onPreviewPortfolioById && portfolioPreviewId != null ? (
-                  <button
-                    type="button"
-                    style={UI.buttons.secondary}
-                    onClick={() => onPreviewPortfolioById(portfolioPreviewId)}
-                  >
-                    Náhled v panelu
-                  </button>
-                ) : null}
-              </>
-            ) : onPreviewPortfolioById && portfolioPreviewId != null ? (
-              <button
-                type="button"
-                style={UI.buttons.secondary}
-                onClick={() => onPreviewPortfolioById(portfolioPreviewId)}
-              >
-                Náhled portfolia v panelu
-              </button>
-            ) : (
-              <span style={{ fontSize: 13, color: "#94a3b8", fontWeight: 700 }}>Portfolio nenalezeno</span>
-            )}
-            <button
-              type="button"
-              style={{
-                ...UI.buttons.secondary,
-                opacity: 0.55,
-                cursor: "not-allowed",
-              }}
-              disabled
-              title="Modul Sklad výrobků bude v budoucnu propojen odsud."
-            >
-              Otevřít sklad výrobků
-            </button>
-          </div>
-        </div>
 
         {/* Lokální podkarty položky — obal kvůli viditelnosti celé řady (globální kontejner má overflow: hidden) */}
         <div
@@ -988,6 +957,8 @@ export default function OrderItemDetailPage({
         {activeTab === "Technologický postup" ? (
           <>
             <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+              <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Sekce</div>
+              <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 12 }}>Technologický postup</div>
               {portfolioTechLoading ? (
                 <div style={{ ...UI.sectionSubtitle, fontWeight: 600 }}>Načítám technologii z portfolia…</div>
               ) : portfolioTechError ? (
@@ -1084,6 +1055,7 @@ export default function OrderItemDetailPage({
 
             {matchedPortfolioItem && !portfolioTechError ? (
               <div style={{ ...UI.card, borderRadius: 14, padding: 16, marginTop: 4 }}>
+                <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Sekce</div>
                 <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Materiálová potřeba</div>
                 {materialReserveError ? (
                   <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{materialReserveError}</div>
@@ -1185,8 +1157,200 @@ export default function OrderItemDetailPage({
               </div>
             ) : null}
           </>
+        ) : activeTab === "Výrobní příkazy" ? (
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+            <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Sekce</div>
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Výrobní příkazy</div>
+            {linkedProductionOrders.length === 0 ? (
+              <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600 }}>
+                K této položce zatím nejsou navázané žádné výrobní příkazy.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={UI.table}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      {["VP", "Typ zdroje", "Logistický režim", "Množství", "Stav"].map((h) => (
+                        <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {linkedProductionOrders.map((po) => (
+                      <tr key={po.id}>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                          <button
+                            type="button"
+                            className="erp-table-link"
+                            disabled={!onOpenProductionOrderDetail}
+                            onClick={() => onOpenProductionOrderDetail?.(po.id)}
+                            style={{
+                              ...linkButtonReset,
+                              color: "#15803d",
+                              fontWeight: 900,
+                            }}
+                            title={onOpenProductionOrderDetail ? "Otevřít detail výrobního příkazu" : undefined}
+                          >
+                            {po.vp_code}
+                          </button>
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {po.source_type ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {po.logistic_mode ?? "—"}
+                        </td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.quantity} ks</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{po.status ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : activeTab === "Výkazy práce" ? (
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+            <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Sekce</div>
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Výkazy práce</div>
+            {linkedWorkReports.length === 0 ? (
+              <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600 }}>
+                K této položce zatím nejsou navázané žádné výkazy práce.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={UI.table}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      {[
+                        "Kód",
+                        "Začátek",
+                        "Konec",
+                        "Trvání",
+                        "Zaměstnanec",
+                        "VP",
+                        "Operace",
+                        "OK",
+                        "NOK",
+                        "Zdroj",
+                      ].map((h) => (
+                        <th key={h} style={{ ...UI.th, fontSize: 13, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {linkedWorkReports.map((wr) => {
+                      if (!wr || typeof wr !== "object") return null;
+                      const wrCode = asNonEmptyText(wr.code) ?? `#${wr.id}`;
+                      const wrPoCode = asNonEmptyText(wr.production_order_code);
+                      const linkedPo = wrPoCode
+                        ? linkedProductionOrders.find((candidate) => candidate.vp_code === wrPoCode)
+                        : undefined;
+                      const operationLabel = asNonEmptyText(wr.operation_label);
+                      const employee = asNonEmptyText(wr.employee) ?? "—";
+                      const sourceLabel = asNonEmptyText(wr.source) ?? "—";
+                      return (
+                        <tr key={wr.id}>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                            {onOpenWorkReportDetail ? (
+                              <button
+                                type="button"
+                                className="erp-table-link"
+                                onClick={() => onOpenWorkReportDetail(wr.id)}
+                                style={{ ...linkButtonReset, fontWeight: 900 }}
+                                title="Otevřít detail výkazu práce"
+                              >
+                                {wrCode}
+                              </button>
+                            ) : (
+                              wrCode
+                            )}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                            {formatCompactDateTime(wr.started_at)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                            {formatCompactDateTime(wr.ended_at)}
+                          </td>
+                          <td
+                            style={{
+                              ...UI.td,
+                              padding: "10px 10px",
+                              whiteSpace: "nowrap",
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {formatDurationMinutes(wr.duration_min)}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{employee}</td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                            {wrPoCode && onOpenProductionOrderDetail && linkedPo ? (
+                              <button
+                                type="button"
+                                className="erp-table-link"
+                                onClick={() => onOpenProductionOrderDetail(linkedPo.id)}
+                                style={{ ...linkButtonReset, color: "#15803d", fontWeight: 900 }}
+                                title="Otevřít detail výrobního příkazu"
+                              >
+                                {wrPoCode}
+                              </button>
+                            ) : (
+                              (wrPoCode ?? "—")
+                            )}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                            {wr.operation_no != null || operationLabel
+                              ? [wr.operation_no, operationLabel]
+                                  .filter((v) => v != null && v !== "")
+                                  .join(" · ")
+                              : "—"}
+                          </td>
+                          <td
+                            style={{
+                              ...UI.td,
+                              padding: "10px 10px",
+                              whiteSpace: "nowrap",
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {wr.ok_qty ?? "—"}
+                          </td>
+                          <td
+                            style={{
+                              ...UI.td,
+                              padding: "10px 10px",
+                              whiteSpace: "nowrap",
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {wr.nok_qty ?? "—"}
+                          </td>
+                          <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{sourceLabel}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : activeTab === "Průběh výroby" ? (
+          <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+            <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Sekce</div>
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Průběh výroby</div>
+            <div style={{ fontSize: 14, color: "#64748b", fontWeight: 600, lineHeight: 1.5 }}>
+              Údaj o průběhu zatím není k dispozici z backendu. Po napojení na výrobní data se zde zobrazí stav
+              operací.
+            </div>
+          </div>
         ) : activeTab === "Výdej materiálu" ? (
           <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+            <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Sekce</div>
+            <div style={{ ...UI.sectionTitle, fontSize: 16, marginBottom: 10 }}>Výdej materiálu</div>
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 14 }}>
               <span style={materialIssueStateBadge.style}>{materialIssueStateBadge.label}</span>
               {materialTabUncovered && vpReqForIssue != null && !materialIssueLoading ? (

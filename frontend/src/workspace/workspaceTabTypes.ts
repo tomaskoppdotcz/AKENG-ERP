@@ -12,7 +12,10 @@ export type OpenWorkspaceInput =
   | { kind: "portfolio"; portfolioItemId: number; item?: PortfolioItem | null; title?: string }
   | { kind: "materialStock"; stockItemId: number; snapshot?: MaterialStockDetailSnapshot | null; title?: string }
   | { kind: "productStock"; stockItemId: number; snapshot?: ProductStockItem | null; title?: string }
-  | { kind: "materialPurchaseOrder"; materialPurchaseOrderId: number; title?: string };
+  | { kind: "materialPurchaseOrder"; materialPurchaseOrderId: number; title?: string }
+  | { kind: "workReport"; workReportId: number; title?: string }
+  | { kind: "workReportEdit"; workReportId: number; title?: string }
+  | { kind: "workReportNew"; title?: string };
 
 export type WorkspaceTab =
   | { key: string; kind: "module"; moduleKey: string; title: string }
@@ -22,7 +25,10 @@ export type WorkspaceTab =
   | { key: string; kind: "portfolio"; portfolioItemId: number; item: PortfolioItem | null; title: string }
   | { key: string; kind: "materialStock"; stockItemId: number; snapshot: MaterialStockDetailSnapshot | null; title: string }
   | { key: string; kind: "productStock"; stockItemId: number; snapshot: ProductStockItem | null; title: string }
-  | { key: string; kind: "materialPurchaseOrder"; materialPurchaseOrderId: number; title: string };
+  | { key: string; kind: "materialPurchaseOrder"; materialPurchaseOrderId: number; title: string }
+  | { key: string; kind: "workReport"; workReportId: number; title: string }
+  | { key: string; kind: "workReportEdit"; workReportId: number; title: string }
+  | { key: string; kind: "workReportNew"; title: string };
 
 export function workspaceKeyFromInput(input: OpenWorkspaceInput): string {
   switch (input.kind) {
@@ -42,6 +48,12 @@ export function workspaceKeyFromInput(input: OpenWorkspaceInput): string {
       return `productStock-${input.stockItemId}`;
     case "materialPurchaseOrder":
       return `materialPurchaseOrder-${input.materialPurchaseOrderId}`;
+    case "workReport":
+      return `workReport-${input.workReportId}`;
+    case "workReportEdit":
+      return `workReportEdit-${input.workReportId}`;
+    case "workReportNew":
+      return "workReportNew";
   }
 }
 
@@ -111,6 +123,26 @@ export function tabFromInput(input: OpenWorkspaceInput): WorkspaceTab {
         kind: "materialPurchaseOrder",
         materialPurchaseOrderId: input.materialPurchaseOrderId,
         title: input.title?.trim() || `NMPO · #${input.materialPurchaseOrderId}`,
+      };
+    case "workReport":
+      return {
+        key,
+        kind: "workReport",
+        workReportId: input.workReportId,
+        title: input.title?.trim() || "Výkaz",
+      };
+    case "workReportEdit":
+      return {
+        key,
+        kind: "workReportEdit",
+        workReportId: input.workReportId,
+        title: input.title?.trim() || "Úprava výkazu",
+      };
+    case "workReportNew":
+      return {
+        key,
+        kind: "workReportNew",
+        title: input.title?.trim() || "Nový výkaz práce",
       };
   }
 }

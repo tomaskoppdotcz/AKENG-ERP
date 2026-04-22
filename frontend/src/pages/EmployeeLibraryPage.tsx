@@ -12,6 +12,12 @@ import {
 } from "../services/masterLibrariesApi";
 import { normalizeCzechKeyboardReaderNumeric } from "../utils/czCardReaderNormalize";
 import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
+import InlineBanner from "../components/InlineBanner";
+import {
+  interpretError,
+  runWriteAction,
+  type WriteFeedback,
+} from "../utils/writeActionFeedback";
 
 const pillBase: React.CSSProperties = {
   display: "inline-block",
@@ -64,7 +70,14 @@ export default function EmployeeLibraryPage() {
   const [rows, setRows] = useState<EmployeeMasterRow[]>([]);
   const [subgroups, setSubgroups] = useState<EmployeeSubgroupRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<WriteFeedback | null>(null);
+
+  function showError(message: string) {
+    setActionFeedback({ kind: "error", message });
+  }
+  function clearFeedback() {
+    setActionFeedback(null);
+  }
   const [query, setQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<EmployeeListActiveFilter>("all");
 
@@ -92,9 +105,9 @@ export default function EmployeeLibraryPage() {
   const [formRate, setFormRate] = useState("");
   const [formNote, setFormNote] = useState("");
 
-  const loadAll = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    if (!silent) setLoading(true);
     try {
       const [emps, sgs] = await Promise.all([
         getEmployeesMaster(activeFilter),
@@ -103,10 +116,10 @@ export default function EmployeeLibraryPage() {
       setRows(emps);
       setSubgroups(sgs.filter((s) => s.is_active));
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Nepodařilo se načíst zaměstnance.");
+      setActionFeedback(interpretError(e, "Nepodařilo se načíst zaměstnance."));
       setRows([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [activeFilter]);
 
@@ -159,7 +172,7 @@ export default function EmployeeLibraryPage() {
     setEditingId(null);
     resetForm();
     setShowForm(true);
-    setError(null);
+    clearFeedback();
   }
 
   function openEdit(r: EmployeeMasterRow) {
@@ -185,7 +198,7 @@ export default function EmployeeLibraryPage() {
     setFormRate(r.cost_rate_per_hour != null ? String(r.cost_rate_per_hour) : "");
     setFormNote(r.note ?? "");
     setShowForm(true);
-    setError(null);
+    clearFeedback();
   }
 
   function closeForm() {
@@ -198,30 +211,30 @@ export default function EmployeeLibraryPage() {
     const last = formLast.trim();
     const code = formCode.trim();
     if (!first || !last) {
-      setError("Vyplňte jméno a příjmení.");
+      showError("Vyplňte jméno a příjmení.");
       return;
     }
     if (!code) {
-      setError("Vyplňte kód zaměstnance.");
+      showError("Vyplňte kód zaměstnance.");
       return;
     }
     const pin = formPin.trim();
     if (pin && pin.length < 4) {
-      setError("PIN musí mít alespoň 4 znaky.");
+      showError("PIN musí mít alespoň 4 znaky.");
       return;
     }
     let rate: number | null = null;
     if (formRate.trim()) {
       const n = Number(formRate.replace(",", "."));
       if (Number.isNaN(n)) {
-        setError("Neplatná sazba (Kč/h).");
+        showError("Neplatná sazba (Kč/h).");
         return;
       }
       rate = n;
     }
 
     setSaving(true);
-    setError(null);
+    clearFeedback();
     const chipNorm = normalizeCzechKeyboardReaderNumeric(formChip.trim());
     const scanNorm = normalizeCzechKeyboardReaderNumeric(formScan.trim());
     const payload = {
@@ -246,38 +259,56 @@ export default function EmployeeLibraryPage() {
       cost_rate_per_hour: rate,
       note: formNote.trim() || null,
     };
-    try {
-      if (editingId != null) {
-        await updateEmployeeMaster(editingId, payload);
-      } else {
-        await createEmployeeMaster(payload);
-      }
+    const isEdit = editingId != null;
+    const fb = await runWriteAction(
+      async () => {
+        if (isEdit) {
+          await updateEmployeeMaster(editingId!, payload);
+        } else {
+          await createEmployeeMaster(payload);
+        }
+        return null;
+      },
+      {
+        successMessage: isEdit
+          ? `Zaměstnanec „${first} ${last}" byl uložen.`
+          : `Zaměstnanec „${first} ${last}" byl vytvořen.`,
+        errorMessage: "Uložení zaměstnance se nezdařilo.",
+      },
+    );
+    setActionFeedback(fb);
+    setSaving(false);
+    if (fb.kind === "success") {
       await loadAll();
       closeForm();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Uložení se nezdařilo.");
-    } finally {
-      setSaving(false);
     }
   }
 
   async function handleDelete(r: EmployeeMasterRow) {
     const ok = window.confirm(`Smazat zaměstnance „${r.full_name}“? (Při historii pouze deaktivace.)`);
     if (!ok) return;
-    setError(null);
-    try {
-      const res = await deleteEmployeeMaster(r.id);
-      if (res.status === "soft_deleted") {
-        setError(res.detail ?? "Záznam byl deaktivován (existuje historie).");
-      }
-      await loadAll();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Smazání se nezdařilo.");
+    // `deleteEmployeeMaster` vrací `{status, detail?}`:
+    //   - "deleted"      → fyzicky smazán
+    //   - "soft_deleted" → měl historické vazby (work reports atd.) a byl
+    //                      jen deaktivován; pro uživatele to NENÍ chyba.
+    // Helper to namapuje na success / info banner.
+    const fb = await runWriteAction(
+      () => deleteEmployeeMaster(r.id),
+      {
+        successMessage: `Zaměstnanec „${r.full_name}" byl smazán.`,
+        errorMessage: "Smazání zaměstnance se nezdařilo.",
+      },
+    );
+    setActionFeedback(fb);
+    if (fb.kind === "success" || fb.kind === "info") {
+      // Bez `setLoading(true)`: celostránkový „Načítám…“ schová tabulku a banner
+      // nad ní pak působí jako „nic se nestalo“. Tichý reload ponechá banner vidět.
+      await loadAll({ silent: true });
     }
   }
 
   return (
-    <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+    <div className="erp-overview-page" style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
       <div style={{ marginBottom: 10 }}>
         <div style={UI.sectionTitle}>Zaměstnanci</div>
         <div style={UI.sectionSubtitle}>
@@ -474,10 +505,17 @@ export default function EmployeeLibraryPage() {
       ) : null}
 
       {loading ? <div style={UI.sectionSubtitle}>Načítám…</div> : null}
-      {error ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 8 }}>{error}</div> : null}
+      {actionFeedback ? (
+        <InlineBanner
+          kind={actionFeedback.kind}
+          message={actionFeedback.message}
+          onClose={clearFeedback}
+          style={{ marginBottom: 8 }}
+        />
+      ) : null}
 
       {!loading ? (
-        <div style={{ overflowX: "auto" }}>
+        <div className="erp-table-wrap" style={{ overflowX: "auto" }}>
           <table style={UI.table}>
             <thead>
               <tr style={{ background: "#f8fafc" }}>

@@ -653,6 +653,7 @@ export default function PortfolioGpnTpPage() {
 
   return (
     <div
+      className="erp-overview-page"
       style={{
         minHeight: "100vh",
         background: "#f8fafc",

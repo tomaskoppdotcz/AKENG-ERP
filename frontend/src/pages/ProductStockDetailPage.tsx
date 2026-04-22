@@ -1,6 +1,19 @@
 import React, { useCallback, useEffect, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
-import { UI } from "../styles/ui";
+import {
+  erpDetailIdentGrid,
+  erpDetailIdentLabel,
+  erpDetailIdentValue,
+  erpDetailKpiLabel,
+  erpDetailKpiPanel,
+  erpDetailKpiRow,
+  erpDetailKpiValue,
+  erpDetailRowLabel,
+  erpDetailRowValue,
+  erpDetailSectionEyebrow,
+  erpDetailStateCard,
+  UI,
+} from "../styles/ui";
 import {
   createProductStockMovement,
   deleteProductStockMovement,
@@ -141,38 +154,168 @@ export default function ProductStockDetailPage({ item, onBack }: Props) {
     }
   }
 
+  const belowMin =
+    stockItem.min_qty != null && Number.isFinite(stockItem.min_qty) && stockItem.current_qty < stockItem.min_qty;
+  const lastMovement = rows[0]?.movement_date ?? null;
+  const totalMovements = rows.length;
+  const statusLabel = stockItem.is_active ? "Aktivní" : "Neaktivní";
+  const statusStyle: React.CSSProperties = {
+    ...UI.statusBadgeBase,
+    ...(stockItem.is_active ? UI.statusBadgeOk : UI.statusBadgeProblem),
+  };
+
   return (
-    <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className="erp-overview-page" style={UI.container}>
+      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 22 }}>
         <DetailPageHeader
-          title={stockItem.portfolio_gpn}
-          subtitle={stockItem.portfolio_name}
+          title={
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: 28,
+                  fontWeight: 1000,
+                  color: UI.colors.primary,
+                  letterSpacing: 0.3,
+                  lineHeight: 1.05,
+                }}
+              >
+                {stockItem.portfolio_gpn}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: UI.colors.textPrimary }}>
+                {stockItem.portfolio_name}
+              </div>
+            </div>
+          }
+          headerAside={
+            <span className="erp-status-badge" style={statusStyle}>
+              {statusLabel}
+            </span>
+          }
           actions={
             <button type="button" style={UI.buttons.secondary} onClick={onBack}>
               Zpět na sklad výrobků
             </button>
           }
+          context={
+            <div style={erpDetailStateCard}>
+              <div style={erpDetailSectionEyebrow}>Aktuální stav skladu</div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <div>
+                  <div style={erpDetailRowLabel}>Aktuální stav</div>
+                  <div
+                    style={{
+                      ...erpDetailRowValue,
+                      color: belowMin ? UI.colors.problemFg : UI.colors.textPrimary,
+                    }}
+                  >
+                    {stockItem.current_qty} {u}
+                    {belowMin ? (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          fontSize: 11,
+                          fontWeight: 800,
+                          color: UI.colors.problemFg,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.5,
+                        }}
+                      >
+                        pod min.
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Min. zásoba</div>
+                  <div style={erpDetailRowValue}>
+                    {stockItem.min_qty == null ? "—" : `${stockItem.min_qty} ${u}`}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Lokace</div>
+                  <div style={erpDetailRowValue}>
+                    {stockItem.location?.trim() ? stockItem.location : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Scan kód</div>
+                  <div style={erpDetailRowValue}>
+                    {stockItem.scan_code?.trim() ? stockItem.scan_code : "—"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          }
           summaryTiles={
-            <div style={UI.summaryTilesGrid}>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 160 }}>
-                <div style={UI.summaryTileLabel}>Aktuální stav</div>
-                <div style={UI.summaryTileValue}>
-                  {stockItem.current_qty} {u}
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={erpDetailKpiPanel}>
+                <div style={erpDetailSectionEyebrow}>Pohyby</div>
+                <div style={erpDetailKpiRow}>
+                  <div>
+                    <div style={erpDetailKpiLabel}>Počet pohybů</div>
+                    <div style={erpDetailKpiValue}>{totalMovements}</div>
+                  </div>
+                  <div>
+                    <div style={erpDetailKpiLabel}>Poslední pohyb</div>
+                    <div style={erpDetailKpiValue}>
+                      {lastMovement ? formatDate(lastMovement) : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={erpDetailKpiLabel}>Jednotka</div>
+                    <div style={erpDetailKpiValue}>{u}</div>
+                  </div>
+                  <div>
+                    <div style={erpDetailKpiLabel}>Stav karty</div>
+                    <div style={erpDetailKpiValue}>{statusLabel}</div>
+                  </div>
                 </div>
               </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 160 }}>
-                <div style={UI.summaryTileLabel}>Min. zásoba</div>
-                <div style={UI.summaryTileValue}>
-                  {stockItem.min_qty == null ? "—" : `${stockItem.min_qty} ${u}`}
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  background: UI.colors.card,
+                  border: `1px solid ${UI.colors.border}`,
+                }}
+              >
+                <div style={{ ...erpDetailSectionEyebrow, color: UI.colors.neutralFg, marginBottom: 8 }}>
+                  Identifikace
                 </div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 160 }}>
-                <div style={UI.summaryTileLabel}>Lokace</div>
-                <div style={UI.summaryTileValue}>{stockItem.location?.trim() ? stockItem.location : "—"}</div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 160 }}>
-                <div style={UI.summaryTileLabel}>Scan kód</div>
-                <div style={UI.summaryTileValue}>{stockItem.scan_code?.trim() ? stockItem.scan_code : "—"}</div>
+                <div style={erpDetailIdentGrid}>
+                  <div>
+                    <div style={erpDetailIdentLabel}>GPN</div>
+                    <div style={erpDetailIdentValue}>{stockItem.portfolio_gpn}</div>
+                  </div>
+                  <div>
+                    <div style={erpDetailIdentLabel}>Název</div>
+                    <div style={erpDetailIdentValue}>{stockItem.portfolio_name}</div>
+                  </div>
+                  <div>
+                    <div style={erpDetailIdentLabel}>Výkres</div>
+                    <div style={erpDetailIdentValue}>
+                      {stockItem.drawing_number?.trim() ? stockItem.drawing_number : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={erpDetailIdentLabel}>Revize</div>
+                    <div style={erpDetailIdentValue}>
+                      {stockItem.drawing_revision?.trim() ? stockItem.drawing_revision : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={erpDetailIdentLabel}>Poznámka</div>
+                    <div style={erpDetailIdentValue}>
+                      {stockItem.note?.trim() ? stockItem.note : "—"}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           }

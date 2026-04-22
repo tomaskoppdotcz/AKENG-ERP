@@ -83,3 +83,78 @@ export function canPerformAction(role: ErpRole | null, action: string): boolean 
   if (!set) return true;
   return set.has(role);
 }
+
+// ---------------------------------------------------------------------------
+// Permission-based gating (nová cesta — navázáno na DB knihovnu uživatelů).
+//
+// Frontend si drží cache aktuálního uživatele (`MeDto`) získaného z `/users/me`.
+// `hasPermission(code)` čte z této cache. Pokud cache není naplněná, chováme se
+// defenzivně: vrátíme true (pilot režim) stejně jako legacy `canPerformAction`,
+// aby se UI nezablokovalo před dokončením prvního fetch /users/me.
+// ---------------------------------------------------------------------------
+
+export type CurrentUserSnapshot = {
+  permissions: Set<string>;
+  roles: Set<string>;
+  hasFullAccess: boolean;
+  username: string | null;
+  displayName: string | null;
+  loaded: boolean;
+};
+
+let CURRENT_USER: CurrentUserSnapshot = {
+  permissions: new Set(),
+  roles: new Set(),
+  hasFullAccess: true, // default allow before /users/me loads — legacy pilot chování
+  username: null,
+  displayName: null,
+  loaded: false,
+};
+
+type Listener = (snapshot: CurrentUserSnapshot) => void;
+const LISTENERS: Set<Listener> = new Set();
+
+export function getCurrentUserSnapshot(): CurrentUserSnapshot {
+  return CURRENT_USER;
+}
+
+export function setCurrentUserSnapshot(next: Partial<CurrentUserSnapshot>): void {
+  CURRENT_USER = {
+    ...CURRENT_USER,
+    ...next,
+    permissions: next.permissions ?? CURRENT_USER.permissions,
+    roles: next.roles ?? CURRENT_USER.roles,
+    loaded: next.loaded ?? true,
+  };
+  LISTENERS.forEach((fn) => {
+    try {
+      fn(CURRENT_USER);
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
+export function subscribeCurrentUser(listener: Listener): () => void {
+  LISTENERS.add(listener);
+  return () => {
+    LISTENERS.delete(listener);
+  };
+}
+
+export function hasPermission(code: string): boolean {
+  const snap = CURRENT_USER;
+  if (!snap.loaded) return true; // pilot fallback dokud se /users/me nenačte
+  if (snap.hasFullAccess) return true;
+  return snap.permissions.has(code);
+}
+
+export function hasAnyPermission(codes: string[]): boolean {
+  if (codes.length === 0) return true;
+  return codes.some((c) => hasPermission(c));
+}
+
+/** Vhodné pro guard komponentu `<PermissionGate permission="manage_users">`. */
+export function canSeeUsersLibrary(): boolean {
+  return hasPermission("manage_users");
+}

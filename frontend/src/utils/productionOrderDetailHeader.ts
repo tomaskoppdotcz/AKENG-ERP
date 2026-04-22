@@ -213,6 +213,9 @@ export function buildProductionOrderDetailHeaderModel(d: ProductionOrderDetail):
 
   const term = formatDueCs(d.due_date);
 
+  const drawingNumber = d.drawing_number?.trim() ? d.drawing_number : "—";
+  const drawingRevision = d.drawing_revision?.trim() ? d.drawing_revision : "—";
+
   const rowIdentifiers: Array<{ key: string; label: string; value: string }> = [
     { key: "vp", label: "VP", value: d.vp_code || "—" },
     { key: "zakazka", label: orderTypeLabel, value: d.zakazka ?? "—" },
@@ -223,15 +226,21 @@ export function buildProductionOrderDetailHeaderModel(d: ProductionOrderDetail):
     },
     { key: "line", label: "\u0158\u00e1dek", value: d.line_no != null ? String(d.line_no) : "—" },
     { key: "gpn", label: "GPN", value: d.gpn ?? "—" },
+    { key: "drawing_number", label: "Výkres", value: drawingNumber },
+    { key: "drawing_revision", label: "Revize", value: drawingRevision },
     { key: "name", label: "Název", value: d.description ?? "—" },
     { key: "qty", label: "Množství", value: `${d.quantity} ks` },
     { key: "due", label: "Termín", value: term },
   ];
 
-  const portfolioLine =
-    d.portfolio_item_name && d.portfolio_item_id != null
-      ? `${d.portfolio_item_name} (ID ${d.portfolio_item_id})`
-      : d.portfolio_item_name || "—";
+  const portfolioLine = (() => {
+    const gpn = d.portfolio_item_gpn?.trim();
+    const name = d.portfolio_item_name?.trim();
+    const primary = gpn || name;
+    if (!primary) return "—";
+    if (d.portfolio_item_id != null) return `${primary} (ID ${d.portfolio_item_id})`;
+    return primary;
+  })();
 
   const rowSource: Array<{ key: string; label: string; value: string }> = [
     { key: "portfolio", label: "Portfolio varianta", value: portfolioLine },

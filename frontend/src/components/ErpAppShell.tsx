@@ -2,7 +2,7 @@ import React from "react";
 import ErpShellSidebar from "./ErpShellSidebar";
 import type { ErpNavGroup } from "../navigation/erpNavConfig";
 import ErpTopBar from "./ErpTopBar";
-import { UI } from "../styles/ui";
+import { ERP_GLOBAL_POLISH_CSS, UI } from "../styles/ui";
 
 const S = UI.erpShell;
 
@@ -24,6 +24,7 @@ export default function ErpAppShell({ activeModule, contextLine, onNavigate, rig
         fontFamily: "Arial, Helvetica, sans-serif",
       }}
     >
+      <style>{ERP_GLOBAL_POLISH_CSS}</style>
       <ErpShellSidebar activeModule={activeModule} onNavigate={onNavigate} navGroups={navGroups} />
       <div
         style={{

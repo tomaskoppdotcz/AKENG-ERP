@@ -1,3 +1,4 @@
+import { attachHttpErrorMeta } from "../utils/writeActionFeedback";
 import { akengFetch } from "./akengFetch";
 
 const API_BASE =
@@ -110,12 +111,32 @@ export type OrderDetailItem = {
   }>;
   /** Agregace přes aktivní VP řádku (GET order-detail). */
   reported_time_min?: number;
+  labor_cost?: number;
   direct_labor_cost?: number;
   completion_percent?: number | null;
   performance_percent?: number | null;
   current_phase?: string | null;
   current_location?: string | null;
   operational_summary_cs?: string | null;
+  total_duration_min?: number;
+  total_ok_qty?: number;
+  total_nok_qty?: number;
+  work_reports?: Array<{
+    id: number;
+    code: string | null;
+    started_at: string | null;
+    ended_at: string | null;
+    duration_min: number | null;
+    employee: string | null;
+    production_order_code: string | null;
+    operation_no: number | null;
+    operation_label: string | null;
+    ok_qty: number | null;
+    nok_qty: number | null;
+    source: string | null;
+    status: string | null;
+    status_display: string | null;
+  }>;
 };
 
 export type OrderDetailResponse = {
@@ -180,6 +201,9 @@ export type JobItemRow = {
   current_phase?: string | null;
   current_location?: string | null;
   operational_summary_cs?: string | null;
+  total_duration_min?: number;
+  total_ok_qty?: number;
+  total_nok_qty?: number;
 };
 
 export type JobItemCreatePayload = {
@@ -315,6 +339,20 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
   return fallback;
 }
 
+/** Úspěšná odpověď s volitelným JSON tělem (204 / prázdné tělo → `undefined`). */
+async function readOptionalJsonBody(res: Response): Promise<unknown> {
+  if (res.status === 204 || res.status === 205) return undefined;
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) return undefined;
+  try {
+    const text = await res.text();
+    if (!text.trim()) return undefined;
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function getOrdersOverview(
   orderType: OrdersOverviewOrderTypeFilter = "customer",
   workflowFilter: ErpWorkflowListFilter = "active"
@@ -443,7 +481,10 @@ export async function getJobItems(workflowFilter: ErpWorkflowListFilter = "activ
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst položky zakázek.");
   }
-  return res.json();
+  const data = await res.json();
+  // Endpoint vrací { items, total, limit, offset }; pro kompatibilitu držíme array-return.
+  if (Array.isArray(data)) return data as JobItemRow[];
+  return Array.isArray(data?.items) ? (data.items as JobItemRow[]) : [];
 }
 
 export async function createJobItem(payload: JobItemCreatePayload): Promise<JobItemRow> {
@@ -470,11 +511,13 @@ export async function updateJobItem(itemId: number, payload: JobItemUpdatePayloa
   return res.json();
 }
 
-export async function stornoJobItem(itemId: number): Promise<void> {
+export async function stornoJobItem(itemId: number): Promise<unknown> {
   const res = await akengFetch(`${API_BASE}/orders/job-items/${itemId}/storno`, { method: "POST" });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Nepodařilo se stornovat položku zakázky."));
+    const msg = await readErrorMessage(res, "Nepodařilo se stornovat položku zakázky.");
+    throw attachHttpErrorMeta(new Error(msg), res);
   }
+  return readOptionalJsonBody(res);
 }
 
 export async function updateCustomerOrder(
@@ -491,11 +534,13 @@ export async function updateCustomerOrder(
   }
 }
 
-export async function stornoCustomerOrder(customerOrderId: number): Promise<void> {
+export async function stornoCustomerOrder(customerOrderId: number): Promise<unknown> {
   const res = await akengFetch(`${API_BASE}/orders/customer-orders/${customerOrderId}/storno`, { method: "POST" });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Nepodařilo se stornovat zakázku."));
+    const msg = await readErrorMessage(res, "Nepodařilo se stornovat zakázku.");
+    throw attachHttpErrorMeta(new Error(msg), res);
   }
+  return readOptionalJsonBody(res);
 }
 
 export async function getJobs(): Promise<JobRow[]> {
@@ -503,7 +548,9 @@ export async function getJobs(): Promise<JobRow[]> {
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst zakázky (jobs).");
   }
-  return res.json();
+  const data = await res.json();
+  if (Array.isArray(data)) return data as JobRow[];
+  return Array.isArray(data?.items) ? (data.items as JobRow[]) : [];
 }
 
 export async function getProductionOrders(workflowFilter: ErpWorkflowListFilter = "active"): Promise<ProductionOrderRow[]> {
@@ -512,7 +559,9 @@ export async function getProductionOrders(workflowFilter: ErpWorkflowListFilter 
   if (!res.ok) {
     throw new Error("Nepodařilo se načíst výrobní příkazy.");
   }
-  return res.json();
+  const data = await res.json();
+  if (Array.isArray(data)) return data as ProductionOrderRow[];
+  return Array.isArray(data?.items) ? (data.items as ProductionOrderRow[]) : [];
 }
 
 export async function getAllocationPreview(customerOrderId: number): Promise<AllocationPreviewResponse> {

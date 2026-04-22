@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import PageContainer from "../components/layout/PageContainer";
 import PageHeader from "../components/layout/PageHeader";
 import PageSection from "../components/layout/PageSection";
-import { UI } from "../styles/ui";
+import { erpKpiTileBackground, UI } from "../styles/ui";
 import {
   getJobItems,
   getJobs,
@@ -16,6 +16,8 @@ import OverviewSloupceButton from "../components/overview/OverviewSloupceButton"
 import { OVERVIEW_ORDER_TYPE_OPTIONS, OVERVIEW_WORKFLOW_OPTIONS } from "../overview/overviewFilterConfig";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import TableLayoutModal from "../components/overview/TableLayoutModal";
+import ErpPagination from "../components/overview/ErpPagination";
+import { useClientPagination } from "../hooks/useClientPagination";
 import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
 import type { TableColumnDef } from "../overview/tableLayoutMerge";
 import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
@@ -83,7 +85,7 @@ const linkBtn: React.CSSProperties = {
   margin: 0,
   cursor: "pointer",
   font: "inherit",
-  color: "#2563eb",
+  color: "#1D4ED8",
   textDecoration: "underline",
   textUnderlineOffset: "3px",
 };
@@ -115,13 +117,19 @@ function formatVpCodes(codes: string[]): string {
 function drawingsSearchHaystack(row: DrawingItem): string {
   const vpCodes = row.vpLinks.map((l) => l.vp_code).join(" ");
   return buildSearchHaystack(
+    row.zakazka,
     row.gpn,
     row.popis,
     row.drawing_number,
     row.drawing_revision,
     row.vp,
     vpCodes,
-    row.zakazka
+    row.line_no,
+    row.material,
+    row.termin,
+    row.faze_vyroby,
+    row.postup,
+    row.stav
   );
 }
 
@@ -162,8 +170,6 @@ export default function DrawingsPage({
   onOpenProductionOrderInWorkspaceTab,
   onOpenCustomerOrderCard,
   onOpenCustomerOrderInWorkspaceTab,
-  onPreviewPortfolioById,
-  onPreviewProductionOrderById,
 }: Props) {
   const [activeSubtab, setActiveSubtab] = useState<DrawingsSubtab>("Přehled");
   const [hoverSubtab, setHoverSubtab] = useState<DrawingsSubtab | null>(null);
@@ -175,6 +181,7 @@ export default function DrawingsPage({
   const [workflowListFilter, setWorkflowListFilter] = useState<ErpWorkflowListFilter>("active");
   const [overviewOrderType, setOverviewOrderType] = useState<OrdersOverviewOrderTypeFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -337,6 +344,18 @@ export default function DrawingsPage({
     [filteredRows, tb.sort],
   );
 
+  // Klientská pagination — backend pro /orders/job-items podporuje server-side limit/offset/total,
+  // ale tahle stránka drží plný dataset kvůli universal search + sortingu napříč všemi řádky.
+  const drawingsPaginationResetKey = `${workflowListFilter}|${overviewOrderType}|${searchQuery}|${tb.sort?.key ?? ""}|${tb.sort?.direction ?? ""}`;
+  const {
+    pagedRows: pagedDrawingRows,
+    pageSize: drawingsPageSize,
+    setPageSize: setDrawingsPageSize,
+    offset: drawingsOffset,
+    setOffset: setDrawingsOffset,
+    total: drawingsPagedTotal,
+  } = useClientPagination(sortedFilteredRows, { resetKey: drawingsPaginationResetKey });
+
   const kpi = useMemo(() => {
     const celkemPolozek = rows.length;
     const celkemKusu = rows.reduce((sum, row) => {
@@ -348,11 +367,41 @@ export default function DrawingsPage({
     const kExpedici = rows.filter((row) => row.stav === "Hotovo").length;
 
     return [
-      { label: "Celkem položek", value: String(celkemPolozek) },
-      { label: "Celkem kusů", value: `${celkemKusu} ks` },
-      { label: "Aktivní položky", value: String(aktivniPolozky) },
-      { label: "Po termínu", value: String(poTerminu) },
-      { label: "K expedici", value: String(kExpedici) },
+      {
+        label: "Celkem položek",
+        value: String(celkemPolozek),
+        accent: UI.colors.primary,
+        kind: "primary" as const,
+        hint: "Počet řádků / GPN v aktuálním filtru.",
+      },
+      {
+        label: "Celkem kusů",
+        value: `${celkemKusu} ks`,
+        accent: UI.colors.neutralFg,
+        kind: "neutral" as const,
+        hint: "Součet množství napříč položkami.",
+      },
+      {
+        label: "Aktivní položky",
+        value: String(aktivniPolozky),
+        accent: UI.colors.primary,
+        kind: "info" as const,
+        hint: "Bez stavu Hotovo / Storno.",
+      },
+      {
+        label: "Po termínu",
+        value: String(poTerminu),
+        accent: UI.colors.problemFg,
+        kind: "danger" as const,
+        hint: "Termín < dnes.",
+      },
+      {
+        label: "K expedici",
+        value: String(kExpedici),
+        accent: UI.colors.okFg,
+        kind: "success" as const,
+        hint: "Stav Hotovo.",
+      },
     ] as const;
   }, [rows]);
 
@@ -364,6 +413,7 @@ export default function DrawingsPage({
             {row.customer_order_id != null && (onOpenCustomerOrderInWorkspaceTab || onOpenCustomerOrderCard) ? (
               <button
                 type="button"
+                className="erp-table-link"
                 style={{ ...linkBtn, fontWeight: 900, color: "#0f172a" }}
                 onClick={() => {
                   const id = row.customer_order_id!;
@@ -389,6 +439,7 @@ export default function DrawingsPage({
           <span onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
+              className="erp-table-link"
               style={{ ...linkBtn, fontWeight: 800 }}
               onClick={() => {
                 if (row.portfolio_item_id != null && onOpenPortfolioInWorkspaceTab) {
@@ -404,15 +455,6 @@ export default function DrawingsPage({
             >
               {row.gpn}
             </button>
-            {row.portfolio_item_id != null && onPreviewPortfolioById ? (
-              <button
-                type="button"
-                style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "2px 8px", fontSize: 11 }}
-                onClick={() => onPreviewPortfolioById(row.portfolio_item_id!)}
-              >
-                Náhled
-              </button>
-            ) : null}
           </span>
         );
       case "popis":
@@ -427,7 +469,7 @@ export default function DrawingsPage({
         return formatOverviewReportedMinutes(row.reported_time_min);
       case "completion":
         return (
-          <span style={{ fontWeight: 1000, color: "#2563eb" }}>
+          <span style={{ fontWeight: 1000, color: "#1D4ED8" }}>
             {formatOverviewPercentAsShown(row.completion_percent)}
           </span>
         );
@@ -464,15 +506,6 @@ export default function DrawingsPage({
                     >
                       {vp.vp_code}
                     </button>
-                    {onPreviewProductionOrderById ? (
-                      <button
-                        type="button"
-                        style={{ ...UI.buttons.secondary, padding: "2px 6px", fontSize: 11 }}
-                        onClick={() => onPreviewProductionOrderById(vp.id)}
-                      >
-                        Náhled
-                      </button>
-                    ) : null}
                   </span>
                 ))}
               </span>
@@ -505,7 +538,7 @@ export default function DrawingsPage({
   }
 
   return (
-    <PageContainer style={{ paddingTop: 10 }}>
+    <PageContainer className="erp-overview-page" style={{ paddingTop: 10 }}>
       <PageHeader
         title="Výkresy"
         subtitle="Položky zákaznických i interních zakázek (GPN / řádky); VP včetně doplnění skladu (restock)."
@@ -519,9 +552,19 @@ export default function DrawingsPage({
       <div style={UI.summaryTilesGridOuter}>
         <div style={UI.summaryTilesGridSix}>
           {kpi.map((k) => (
-            <div key={k.label} style={UI.summaryTile}>
-              <div style={UI.summaryTileLabel}>{k.label}</div>
-              <div style={UI.summaryTileValue}>{k.value}</div>
+            <div
+              key={k.label}
+              className="erp-kpi-tile"
+              style={{
+                ...UI.overviewKpiTile,
+                borderLeftColor: k.accent,
+                background: erpKpiTileBackground(k.kind),
+                boxShadow: `${UI.overviewKpiTile.boxShadow as string}, inset 0 1px 0 rgba(255, 255, 255, 0.9)`,
+              }}
+            >
+              <div style={UI.overviewKpiLabel}>{k.label}</div>
+              <div style={{ ...UI.overviewKpiValue, fontSize: 31, lineHeight: 1.05 }}>{k.value}</div>
+              <div style={UI.overviewKpiHint}>{k.hint}</div>
             </div>
           ))}
         </div>
@@ -595,6 +638,25 @@ export default function DrawingsPage({
                   </>
                 }
               />
+              {!loading && rows.length > 0 ? (
+                <div style={UI.overviewSecondaryFilterRow}>
+                  <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 360px", minWidth: 240 }}>
+                    <input
+                      className="erp-overview-search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onFocus={() => setSearchFocused(true)}
+                      onBlur={() => setSearchFocused(false)}
+                      placeholder="Hledat zakázku, GPN, název, výkres, revizi, VP…"
+                      aria-label="Fulltextové hledání v přehledu položek zakázek"
+                      style={{
+                        ...UI.inputs.overviewSearch,
+                        ...(searchFocused ? UI.inputs.overviewSearchFocus : {}),
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div style={UI.overviewCardBody}>
@@ -608,7 +670,7 @@ export default function DrawingsPage({
             ) : null}
 
             {!loading && !error && rows.length > 0 ? (
-            <div style={UI.overviewTableWrap}>
+            <div className="erp-table-wrap" style={UI.overviewTableWrap}>
               <table style={UI.table}>
                 <thead>
                   <tr style={UI.overviewTableHeadRow}>
@@ -629,7 +691,7 @@ export default function DrawingsPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedFilteredRows.map((row) => (
+                  {pagedDrawingRows.map((row) => (
                     <tr
                       key={`${row.zakazka}-${row.job_item_id}`}
                       role="button"
@@ -685,6 +747,16 @@ export default function DrawingsPage({
                 </tbody>
               </table>
             </div>
+            ) : null}
+            {rows.length > 0 ? (
+              <ErpPagination
+                pageSize={drawingsPageSize}
+                onPageSizeChange={setDrawingsPageSize}
+                offset={drawingsOffset}
+                onOffsetChange={setDrawingsOffset}
+                total={drawingsPagedTotal}
+                currentCount={pagedDrawingRows.length}
+              />
             ) : null}
             </div>
           </div>

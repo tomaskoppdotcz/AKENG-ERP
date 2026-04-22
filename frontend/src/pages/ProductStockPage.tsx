@@ -3,7 +3,7 @@ import SimpleModal from "../components/SimpleModal";
 import PageContainer from "../components/layout/PageContainer";
 import PageHeader from "../components/layout/PageHeader";
 import PageSection from "../components/layout/PageSection";
-import { UI } from "../styles/ui";
+import { erpKpiTileBackground, UI } from "../styles/ui";
 import { getPortfolioItems, type PortfolioItem } from "../services/portfolioApi";
 import { getStorageLocations, type StorageLocation } from "../services/storageLocationApi";
 import {
@@ -16,6 +16,8 @@ import {
 } from "../services/productStockApi";
 import TableLayoutModal from "../components/overview/TableLayoutModal";
 import OverviewSloupceButton from "../components/overview/OverviewSloupceButton";
+import ErpPagination from "../components/overview/ErpPagination";
+import { useClientPagination } from "../hooks/useClientPagination";
 import { usePersistedTableLayout } from "../hooks/usePersistedTableLayout";
 import type { TableColumnDef } from "../overview/tableLayoutMerge";
 import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
@@ -187,9 +189,27 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
   const stockSummary = useMemo(() => {
     const sumQty = filtered.reduce((s, r) => s + (Number.isFinite(r.current_qty) ? r.current_qty : 0), 0);
     return [
-      { label: "Položek ve skladu", value: String(rows.length) },
-      { label: "Po filtru", value: String(filtered.length) },
-      { label: "Součet stavu (ks)", value: sumQty.toLocaleString("cs-CZ", { maximumFractionDigits: 0 }) },
+      {
+        label: "Položek ve skladu",
+        value: String(rows.length),
+        accent: UI.colors.primary,
+        kind: "primary" as const,
+        hint: "Všechny skladové karty výrobků.",
+      },
+      {
+        label: "Po filtru",
+        value: String(filtered.length),
+        accent: UI.colors.neutralFg,
+        kind: "neutral" as const,
+        hint: "Po aplikaci hledání / zákazníka.",
+      },
+      {
+        label: "Součet stavu (ks)",
+        value: sumQty.toLocaleString("cs-CZ", { maximumFractionDigits: 0 }),
+        accent: UI.colors.okFg,
+        kind: "success" as const,
+        hint: "Kusy napříč zobrazenými položkami.",
+      },
     ] as const;
   }, [rows.length, filtered]);
 
@@ -219,6 +239,18 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
       }),
     [filtered, tb.sort],
   );
+
+  // Klientská pagination — backend /product-stock/items podporuje server-side limit/offset/total,
+  // ale tahle stránka drží plný dataset kvůli universal search + filtru zákazníka + sortingu.
+  const productStockPaginationResetKey = `${query}|${customerFilter}|${tb.sort?.key ?? ""}|${tb.sort?.direction ?? ""}`;
+  const {
+    pagedRows: pagedProductStockRows,
+    pageSize: productStockPageSize,
+    setPageSize: setProductStockPageSize,
+    offset: productStockOffset,
+    setOffset: setProductStockOffset,
+    total: productStockPagedTotal,
+  } = useClientPagination(sortedFiltered, { resetKey: productStockPaginationResetKey });
 
   function parseOptionalNumber(value: string): number | null {
     const t = value.trim().replace(",", ".");
@@ -378,7 +410,7 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
 
   return (
     <>
-      <PageContainer style={{ paddingTop: 10 }}>
+      <PageContainer className="erp-overview-page" style={{ paddingTop: 10 }}>
         <PageHeader
           title="Sklad výrobků"
           subtitle="Přehled hotových výrobků (portfolio)"
@@ -400,9 +432,19 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
         <div style={UI.summaryTilesGridOuter}>
           <div style={UI.summaryTilesGridThree}>
             {stockSummary.map((t) => (
-              <div key={t.label} style={UI.summaryTile}>
-                <div style={UI.summaryTileLabel}>{t.label}</div>
-                <div style={UI.summaryTileValue}>{t.value}</div>
+              <div
+                key={t.label}
+                className="erp-kpi-tile"
+                style={{
+                  ...UI.overviewKpiTile,
+                  borderLeftColor: t.accent,
+                  background: erpKpiTileBackground(t.kind),
+                  boxShadow: `${UI.overviewKpiTile.boxShadow as string}, inset 0 1px 0 rgba(255, 255, 255, 0.9)`,
+                }}
+              >
+                <div style={UI.overviewKpiLabel}>{t.label}</div>
+                <div style={{ ...UI.overviewKpiValue, fontSize: 31, lineHeight: 1.05 }}>{t.value}</div>
+                <div style={UI.overviewKpiHint}>{t.hint}</div>
               </div>
             ))}
           </div>
@@ -495,12 +537,15 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
           <div style={UI.overviewCardHeaderBand}>
             <div style={UI.overviewSecondaryFilterRow}>
               <OverviewSloupceButton onClick={() => tb.openPanel()} disabled={loading} />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Hledat GPN, název, výkres, revizi, lokaci, scan kód…"
-                style={{ ...UI.inputs.base, minWidth: 200, flex: "1 1 240px" }}
-              />
+              <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 320px", minWidth: 220 }}>
+                <input
+                  className="erp-overview-search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Hledat GPN, název, výkres, revizi, lokaci, scan kód…"
+                  style={UI.inputs.overviewSearch}
+                />
+              </div>
               {customerOptions.length > 0 ? (
                 <select
                   value={customerFilter}
@@ -528,7 +573,7 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
           ) : null}
 
           {!loading && !error && rows.length > 0 ? (
-            <div style={UI.overviewTableWrap}>
+            <div className="erp-table-wrap" style={UI.overviewTableWrap}>
               <table style={UI.table}>
                 <thead>
                   <tr style={UI.overviewTableHeadRow}>
@@ -553,7 +598,7 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedFiltered.map((row) => (
+                  {pagedProductStockRows.map((row) => (
                     <tr
                       key={row.id}
                       onClick={() => onOpenStockInWorkspaceTab(row)}
@@ -589,6 +634,16 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
                 </tbody>
               </table>
             </div>
+          ) : null}
+          {rows.length > 0 ? (
+            <ErpPagination
+              pageSize={productStockPageSize}
+              onPageSizeChange={setProductStockPageSize}
+              offset={productStockOffset}
+              onOffsetChange={setProductStockOffset}
+              total={productStockPagedTotal}
+              currentCount={pagedProductStockRows.length}
+            />
           ) : null}
           </div>
           </div>

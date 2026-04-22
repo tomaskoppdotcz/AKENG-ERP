@@ -1,7 +1,20 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
 import SimpleModal from "../components/SimpleModal";
-import { UI } from "../styles/ui";
+import {
+  erpDetailIdentGrid,
+  erpDetailIdentLabel,
+  erpDetailIdentValue,
+  erpDetailKpiLabel,
+  erpDetailKpiPanel,
+  erpDetailKpiRow,
+  erpDetailKpiValue,
+  erpDetailRowLabel,
+  erpDetailRowValue,
+  erpDetailSectionEyebrow,
+  erpDetailStateCard,
+  UI,
+} from "../styles/ui";
 import { buildProductionOrderDetailHeaderModel, vpHeaderBadgeStyle } from "../utils/productionOrderDetailHeader";
 import {
   getProductionOrderDetail,
@@ -15,6 +28,8 @@ import {
 } from "../services/productionOrdersApi";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import { canPerformAction, readStoredErpRole } from "../auth/rbac";
+import InlineBanner from "../components/InlineBanner";
+import { interpretError, runWriteAction, type WriteFeedback } from "../utils/writeActionFeedback";
 
 const API_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -93,7 +108,16 @@ export default function ProductionOrderDetailPage({
   const [data, setData] = useState<ProductionOrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [opActionError, setOpActionError] = useState<string | null>(null);
+  /**
+   * Sjednocený inline feedback pro write akce (start / report / storno /
+   * regenerate / receive / print PDF). Phase 1 standardu — viz
+   * `utils/writeActionFeedback.ts` + `components/InlineBanner.tsx`.
+   *
+   * Volidační chyby uvnitř modálu (např. „zadejte platné množství") zůstávají
+   * v `receiveError` — to je modal-scoped a render se v modálu, ne na page.
+   */
+  const [actionFeedback, setActionFeedback] = useState<WriteFeedback | null>(null);
+  const writeFeedbackAnchorRef = useRef<HTMLDivElement>(null);
   const [busyOp, setBusyOp] = useState<number | null>(null);
   const [okByOp, setOkByOp] = useState<Record<number, string>>({});
   const [nokByOp, setNokByOp] = useState<Record<number, string>>({});
@@ -103,11 +127,9 @@ export default function ProductionOrderDetailPage({
   const [receiveQty, setReceiveQty] = useState("");
   const [receiveLocation, setReceiveLocation] = useState("");
   const [receiveBusy, setReceiveBusy] = useState(false);
-  const [receiveMessage, setReceiveMessage] = useState<string | null>(null);
   const [receiveError, setReceiveError] = useState<string | null>(null);
   const [stornoBusy, setStornoBusy] = useState(false);
   const [regenerateBusy, setRegenerateBusy] = useState(false);
-  const [regenerateMessage, setRegenerateMessage] = useState<string | null>(null);
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
 
   const erpRole = useMemo(() => readStoredErpRole(), []);
@@ -125,14 +147,23 @@ export default function ProductionOrderDetailPage({
   const regenerateDisabled =
     !poWorkflowActive || regenerateBusy || !canProductionExecute || regenerateBlockedByProgress;
 
-  async function loadDetail() {
-    setLoading(true);
-    setError(null);
+  async function loadDetail(opts?: { silent?: boolean }) {
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const r = await getProductionOrderDetail(productionOrderId);
       setData(r);
+    } catch (e: unknown) {
+      if (silent) {
+        setActionFeedback(interpretError(e, "Nepodařilo se načíst detail VP."));
+      } else {
+        setError(e instanceof Error ? e.message : "Nepodařilo se načíst detail VP.");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -156,52 +187,70 @@ export default function ProductionOrderDetailPage({
     onWorkspaceTabTitle(code || `VP · #${productionOrderId}`);
   }, [data, productionOrderId, onWorkspaceTabTitle]);
 
+  useEffect(() => {
+    if (!actionFeedback) return;
+    writeFeedbackAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [actionFeedback]);
+
   async function handleStartOperation(operationNo: number) {
-    setOpActionError(null);
+    setActionFeedback(null);
     setBusyOp(operationNo);
-    try {
-      await startProductionOrderOperation(productionOrderId, operationNo);
-      await loadDetail();
-    } catch (e: unknown) {
-      setOpActionError(e instanceof Error ? e.message : "Nepodařilo se zahájit operaci.");
-    } finally {
-      setBusyOp(null);
+    const fb = await runWriteAction(
+      () => startProductionOrderOperation(productionOrderId, operationNo),
+      {
+        successMessage: `Operace č. ${operationNo} byla zahájena.`,
+        errorMessage: "Zahájení operace se nezdařilo.",
+      },
+    );
+    setActionFeedback(fb);
+    setBusyOp(null);
+    if (fb.kind === "success" || fb.kind === "info") {
+      await loadDetail({ silent: true });
     }
   }
 
   async function handleReportOperation(operationNo: number) {
-    setOpActionError(null);
+    setActionFeedback(null);
     setBusyOp(operationNo);
     const ok_qty = Math.max(0, Number(okByOp[operationNo] ?? 0) || 0);
     const nok_qty = Math.max(0, Number(nokByOp[operationNo] ?? 0) || 0);
     const reported_minutes = Math.max(0, Number(minutesByOp[operationNo] ?? 0) || 0);
     const note = (noteByOp[operationNo] ?? "").trim() || null;
-    try {
-      await reportProductionOrderOperation(productionOrderId, operationNo, {
-        ok_qty,
-        nok_qty,
-        reported_minutes,
-        note,
-      });
-      await loadDetail();
-    } catch (e: unknown) {
-      setOpActionError(e instanceof Error ? e.message : "Nepodařilo se odvést operaci.");
-    } finally {
-      setBusyOp(null);
+    const fb = await runWriteAction(
+      () =>
+        reportProductionOrderOperation(productionOrderId, operationNo, {
+          ok_qty,
+          nok_qty,
+          reported_minutes,
+          note,
+        }),
+      {
+        successMessage: `Operace č. ${operationNo}: odvedeno OK ${ok_qty} / NOK ${nok_qty}, ${reported_minutes} min.`,
+        errorMessage: "Odvedení operace se nezdařilo.",
+      },
+    );
+    setActionFeedback(fb);
+    setBusyOp(null);
+    if (fb.kind === "success" || fb.kind === "info") {
+      await loadDetail({ silent: true });
     }
   }
 
   async function handleStornoVp() {
     if (!window.confirm("Stornovat tento výrobní příkaz? Rezervace materiálu se uvolní; záznam VP zůstane v historii.")) return;
     setStornoBusy(true);
-    setOpActionError(null);
-    try {
-      await stornoProductionOrder(productionOrderId);
-      await loadDetail();
-    } catch (e: unknown) {
-      setOpActionError(e instanceof Error ? e.message : "Storno VP se nezdařilo.");
-    } finally {
-      setStornoBusy(false);
+    setActionFeedback(null);
+    const fb = await runWriteAction(
+      () => stornoProductionOrder(productionOrderId),
+      {
+        successMessage: "Výrobní příkaz byl stornován.",
+        errorMessage: "Storno VP se nezdařilo.",
+      },
+    );
+    setActionFeedback(fb);
+    setStornoBusy(false);
+    if (fb.kind === "success" || fb.kind === "info") {
+      await loadDetail({ silent: true });
     }
   }
 
@@ -214,43 +263,75 @@ export default function ProductionOrderDetailPage({
     }
     setReceiveBusy(true);
     setReceiveError(null);
-    setReceiveMessage(null);
-    try {
-      const res = await receiveFinishedGoodsToStock(productionOrderId, {
-        qty: q,
-        location: receiveLocation.trim() || null,
-      });
-      setReceiveMessage(`Přijato ${res.qty_received} ks, stav skladu: ${res.current_qty} ks.`);
+    const fb = await runWriteAction(
+      () =>
+        receiveFinishedGoodsToStock(productionOrderId, {
+          qty: q,
+          location: receiveLocation.trim() || null,
+        }),
+      {
+        successMessage: `Příjem na sklad proběhl (${q} ks).`,
+        errorMessage: "Příjem na sklad se nepodařil.",
+        // Backend tady vrací `{ qty_received, current_qty }` — žádný `status`,
+        // tak interpretMutationBody by spadl do generického success.
+        // Sestavíme přesnější hlášku ručně.
+        interpretResult: (res) => ({
+          kind: "success",
+          message: `Přijato ${res.qty_received} ks, stav skladu: ${res.current_qty} ks.`,
+        }),
+      },
+    );
+    setReceiveBusy(false);
+    if (fb.kind === "success" || fb.kind === "info") {
+      setActionFeedback(fb);
       setReceiveOpen(false);
       setReceiveQty("");
       setReceiveLocation("");
-      await loadDetail();
-    } catch (e: unknown) {
-      setReceiveError(e instanceof Error ? e.message : "Příjem se nepodařil.");
-    } finally {
-      setReceiveBusy(false);
+      await loadDetail({ silent: true });
+    } else {
+      // Při chybě modál nezavíráme; uživatel uvidí hlášku přímo v něm
+      // a může opravit zadání. Page-level banner v tom případě neukazujeme.
+      setReceiveError(fb.message);
     }
   }
 
   async function handleRegenerateFromTp() {
     setRegenerateBusy(true);
-    setRegenerateMessage(null);
-    setOpActionError(null);
-    try {
-      const out = await regenerateProductionOrderFromTp(productionOrderId);
+    setActionFeedback(null);
+    const fb = await runWriteAction(
+      () => regenerateProductionOrderFromTp(productionOrderId),
+      {
+        successMessage: "Operace VP byly přegenerovány z TP.",
+        errorMessage: "Přegenerování z TP se nezdařilo.",
+        interpretResult: (out) => ({
+          kind: "success",
+          message: `VP ${out.vp_code}: operace úspěšně přegenerovány z TP.`,
+        }),
+      },
+    );
+    setActionFeedback(fb);
+    setRegenerateBusy(false);
+    if (fb.kind === "success" || fb.kind === "info") {
       setRegenerateConfirmOpen(false);
-      setRegenerateMessage(`VP ${out.vp_code}: operace úspěšně přegenerovány z TP.`);
-      await loadDetail();
-    } catch (e: unknown) {
-      setOpActionError(e instanceof Error ? e.message : "Přegenerování z TP se nezdařilo.");
-    } finally {
-      setRegenerateBusy(false);
+      await loadDetail({ silent: true });
     }
+  }
+
+  async function handlePrintVpPdf() {
+    setActionFeedback(null);
+    const fb = await runWriteAction(
+      () => openProductionOrderPdfInNewTab(productionOrderId),
+      {
+        successMessage: "Tisk VP otevřen v novém okně.",
+        errorMessage: "Tisk VP se nepodařil.",
+      },
+    );
+    setActionFeedback(fb);
   }
 
   if (loading) {
     return (
-      <div style={UI.container}>
+      <div className="erp-overview-page" style={UI.container}>
         <div style={{ ...UI.card, borderRadius: 14 }}>
           <div style={UI.sectionSubtitle}>Načítám detail výrobního příkazu…</div>
         </div>
@@ -260,7 +341,7 @@ export default function ProductionOrderDetailPage({
 
   if (error || !data) {
     return (
-      <div style={UI.container}>
+      <div className="erp-overview-page" style={UI.container}>
         <button onClick={onBack} style={UI.buttonSecondary}>
           Zpět na výrobní příkazy
         </button>
@@ -272,54 +353,107 @@ export default function ProductionOrderDetailPage({
   }
 
   const headerModel = buildProductionOrderDetailHeaderModel(data);
-  const productTitle =
-    (data.description || "").trim() || (data.portfolio_item_name || "").trim() || "—";
+  const productTitle = (() => {
+    const parts: string[] = [];
+    const gpn = (data.gpn || "").trim();
+    const drawing = (data.drawing_number || "").trim();
+    const name = (data.description || "").trim() || (data.portfolio_item_name || "").trim();
+    if (gpn) parts.push(gpn);
+    if (drawing) parts.push(drawing);
+    if (name) parts.push(name);
+    return parts.length > 0 ? parts.join(" – ") : "—";
+  })();
 
-  const poStateAccent = UI.colors.primaryLight;
-  const poStateBg = "linear-gradient(145deg, rgba(37, 99, 235, 0.09) 0%, rgba(241, 245, 249, 0.92) 52%, #ffffff 100%)";
-  const kpiPanelBg = UI.colors.neutralBg;
-  const sectionEyebrow: React.CSSProperties = {
-    fontSize: 10,
-    fontWeight: 900,
-    color: UI.colors.textSecondary,
-    letterSpacing: "0.1em",
-    textTransform: "uppercase",
+  const canReceiveToStock =
+    data.portfolio_item_id != null && poWorkflowActive && canStockMutate;
+  const primaryActionAvailable = canReceiveToStock;
+
+  const dangerButton: React.CSSProperties = {
+    ...UI.buttons.secondary,
+    color: UI.colors.problemFg,
+    borderColor: "#FCA5A5",
+    background: "#FEF2F2",
+  };
+
+  const subtleCard: React.CSSProperties = {
+    padding: "14px 16px",
+    borderRadius: 12,
+    background: UI.colors.card,
+    border: `1px solid ${UI.colors.border}`,
+  };
+
+  const identEyebrow: React.CSSProperties = {
+    ...erpDetailSectionEyebrow,
+    color: UI.colors.neutralFg,
+    marginBottom: 10,
+  };
+
+  const tableSectionCard: React.CSSProperties = {
+    ...UI.card,
+    borderRadius: 14,
+    padding: 18,
+  };
+
+  const sectionHeader: React.CSSProperties = {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 12,
     marginBottom: 12,
   };
-  const stateRowLabel: React.CSSProperties = {
-    fontSize: 10,
-    fontWeight: 800,
-    color: UI.colors.neutralFg,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-  };
-  const stateRowValue: React.CSSProperties = {
-    fontSize: 17,
-    fontWeight: 1000,
+
+  const sectionHeaderTitle: React.CSSProperties = {
+    fontSize: 16,
+    fontWeight: 900,
     color: UI.colors.textPrimary,
-    lineHeight: 1.3,
-    marginTop: 5,
-  };
-  const kpiLabel: React.CSSProperties = {
-    fontSize: 10,
-    fontWeight: 700,
-    color: UI.colors.textSecondary,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-  };
-  const kpiValue: React.CSSProperties = {
-    fontSize: 26,
-    fontWeight: 1000,
-    color: UI.colors.textPrimary,
-    letterSpacing: "-0.03em",
-    lineHeight: 1.1,
-    marginTop: 6,
-    wordBreak: "break-word",
+    letterSpacing: 0.1,
   };
 
+  const sectionHeaderSub: React.CSSProperties = {
+    fontSize: 12,
+    fontWeight: 700,
+    color: UI.colors.textSecondary,
+  };
+
+  const tableHeadCell: React.CSSProperties = {
+    ...UI.th,
+    whiteSpace: "nowrap",
+    padding: "10px 12px",
+  };
+
+  const tableBodyCell: React.CSSProperties = {
+    ...UI.td,
+    padding: "10px 12px",
+    verticalAlign: "middle" as const,
+  };
+
+  const rowStripeBg = "#FAFBFD";
+
+  const opStatusBadge = (status: string | null | undefined): React.CSSProperties => {
+    const s = String(status ?? "").trim().toLowerCase();
+    const base = UI.statusBadgeBase;
+    if (s === "hotovo") return { ...base, ...UI.statusBadgeOk };
+    if (s === "bezi") return { ...base, ...UI.statusBadgeRunning };
+    return { ...base, ...UI.statusBadgeWait };
+  };
+
+  const fieldLabel: React.CSSProperties = {
+    fontSize: 10.5,
+    fontWeight: 800,
+    color: UI.colors.neutralFg,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    marginBottom: 3,
+  };
+
+  const totalOperations = data.operations.length;
+  const doneOperations = data.operations.filter(
+    (op) => String(op.operation_status ?? "").trim().toLowerCase() === "hotovo",
+  ).length;
+
   return (
-    <div style={UI.container}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+    <div className="erp-overview-page" style={UI.container}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
         <DetailPageHeader
           preHeader={
             !poWorkflowActive ? (
@@ -338,14 +472,14 @@ export default function ProductionOrderDetailPage({
             ) : null
           }
           title={
-            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
               <div
                 style={{
                   fontSize: 28,
                   fontWeight: 1000,
                   color: UI.colors.primary,
-                  letterSpacing: "-0.03em",
-                  lineHeight: 1.12,
+                  letterSpacing: 0.3,
+                  lineHeight: 1.05,
                 }}
               >
                 {data.vp_code}
@@ -353,7 +487,7 @@ export default function ProductionOrderDetailPage({
               <div
                 style={{
                   fontSize: 15,
-                  fontWeight: 800,
+                  fontWeight: 700,
                   color: UI.colors.textPrimary,
                   lineHeight: 1.35,
                   maxWidth: 640,
@@ -361,87 +495,65 @@ export default function ProductionOrderDetailPage({
               >
                 {productTitle}
               </div>
-              <div style={{ ...UI.sectionSubtitle, maxWidth: 640 }}>{headerModel.headlineSentence}</div>
-            </div>
-          }
-          headerAside={
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
-              <span style={vpHeaderBadgeStyle(headerModel.mainStatusTone)}>{headerModel.mainStatusLabel}</span>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 11, fontWeight: 800, color: UI.colors.textSecondary, letterSpacing: "0.06em" }}>
-                  Hotovo (operace)
-                </div>
-                <div style={{ fontSize: 28, fontWeight: 1000, color: UI.colors.textPrimary, letterSpacing: "-0.03em", lineHeight: 1.05 }}>
-                  {headerModel.progressPercent} %
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: UI.colors.textSecondary, marginTop: 4 }}>
-                  Postup: {headerModel.progressLine}
-                </div>
+              <div
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: UI.colors.textSecondary,
+                  lineHeight: 1.4,
+                  maxWidth: 640,
+                }}
+              >
+                {headerModel.headlineSentence}
               </div>
             </div>
           }
-          context={
-            <div
-              style={{
-                borderRadius: 14,
-                padding: "18px 18px 16px",
-                background: poStateBg,
-                border: `1px solid ${poStateAccent}`,
-                boxShadow: "0 8px 28px rgba(15, 23, 42, 0.06)",
-              }}
-            >
-              <div style={sectionEyebrow}>Aktuální stav výroby</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
-                {(
-                  [
-                    ["Kde je díl", headerModel.workplaceWherePartIs],
-                    ["Aktuální operace", headerModel.currentOperationLine],
-                    ["Následující operace", headerModel.nextOperationLine],
-                    ["Poté", headerModel.afterNextLine],
-                  ] as const
-                ).map(([label, val]) => (
-                  <div key={label} style={{ minWidth: 0 }}>
-                    <div style={stateRowLabel}>{label}</div>
-                    <div style={stateRowValue}>{val}</div>
-                  </div>
-                ))}
+          headerAside={
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+              <span style={vpHeaderBadgeStyle(headerModel.mainStatusTone)}>{headerModel.mainStatusLabel}</span>
+              <div style={{ textAlign: "right" }}>
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    color: UI.colors.neutralFg,
+                    letterSpacing: 0.6,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Hotovo
+                </div>
+                <div
+                  style={{
+                    fontSize: 24,
+                    fontWeight: 1000,
+                    color: UI.colors.textPrimary,
+                    lineHeight: 1.05,
+                  }}
+                >
+                  {headerModel.progressPercent} %
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: UI.colors.textSecondary,
+                    marginTop: 2,
+                  }}
+                >
+                  {headerModel.progressLine}
+                </div>
               </div>
             </div>
           }
           actions={
             <>
-              <button
-                type="button"
-                onClick={() => {
-                  void openProductionOrderPdfInNewTab(productionOrderId).catch((e) =>
-                    window.alert(e instanceof Error ? e.message : String(e))
-                  );
-                }}
-                style={UI.buttonPrimary}
-              >
-                Tisk VP
-              </button>
-              <button
-                type="button"
-                style={UI.buttons.secondary}
-                onClick={() =>
-                  window.open(buildErpUrl({ view: "productionOrder", productionOrderId }), "_blank")
-                }
-              >
-                Otevřít v novém okně
-              </button>
-              {data.portfolio_item_id != null && onPreviewPortfolioById ? (
-                <button type="button" style={UI.buttons.secondary} onClick={() => onPreviewPortfolioById(data.portfolio_item_id!)}>
-                  Náhled portfolia
-                </button>
-              ) : null}
-              {data.portfolio_item_id != null ? (
+              {primaryActionAvailable ? (
                 <button
                   type="button"
                   style={UI.buttons.primary}
-                  disabled={!poWorkflowActive || !canStockMutate}
                   onClick={() => {
-                    setReceiveMessage(null);
+                    setActionFeedback(null);
                     setReceiveError(null);
                     setReceiveQty(data.quantity > 0 ? String(data.quantity) : "1");
                     setReceiveLocation("");
@@ -454,108 +566,99 @@ export default function ProductionOrderDetailPage({
               <button
                 type="button"
                 style={UI.buttons.secondary}
-                disabled={!poWorkflowActive || stornoBusy || !canProductionStorno}
-                onClick={() => void handleStornoVp()}
-              >
-                {stornoBusy ? "Stornuji…" : "Stornovat VP"}
-              </button>
-              <button
-                type="button"
-                style={UI.buttons.secondary}
-                disabled={regenerateDisabled}
-                title={
-                  regenerateDisabled
-                    ? "Přegenerování není dostupné pro rozpracovaný nebo uzavřený výrobní příkaz."
-                    : undefined
+                onClick={() =>
+                  window.open(buildErpUrl({ view: "productionOrder", productionOrderId }), "_blank")
                 }
-                onClick={() => setRegenerateConfirmOpen(true)}
               >
-                {regenerateBusy ? "Přegenerovávám…" : "Přegenerovat z TP"}
+                Otevřít v novém okně
               </button>
-              <button onClick={onBack} style={UI.buttonSecondary}>
+              <button type="button" style={UI.buttons.secondary} onClick={onBack}>
                 Zpět na výrobní příkazy
               </button>
             </>
           }
-          summaryTiles={
-            <div style={{ display: "flex", flexDirection: "column", gap: 26, width: "100%", minWidth: 0 }}>
+          context={
+            <div style={erpDetailStateCard}>
+              <div style={erpDetailSectionEyebrow}>Aktuální stav výroby</div>
               <div
                 style={{
-                  borderRadius: 14,
-                  padding: "18px 16px 16px",
-                  background: kpiPanelBg,
-                  border: `1px solid ${UI.colors.border}`,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                  gap: 14,
                 }}
               >
-                <div style={sectionEyebrow}>Provozní metriky</div>
+                {(
+                  [
+                    ["Kde je díl", headerModel.workplaceWherePartIs],
+                    ["Aktuální operace", headerModel.currentOperationLine],
+                    ["Následující operace", headerModel.nextOperationLine],
+                    ["Poté", headerModel.afterNextLine],
+                  ] as const
+                ).map(([label, val]) => (
+                  <div key={label} style={{ minWidth: 0 }}>
+                    <div style={erpDetailRowLabel}>{label}</div>
+                    <div style={erpDetailRowValue}>{val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          }
+          summaryTiles={
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "100%", minWidth: 0 }}>
+              <div style={erpDetailKpiPanel}>
+                <div style={erpDetailSectionEyebrow}>Provozní metriky</div>
+                <div style={erpDetailKpiRow}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Vykázaný čas</div>
+                    <div style={erpDetailKpiValue}>
+                      {Math.round(Number(data.reported_time_min ?? 0))} min
+                    </div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Náklad práce</div>
+                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.direct_labor_cost)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Hotovo %</div>
+                    <div style={erpDetailKpiValue}>{formatDetailPercent(data.completion_percent)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Výkonnost</div>
+                    <div style={erpDetailKpiValue}>{formatDetailPercent(data.performance_percent)}</div>
+                  </div>
+                </div>
                 <div
                   style={{
+                    marginTop: 2,
+                    paddingTop: 12,
+                    borderTop: `1px solid ${UI.colors.divider}`,
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(128px, 1fr))",
-                    gap: 16,
-                    alignItems: "start",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    gap: 14,
                   }}
                 >
                   <div style={{ minWidth: 0 }}>
-                    <div style={kpiLabel}>Vykázaný čas</div>
-                    <div style={kpiValue}>{Math.round(Number(data.reported_time_min ?? 0))} min</div>
+                    <div style={erpDetailKpiLabel}>Poloha (běžící operace)</div>
+                    <div style={{ ...erpDetailKpiValue, fontSize: 17 }}>
+                      {data.current_location?.trim() ? data.current_location : "—"}
+                    </div>
                   </div>
                   <div style={{ minWidth: 0 }}>
-                    <div style={kpiLabel}>Náklad práce</div>
-                    <div style={kpiValue}>{formatDetailLaborCzk(data.direct_labor_cost)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={kpiLabel}>Hotovo %</div>
-                    <div style={kpiValue}>{formatDetailPercent(data.completion_percent)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={kpiLabel}>Výkonnost</div>
-                    <div style={kpiValue}>{formatDetailPercent(data.performance_percent)}</div>
-                    <div style={{ fontSize: 10, color: UI.colors.textSecondary, marginTop: 8, fontWeight: 600, lineHeight: 1.35 }}>
-                      Plánovaný čas (planning_operations) / vykázaný čas (work_reports)
+                    <div style={erpDetailKpiLabel}>Fáze VP</div>
+                    <div style={{ ...erpDetailKpiValue, fontSize: 17 }}>
+                      {formatPlanningPhaseCs(data.current_phase)}
                     </div>
                   </div>
                 </div>
-                {(data.current_location || data.current_phase) && (
-                  <div
-                    style={{
-                      marginTop: 18,
-                      paddingTop: 16,
-                      borderTop: `1px solid ${UI.colors.divider}`,
-                      display: "grid",
-                      gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-                      gap: 12,
-                    }}
-                  >
-                    <div>
-                      <div style={{ ...kpiLabel, marginBottom: 4 }}>Poloha (běžící operace)</div>
-                      <div style={{ fontSize: 15, fontWeight: 900, color: UI.colors.textPrimary }}>
-                        {data.current_location?.trim() ? data.current_location : "—"}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ ...kpiLabel, marginBottom: 4 }}>Fáze VP</div>
-                      <div style={{ fontSize: 15, fontWeight: 900, color: UI.colors.textPrimary }}>
-                        {formatPlanningPhaseCs(data.current_phase)}
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
 
-              <div style={{ paddingTop: 4 }}>
-                <div style={{ ...sectionEyebrow, color: UI.colors.neutralFg, marginBottom: 10 }}>Identifikace a objednávka</div>
-                <div
-                  style={{
-                    ...UI.detailPageHeaderContextGrid,
-                    gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))",
-                    gap: 10,
-                  }}
-                >
+              <div style={subtleCard}>
+                <div style={identEyebrow}>Identifikace a objednávka</div>
+                <div style={erpDetailIdentGrid}>
                   {headerModel.rowIdentifiers.map((row) => (
                     <div key={row.key} style={{ minWidth: 0 }}>
-                      <div style={{ ...UI.summaryTileLabel, fontSize: 10, opacity: 0.85 }}>{row.label}</div>
-                      <div style={{ ...UI.summaryTileValue, fontSize: 14, fontWeight: 800, color: UI.colors.textSecondary }}>
+                      <div style={erpDetailIdentLabel}>{row.label}</div>
+                      <div style={erpDetailIdentValue}>
                         {row.key === "gpn" &&
                         data.portfolio_item_id != null &&
                         onOpenPortfolioItemId &&
@@ -586,15 +689,14 @@ export default function ProductionOrderDetailPage({
                   ))}
                 </div>
               </div>
-              <div>
-                <div style={{ ...sectionEyebrow, color: UI.colors.neutralFg, marginBottom: 10 }}>Portfolio a zdroj</div>
-                <div style={{ ...UI.detailPageHeaderContextGrid, gap: 10 }}>
+
+              <div style={subtleCard}>
+                <div style={identEyebrow}>Portfolio a zdroj</div>
+                <div style={erpDetailIdentGrid}>
                   {headerModel.rowSource.map((row) => (
                     <div key={row.key} style={{ minWidth: 0 }}>
-                      <div style={{ ...UI.summaryTileLabel, fontSize: 10, opacity: 0.85 }}>{row.label}</div>
-                      <div style={{ ...UI.summaryTileValue, fontSize: 14, fontWeight: 800, color: UI.colors.textSecondary }}>
-                        {row.value}
-                      </div>
+                      <div style={erpDetailIdentLabel}>{row.label}</div>
+                      <div style={erpDetailIdentValue}>{row.value}</div>
                     </div>
                   ))}
                 </div>
@@ -603,32 +705,87 @@ export default function ProductionOrderDetailPage({
           }
         />
 
-        {receiveMessage ? (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 12,
+            padding: "10px 16px",
+            borderRadius: 12,
+            background: UI.colors.neutralBg,
+            border: `1px solid ${UI.colors.border}`,
+          }}
+        >
           <div
             style={{
-              ...UI.card,
-              borderRadius: 12,
-              background: "#ecfdf5",
-              border: "1px solid #6ee7b7",
-              color: "#065f46",
-              fontWeight: 700,
+              ...erpDetailSectionEyebrow,
+              color: UI.colors.neutralFg,
+              marginRight: 4,
+              flexShrink: 0,
             }}
           >
-            {receiveMessage}
+            Akce VP
           </div>
-        ) : null}
-        {regenerateMessage ? (
-          <div
-            style={{
-              ...UI.card,
-              borderRadius: 12,
-              background: "#ecfeff",
-              border: "1px solid #67e8f9",
-              color: "#155e75",
-              fontWeight: 700,
-            }}
-          >
-            {regenerateMessage}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              style={UI.buttons.secondary}
+              onClick={() => void handlePrintVpPdf()}
+            >
+              Tisk VP
+            </button>
+            {data.portfolio_item_id != null && onPreviewPortfolioById ? (
+              <button
+                type="button"
+                style={UI.buttons.secondary}
+                onClick={() => onPreviewPortfolioById(data.portfolio_item_id!)}
+              >
+                Náhled portfolia
+              </button>
+            ) : null}
+            <button
+              type="button"
+              style={UI.buttons.secondary}
+              disabled={regenerateDisabled}
+              title={
+                regenerateDisabled
+                  ? "Přegenerování není dostupné pro rozpracovaný nebo uzavřený výrobní příkaz."
+                  : undefined
+              }
+              onClick={() => setRegenerateConfirmOpen(true)}
+            >
+              {regenerateBusy ? "Přegenerovávám…" : "Přegenerovat z TP"}
+            </button>
+          </div>
+
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            <div
+              aria-hidden
+              style={{
+                width: 1,
+                height: 22,
+                background: UI.colors.divider,
+              }}
+            />
+            <button
+              type="button"
+              style={dangerButton}
+              disabled={!poWorkflowActive || stornoBusy || !canProductionStorno}
+              onClick={() => void handleStornoVp()}
+            >
+              {stornoBusy ? "Stornuji…" : "Stornovat VP"}
+            </button>
+          </div>
+        </div>
+
+        {actionFeedback ? (
+          <div ref={writeFeedbackAnchorRef} style={{ scrollMarginTop: 8 }}>
+            <InlineBanner
+              kind={actionFeedback.kind}
+              message={actionFeedback.message}
+              onClose={() => setActionFeedback(null)}
+            />
           </div>
         ) : null}
         {regenerateDisabled ? (
@@ -637,93 +794,202 @@ export default function ProductionOrderDetailPage({
           </div>
         ) : null}
 
-        <div style={{ ...UI.card, borderRadius: 14 }}>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Technologický postup VP</div>
-          {opActionError ? (
-            <div style={{ marginBottom: 10, color: "#991b1b", fontWeight: 700 }}>{opActionError}</div>
-          ) : null}
+        <div style={tableSectionCard}>
+          <div style={sectionHeader}>
+            <div>
+              <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Technologický postup</div>
+              <div style={sectionHeaderTitle}>Operace výrobního příkazu</div>
+            </div>
+            {totalOperations > 0 ? (
+              <div style={sectionHeaderSub}>
+                {doneOperations}/{totalOperations} hotovo
+              </div>
+            ) : null}
+          </div>
           {data.operations.length === 0 ? (
-            <div style={{ color: "#64748b", fontWeight: 600 }}>Pro tuto portfolio variantu není k dispozici technologický postup.</div>
+            <div
+              style={{
+                ...UI.overviewEmptyInCard,
+                padding: "24px 18px",
+              }}
+            >
+              Pro tuto portfolio variantu není k dispozici technologický postup.
+            </div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
+            <div style={UI.overviewTableWrap}>
               <table style={UI.table}>
                 <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    {["Pořadí", "Operace", "Pracoviště", "Setup (min)", "Čas / ks (min)", "Stav", "Odvedeno", "Akce", "Poznámka"].map((h) => (
-                      <th key={h} style={{ ...UI.th, whiteSpace: "nowrap" }}>{h}</th>
+                  <tr style={UI.overviewTableHeadRow}>
+                    {[
+                      { k: "no", label: "#", align: "right" as const },
+                      { k: "op", label: "Operace", align: "left" as const },
+                      { k: "wp", label: "Pracoviště", align: "left" as const },
+                      { k: "setup", label: "Setup (min)", align: "right" as const },
+                      { k: "run", label: "Čas / ks (min)", align: "right" as const },
+                      { k: "status", label: "Stav", align: "left" as const },
+                      { k: "done", label: "Odvedeno", align: "left" as const },
+                      { k: "act", label: "Akce", align: "left" as const },
+                      { k: "note", label: "Poznámka", align: "left" as const },
+                    ].map((h) => (
+                      <th key={h.k} style={{ ...tableHeadCell, textAlign: h.align }}>
+                        {h.label}
+                      </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {data.operations.map((op) => (
-                    <tr key={op.id}>
-                      <td style={UI.td}>{op.operation_no}</td>
-                      <td style={UI.td}>{op.operation_name}</td>
-                      <td style={UI.td}>{op.workplace_name ?? "—"}</td>
-                      <td style={UI.td}>{op.setup_time_min}</td>
-                      <td style={UI.td}>{op.run_min_per_piece}</td>
-                      <td style={UI.td}>{labelVpOperationProgress(op.operation_status)}</td>
-                      <td style={UI.td}>
-                        OK {op.reported_ok_qty_total ?? 0} / NOK {op.reported_nok_qty_total ?? 0} / {op.reported_minutes_total ?? 0} min
-                      </td>
-                      <td style={{ ...UI.td, minWidth: 330 }}>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                          <button
-                            type="button"
-                            style={UI.buttons.secondary}
-                            disabled={!poWorkflowActive || busyOp === op.operation_no || !canProductionExecute}
-                            onClick={() => handleStartOperation(op.operation_no)}
+                  {data.operations.map((op, idx) => {
+                    const rowBg = idx % 2 === 1 ? rowStripeBg : UI.colors.card;
+                    const numCell = {
+                      ...tableBodyCell,
+                      textAlign: "right" as const,
+                      fontVariantNumeric: "tabular-nums" as const,
+                      background: rowBg,
+                    };
+                    const txtCell = { ...tableBodyCell, background: rowBg };
+                    const okTotal = op.reported_ok_qty_total ?? 0;
+                    const nokTotal = op.reported_nok_qty_total ?? 0;
+                    const minTotal = op.reported_minutes_total ?? 0;
+                    const canExec = poWorkflowActive && busyOp !== op.operation_no && canProductionExecute;
+                    return (
+                      <tr key={op.id}>
+                        <td style={{ ...numCell, fontWeight: 900, color: UI.colors.textPrimary }}>
+                          {op.operation_no}
+                        </td>
+                        <td style={{ ...txtCell, fontWeight: 700, color: UI.colors.textPrimary }}>
+                          {op.operation_name}
+                        </td>
+                        <td style={txtCell}>{op.workplace_name ?? "—"}</td>
+                        <td style={numCell}>{op.setup_time_min}</td>
+                        <td style={numCell}>{op.run_min_per_piece}</td>
+                        <td style={txtCell}>
+                          <span className="erp-status-badge" style={opStatusBadge(op.operation_status)}>
+                            {labelVpOperationProgress(op.operation_status)}
+                          </span>
+                        </td>
+                        <td style={txtCell}>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 2,
+                              fontVariantNumeric: "tabular-nums",
+                              lineHeight: 1.3,
+                            }}
                           >
-                            Zahájit
-                          </button>
-                          <input
-                            style={{ ...UI.inputs.base, width: 70, padding: "6px 8px" }}
-                            placeholder="OK"
-                            value={okByOp[op.operation_no] ?? ""}
-                            onChange={(e) => setOkByOp((s) => ({ ...s, [op.operation_no]: e.target.value }))}
-                          />
-                          <input
-                            style={{ ...UI.inputs.base, width: 70, padding: "6px 8px" }}
-                            placeholder="NOK"
-                            value={nokByOp[op.operation_no] ?? ""}
-                            onChange={(e) => setNokByOp((s) => ({ ...s, [op.operation_no]: e.target.value }))}
-                          />
-                          <input
-                            style={{ ...UI.inputs.base, width: 90, padding: "6px 8px" }}
-                            placeholder="Min"
-                            value={minutesByOp[op.operation_no] ?? ""}
-                            onChange={(e) => setMinutesByOp((s) => ({ ...s, [op.operation_no]: e.target.value }))}
-                          />
-                          <button
-                            type="button"
-                            style={UI.buttons.primary}
-                            disabled={!poWorkflowActive || busyOp === op.operation_no || !canProductionExecute}
-                            onClick={() => handleReportOperation(op.operation_no)}
+                            <div style={{ fontSize: 13, fontWeight: 700, color: UI.colors.textPrimary }}>
+                              <span style={{ color: UI.colors.okFg }}>OK {okTotal}</span>
+                              <span style={{ color: UI.colors.neutralFg, margin: "0 6px" }}>·</span>
+                              <span style={{ color: nokTotal > 0 ? UI.colors.problemFg : UI.colors.neutralFg }}>
+                                NOK {nokTotal}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: UI.colors.textSecondary }}>
+                              {minTotal} min
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ ...txtCell, minWidth: 360 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexWrap: "wrap",
+                              alignItems: "flex-end",
+                              gap: 10,
+                            }}
                           >
-                            Odvést
-                          </button>
-                        </div>
-                      </td>
-                      <td style={UI.td}>{op.note ?? "—"}</td>
-                    </tr>
-                  ))}
+                            <button
+                              type="button"
+                              style={UI.buttons.secondary}
+                              disabled={!canExec}
+                              onClick={() => handleStartOperation(op.operation_no)}
+                            >
+                              Zahájit
+                            </button>
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "flex-end",
+                                gap: 8,
+                                padding: "6px 10px",
+                                borderRadius: 10,
+                                background: UI.colors.card,
+                                border: `1px solid ${UI.colors.border}`,
+                              }}
+                            >
+                              <label style={{ display: "flex", flexDirection: "column" }}>
+                                <span style={fieldLabel}>OK</span>
+                                <input
+                                  style={{ ...UI.inputs.base, width: 64, padding: "6px 8px", textAlign: "right" }}
+                                  value={okByOp[op.operation_no] ?? ""}
+                                  onChange={(e) => setOkByOp((s) => ({ ...s, [op.operation_no]: e.target.value }))}
+                                />
+                              </label>
+                              <label style={{ display: "flex", flexDirection: "column" }}>
+                                <span style={fieldLabel}>NOK</span>
+                                <input
+                                  style={{ ...UI.inputs.base, width: 64, padding: "6px 8px", textAlign: "right" }}
+                                  value={nokByOp[op.operation_no] ?? ""}
+                                  onChange={(e) => setNokByOp((s) => ({ ...s, [op.operation_no]: e.target.value }))}
+                                />
+                              </label>
+                              <label style={{ display: "flex", flexDirection: "column" }}>
+                                <span style={fieldLabel}>Min</span>
+                                <input
+                                  style={{ ...UI.inputs.base, width: 80, padding: "6px 8px", textAlign: "right" }}
+                                  value={minutesByOp[op.operation_no] ?? ""}
+                                  onChange={(e) => setMinutesByOp((s) => ({ ...s, [op.operation_no]: e.target.value }))}
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                style={UI.buttons.primary}
+                                disabled={!canExec}
+                                onClick={() => handleReportOperation(op.operation_no)}
+                              >
+                                Odvést
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ ...txtCell, maxWidth: 220, whiteSpace: "normal" }}>
+                          {op.note ?? "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </div>
 
-        <div style={{ ...UI.card, borderRadius: 14 }}>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Vstupy VP</div>
+        <div style={tableSectionCard}>
+          <div style={sectionHeader}>
+            <div>
+              <div style={{ ...erpDetailSectionEyebrow, marginBottom: 2 }}>Vstupy</div>
+              <div style={sectionHeaderTitle}>Materiál a komponenty VP</div>
+            </div>
+            {data.inputs.length > 0 ? (
+              <div style={sectionHeaderSub}>{data.inputs.length} položek</div>
+            ) : null}
+          </div>
           {data.inputs.length === 0 ? (
-            <div style={{ color: "#64748b", fontWeight: 600 }}>Pro tuto portfolio variantu nejsou definované vstupy.</div>
+            <div
+              style={{
+                ...UI.overviewEmptyInCard,
+                padding: "24px 18px",
+              }}
+            >
+              Pro tuto portfolio variantu nejsou definované vstupy.
+            </div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
+            <div style={UI.overviewTableWrap}>
               <table style={UI.table}>
                 <thead>
-                  <tr style={{ background: "#f8fafc" }}>
+                  <tr style={UI.overviewTableHeadRow}>
                     {["Typ", "Materiál / Produkt", "Kód / GPN", "Spotřeba / ks", "Prořez (kerf / ks)", "Celkem (VP)", "Poznámka"].map((h) => (
-                      <th key={h} style={{ ...UI.th, whiteSpace: "nowrap" }}>{h}</th>
+                      <th key={h} style={tableHeadCell}>{h}</th>
                     ))}
                   </tr>
                 </thead>

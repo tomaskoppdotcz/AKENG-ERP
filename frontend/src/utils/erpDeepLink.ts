@@ -3,7 +3,8 @@ export type ErpDeepLink =
   | { view: "portfolioSearch"; gpn: string }
   | { view: "orderCard"; customerOrderId: number }
   | { view: "orderItem"; jobItemId: number; source?: "orders" | "drawings" }
-  | { view: "productionOrder"; productionOrderId: number };
+  | { view: "productionOrder"; productionOrderId: number }
+  | { view: "workReport"; workReportId: number };
 
 export function parseErpDeepLink(search: string): ErpDeepLink | null {
   const q = search.startsWith("?") ? search.slice(1) : search;
@@ -41,6 +42,12 @@ export function parseErpDeepLink(search: string): ErpDeepLink | null {
       return { view: "productionOrder", productionOrderId };
     }
   }
+  if (view === "workReport") {
+    const workReportId = Number(params.get("workReportId"));
+    if (Number.isFinite(workReportId) && workReportId > 0) {
+      return { view: "workReport", workReportId };
+    }
+  }
   return null;
 }
 
@@ -56,5 +63,6 @@ export function buildErpUrl(link: ErpDeepLink): string {
     if (link.source === "drawings") p.set("source", "drawings");
   }
   if (link.view === "productionOrder") p.set("productionOrderId", String(link.productionOrderId));
+  if (link.view === "workReport") p.set("workReportId", String(link.workReportId));
   return `${base}?${p.toString()}`;
 }

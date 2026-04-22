@@ -1,3 +1,4 @@
+import { attachHttpErrorMeta } from "../utils/writeActionFeedback";
 import { akengFetch } from "./akengFetch";
 
 const API_BASE =
@@ -52,6 +53,17 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
     /* ignore */
   }
   return fallback;
+}
+
+/** Úspěšná odpověď s volitelným JSON tělem (prázdné tělo → `undefined`). */
+async function readOptionalJsonBody(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text.trim()) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error("Neplatná odpověď serveru při mazání zaměstnance.");
+  }
 }
 
 export async function getOperationLibraryItems(): Promise<OperationLibraryItem[]> {
@@ -385,7 +397,13 @@ export async function patchEmployeeMasterActive(
 export async function deleteEmployeeMaster(id: number): Promise<{ status: string; detail?: string }> {
   const res = await akengFetch(`${API_BASE}/master-data/employees/${id}`, { method: "DELETE" });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Nepodařilo se smazat zaměstnance."));
+    const msg = await readErrorMessage(res, "Nepodařilo se smazat zaměstnance.");
+    throw attachHttpErrorMeta(new Error(msg), res);
   }
-  return res.json();
+  const raw = await readOptionalJsonBody(res);
+  if (raw != null && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as { status: string; detail?: string };
+  }
+  // Prázdné 2xx tělo — bezpečný fallback pro `interpretMutationBody` (úspěch + výchozí hláška).
+  return { status: "ok" };
 }

@@ -162,7 +162,7 @@ export default function WorkplaceLibraryPage() {
   }
 
   return (
-    <div style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
+    <div className="erp-overview-page" style={{ ...UI.card, borderRadius: 14, padding: 16 }}>
       <div
         style={{
           display: "flex",
@@ -249,7 +249,7 @@ export default function WorkplaceLibraryPage() {
       {error ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 8 }}>{error}</div> : null}
 
       {!loading ? (
-        <div style={{ overflowX: "auto" }}>
+        <div className="erp-table-wrap" style={{ overflowX: "auto" }}>
           <table style={UI.table}>
             <thead>
               <tr style={{ background: "#f8fafc" }}>

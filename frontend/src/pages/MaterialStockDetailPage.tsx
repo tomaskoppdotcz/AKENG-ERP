@@ -1,6 +1,19 @@
 import React, { useCallback, useEffect, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
-import { UI } from "../styles/ui";
+import {
+  erpDetailIdentGrid,
+  erpDetailIdentLabel,
+  erpDetailIdentValue,
+  erpDetailKpiLabel,
+  erpDetailKpiPanel,
+  erpDetailKpiRow,
+  erpDetailKpiValue,
+  erpDetailRowLabel,
+  erpDetailRowValue,
+  erpDetailSectionEyebrow,
+  erpDetailStateCard,
+  UI,
+} from "../styles/ui";
 import {
   createMaterialStockMovement,
   deleteMaterialStockMovement,
@@ -174,27 +187,169 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
   }
 
   const showTraceFields = movementType === "prijem";
+  const unit = stockItem.unit?.trim() || "mm";
+  const belowMin =
+    stockItem.min_qty != null && Number.isFinite(stockItem.min_qty) && stockItem.current_qty < stockItem.min_qty;
+  const statusLabel = stockItem.is_active ? "Aktivní" : "Neaktivní";
+  const statusStyle: React.CSSProperties = {
+    ...UI.statusBadgeBase,
+    ...(stockItem.is_active ? UI.statusBadgeOk : UI.statusBadgeProblem),
+  };
+  const lastMovement = rows[0]?.movement_date ?? null;
+  const lastReceipt = rows.find((r) => r.movement_type === "prijem")?.movement_date ?? null;
 
   return (
-    <div style={UI.container}>
-      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className="erp-overview-page" style={UI.container}>
+      <div style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 22 }}>
         <DetailPageHeader
-          title={stockItem.material_name}
-          subtitle={`${stockItem.material_code || "—"}${stockItem.material_dimension ? ` | ${stockItem.material_dimension}` : ""}`}
+          title={
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: 26,
+                  fontWeight: 1000,
+                  color: UI.colors.primary,
+                  letterSpacing: 0.3,
+                  lineHeight: 1.05,
+                }}
+              >
+                {stockItem.material_code || stockItem.material_name}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: UI.colors.textPrimary }}>
+                {stockItem.material_name}
+                {stockItem.material_dimension ? (
+                  <span style={{ fontWeight: 600, color: UI.colors.textSecondary }}>
+                    {" | "}
+                    {stockItem.material_dimension}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          }
+          headerAside={
+            <span className="erp-status-badge" style={statusStyle}>
+              {statusLabel}
+            </span>
+          }
           actions={
             <button type="button" style={UI.buttons.secondary} onClick={onBack}>
               Zpět na sklad materiálu
             </button>
           }
-          summaryTiles={
-            <div style={UI.summaryTilesGrid}>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Aktuální stav</div>
-                <div style={UI.summaryTileValue}>{stockItem.current_qty} mm</div>
+          context={
+            <div style={erpDetailStateCard}>
+              <div style={erpDetailSectionEyebrow}>Aktuální stav skladu</div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <div>
+                  <div style={erpDetailRowLabel}>Aktuální stav</div>
+                  <div
+                    style={{
+                      ...erpDetailRowValue,
+                      color: belowMin ? UI.colors.problemFg : UI.colors.textPrimary,
+                    }}
+                  >
+                    {stockItem.current_qty} {unit}
+                    {belowMin ? (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          fontSize: 11,
+                          fontWeight: 800,
+                          color: UI.colors.problemFg,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.5,
+                        }}
+                      >
+                        pod min.
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Min. zásoba</div>
+                  <div style={erpDetailRowValue}>
+                    {stockItem.min_qty == null ? "—" : `${stockItem.min_qty} ${unit}`}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Lokace</div>
+                  <div style={erpDetailRowValue}>
+                    {stockItem.location?.trim() ? stockItem.location : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Scan kód</div>
+                  <div style={erpDetailRowValue}>
+                    {stockItem.scan_code?.trim() ? stockItem.scan_code : "—"}
+                  </div>
+                </div>
               </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Min. zásoba</div>
-                <div style={UI.summaryTileValue}>{stockItem.min_qty ?? "—"} mm</div>
+            </div>
+          }
+          summaryTiles={
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={erpDetailKpiPanel}>
+                <div style={erpDetailSectionEyebrow}>Pohyby materiálu</div>
+                <div style={erpDetailKpiRow}>
+                  <div>
+                    <div style={erpDetailKpiLabel}>Počet pohybů</div>
+                    <div style={erpDetailKpiValue}>{rows.length}</div>
+                  </div>
+                  <div>
+                    <div style={erpDetailKpiLabel}>Poslední pohyb</div>
+                    <div style={erpDetailKpiValue}>
+                      {lastMovement ? formatDate(lastMovement) : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={erpDetailKpiLabel}>Poslední příjem</div>
+                    <div style={erpDetailKpiValue}>
+                      {lastReceipt ? formatDate(lastReceipt) : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={erpDetailKpiLabel}>Jednotka</div>
+                    <div style={erpDetailKpiValue}>{unit}</div>
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  background: UI.colors.card,
+                  border: `1px solid ${UI.colors.border}`,
+                }}
+              >
+                <div style={{ ...erpDetailSectionEyebrow, color: UI.colors.neutralFg, marginBottom: 8 }}>
+                  Identifikace
+                </div>
+                <div style={erpDetailIdentGrid}>
+                  <div>
+                    <div style={erpDetailIdentLabel}>Kód materiálu</div>
+                    <div style={erpDetailIdentValue}>{stockItem.material_code || "—"}</div>
+                  </div>
+                  <div>
+                    <div style={erpDetailIdentLabel}>Název</div>
+                    <div style={erpDetailIdentValue}>{stockItem.material_name}</div>
+                  </div>
+                  <div>
+                    <div style={erpDetailIdentLabel}>Rozměr</div>
+                    <div style={erpDetailIdentValue}>{stockItem.material_dimension || "—"}</div>
+                  </div>
+                  <div>
+                    <div style={erpDetailIdentLabel}>Poznámka</div>
+                    <div style={erpDetailIdentValue}>
+                      {stockItem.note?.trim() ? stockItem.note : "—"}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           }

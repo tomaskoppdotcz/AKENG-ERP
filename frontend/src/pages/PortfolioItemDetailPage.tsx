@@ -1,7 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
 import PageContainer from "../components/layout/PageContainer";
-import { UI } from "../styles/ui";
+import {
+  erpDetailIdentLabel,
+  erpDetailIdentValue,
+  erpDetailRowLabel,
+  erpDetailRowValue,
+  erpDetailSectionEyebrow,
+  erpDetailStateCard,
+  UI,
+} from "../styles/ui";
 import { getMaterialLibraryItems, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import {
   getOperationLibraryItems,
@@ -519,7 +527,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   }
 
   return (
-    <PageContainer style={{ paddingTop: 10 }}>
+    <PageContainer className="erp-overview-page" style={{ paddingTop: 10 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "100%", minWidth: 0 }}>
         {!detail ? (
           <>
@@ -554,8 +562,35 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
           <>
 
         <DetailPageHeader
-          title={detail.gpn}
-          subtitle={detail.name}
+          title={
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: 28,
+                  fontWeight: 1000,
+                  color: UI.colors.primary,
+                  letterSpacing: 0.3,
+                  lineHeight: 1.05,
+                }}
+              >
+                {detail.gpn}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: UI.colors.textPrimary }}>
+                {detail.name}
+              </div>
+            </div>
+          }
+          headerAside={
+            <span
+              className="erp-status-badge"
+              style={{
+                ...UI.statusBadgeBase,
+                ...(detail.active_template_id ? UI.statusBadgeOk : UI.statusBadgeProblem),
+              }}
+            >
+              {detail.active_template_id ? "Technologie připravena" : "Bez technologie"}
+            </span>
+          }
           actions={
             <>
               <button
@@ -570,49 +605,113 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
               </button>
             </>
           }
+          context={
+            <div style={erpDetailStateCard}>
+              <div style={erpDetailSectionEyebrow}>Kontext</div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <div>
+                  <div style={erpDetailRowLabel}>Zákazník</div>
+                  <div style={erpDetailRowValue}>
+                    {detail.customer_name?.trim() ? detail.customer_name : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Skupina</div>
+                  <div style={erpDetailRowValue}>
+                    {detail.group_name?.trim() ? detail.group_name : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Logistický režim</div>
+                  <div style={erpDetailRowValue}>
+                    {logisticLabel(detail.logistic_mode ?? "vyroba_zakaznik")}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailRowLabel}>Scan kód</div>
+                  <div style={erpDetailRowValue}>
+                    {detail.scan_code?.trim() ? detail.scan_code : "—"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          }
           summaryTiles={
-            <div style={UI.summaryTilesGrid}>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Zákazník</div>
-                <div style={UI.summaryTileValue}>
-                  {detail.customer_name?.trim() ? detail.customer_name : "—"}
+            <div
+              style={{
+                padding: "12px 14px",
+                borderRadius: 12,
+                background: UI.colors.card,
+                border: `1px solid ${UI.colors.border}`,
+              }}
+            >
+              <div style={{ ...erpDetailSectionEyebrow, color: UI.colors.neutralFg, marginBottom: 8 }}>
+                Identita dílu
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <div>
+                  <div style={erpDetailIdentLabel}>GPN</div>
+                  <div style={erpDetailIdentValue}>{detail.gpn}</div>
                 </div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Skupina</div>
-                <div style={UI.summaryTileValue}>
-                  {detail.group_name?.trim() ? detail.group_name : "—"}
+                <div>
+                  <div style={erpDetailIdentLabel}>Výkres</div>
+                  <div style={erpDetailIdentValue}>
+                    {detail.drawing_no?.trim() ? detail.drawing_no : "—"}
+                  </div>
                 </div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Technologie</div>
-                <div style={{ ...UI.summaryTileValue, color: detail.active_template_id ? "#15803d" : "#dc2626" }}>
-                  {detail.active_template_id ? "ANO" : "NE"}
+                <div>
+                  <div style={erpDetailIdentLabel}>Revize</div>
+                  <div style={erpDetailIdentValue}>
+                    {detail.revision?.trim() ? detail.revision : "—"}
+                  </div>
                 </div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Scan kód</div>
-                <div style={UI.summaryTileValue}>{detail.scan_code?.trim() ? detail.scan_code : "—"}</div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Výkres</div>
-                <div style={UI.summaryTileValue}>{detail.drawing_no ?? "—"}</div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Revize</div>
-                <div style={UI.summaryTileValue}>{detail.revision ?? "—"}</div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Materiál</div>
-                <div style={UI.summaryTileValue}>{detail.material_default ?? "—"}</div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Logistický režim</div>
-                <div style={UI.summaryTileValue}>{logisticLabel(detail.logistic_mode ?? "vyroba_zakaznik")}</div>
-              </div>
-              <div style={{ ...UI.summaryTile, flex: "1 1 220px", minWidth: 180 }}>
-                <div style={UI.summaryTileLabel}>Prodejní cena / ks (bez DPH)</div>
-                <div style={UI.summaryTileValue}>{formatSalePriceCzk(detail.sale_price_per_piece)}</div>
+                <div>
+                  <div style={erpDetailIdentLabel}>Název</div>
+                  <div style={erpDetailIdentValue}>{detail.name?.trim() ? detail.name : "—"}</div>
+                </div>
+                <div>
+                  <div style={erpDetailIdentLabel}>Materiál</div>
+                  <div style={erpDetailIdentValue}>
+                    {detail.material_default?.trim() ? detail.material_default : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailIdentLabel}>Cena</div>
+                  <div
+                    style={{
+                      ...erpDetailIdentValue,
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {formatSalePriceCzk(detail.sale_price_per_piece)}
+                  </div>
+                </div>
+                <div>
+                  <div style={erpDetailIdentLabel}>Technologie</div>
+                  <div style={{ marginTop: 2 }}>
+                    <span
+                      className="erp-status-badge"
+                      style={{
+                        ...UI.statusBadgeBase,
+                        ...(detail.active_template_id ? UI.statusBadgeOk : UI.statusBadgeProblem),
+                      }}
+                    >
+                      {detail.active_template_id ? "ANO" : "NE"}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           }

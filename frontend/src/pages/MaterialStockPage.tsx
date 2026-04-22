@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import PageContainer from "../components/layout/PageContainer";
 import PageHeader from "../components/layout/PageHeader";
 import PageSection from "../components/layout/PageSection";
-import { UI } from "../styles/ui";
+import { erpKpiTileBackground, UI } from "../styles/ui";
 import { getMaterialGroups, getMaterialLibraryItems, type MaterialGroup, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import { getStorageLocations, type StorageLocation } from "../services/storageLocationApi";
 import {
@@ -13,6 +13,8 @@ import {
   type MaterialStockItem,
 } from "../services/materialStockApi";
 import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
+import ErpPagination from "../components/overview/ErpPagination";
+import { useClientPagination } from "../hooks/useClientPagination";
 
 type MaterialStockRow = MaterialStockItem & {
   material_dimension: string | null;
@@ -199,13 +201,52 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
     });
   }, [rows, query, groupFilter, formFilter, locations]);
 
+  // Klientská pagination — backend /material-stock/items podporuje server-side limit/offset/total,
+  // ale tahle stránka drží plný dataset kvůli universal search + filtrům (skupina/forma).
+  const materialStockPaginationResetKey = `${query}|${groupFilter}|${formFilter}`;
+  const {
+    pagedRows: pagedMaterialStockRows,
+    pageSize: materialStockPageSize,
+    setPageSize: setMaterialStockPageSize,
+    offset: materialStockOffset,
+    setOffset: setMaterialStockOffset,
+    total: materialStockPagedTotal,
+  } = useClientPagination(filtered, { resetKey: materialStockPaginationResetKey });
+
   const formFilterOptions = useMemo(() => {
     const forms = new Set(rows.map((r) => r.material_form?.trim()).filter((v): v is string => Boolean(v)));
     return Array.from(forms).sort((a, b) => a.localeCompare(b, "cs"));
   }, [rows]);
 
+  const summaryTiles = useMemo(() => {
+    const belowMin = rows.filter((r) => r.min_qty != null && r.current_qty < r.min_qty).length;
+    return [
+      {
+        label: "Položek ve skladu",
+        value: String(rows.length),
+        accent: UI.colors.primary,
+        kind: "primary" as const,
+        hint: "Všechny skladové karty materiálu.",
+      },
+      {
+        label: "Po filtru",
+        value: String(filtered.length),
+        accent: UI.colors.neutralFg,
+        kind: "neutral" as const,
+        hint: "Po aplikaci hledání / skupiny / formy.",
+      },
+      {
+        label: "Pod min. zásobou",
+        value: String(belowMin),
+        accent: UI.colors.problemFg,
+        kind: "danger" as const,
+        hint: "Aktuální stav pod minimem (mm).",
+      },
+    ] as const;
+  }, [rows, filtered]);
+
   return (
-    <PageContainer style={{ paddingTop: 10 }}>
+    <PageContainer className="erp-overview-page" style={{ paddingTop: 10 }}>
       <PageHeader
         title="Sklad materiálu"
         subtitle="Přehled stavu materiálu"
@@ -226,44 +267,71 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
         }
       />
 
-      <PageSection>
-        <div style={{ ...UI.card, borderRadius: 14, padding: 16, width: "100%", boxSizing: "border-box" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Hledat kód, název, lokaci, scan…"
-              style={UI.inputs.base}
-            />
-            <select
-              value={groupFilter === "" ? "" : String(groupFilter)}
-              onChange={(e) => setGroupFilter(e.target.value ? Number(e.target.value) : "")}
-              style={{ ...UI.inputs.base, width: 220 }}
+      <div style={UI.summaryTilesGridOuter}>
+        <div style={UI.summaryTilesGridThree}>
+          {summaryTiles.map((t) => (
+            <div
+              key={t.label}
+              className="erp-kpi-tile"
+              style={{
+                ...UI.overviewKpiTile,
+                borderLeftColor: t.accent,
+                background: erpKpiTileBackground(t.kind),
+                boxShadow: `${UI.overviewKpiTile.boxShadow as string}, inset 0 1px 0 rgba(255, 255, 255, 0.9)`,
+              }}
             >
-              <option value="">Skupina: vše</option>
-              {groups.map((g) => (
-                <option key={g.id} value={String(g.id)}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={formFilter}
-              onChange={(e) => setFormFilter(e.target.value)}
-              style={{ ...UI.inputs.base, width: 220 }}
-              title="Forma"
-            >
-              <option value="">Forma: vše</option>
-              {formFilterOptions.map((form) => (
-                <option key={form} value={form}>
-                  {form}
-                </option>
-              ))}
-            </select>
+              <div style={UI.overviewKpiLabel}>{t.label}</div>
+              <div style={{ ...UI.overviewKpiValue, fontSize: 31, lineHeight: 1.05 }}>{t.value}</div>
+              <div style={UI.overviewKpiHint}>{t.hint}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <PageSection gapTop={16}>
+        <div style={UI.overviewMainCard}>
+          <div style={UI.overviewCardHeaderBand}>
+            <div style={UI.overviewSecondaryFilterRow}>
+              <div style={{ ...UI.ordersFilterSearchWrap, flex: "1 1 320px", minWidth: 220 }}>
+                <input
+                  className="erp-overview-search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Hledat kód, název, lokaci, scan…"
+                  style={UI.inputs.overviewSearch}
+                />
+              </div>
+              <select
+                value={groupFilter === "" ? "" : String(groupFilter)}
+                onChange={(e) => setGroupFilter(e.target.value ? Number(e.target.value) : "")}
+                style={{ ...UI.inputs.base, width: 220 }}
+              >
+                <option value="">Skupina: vše</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={String(g.id)}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={formFilter}
+                onChange={(e) => setFormFilter(e.target.value)}
+                style={{ ...UI.inputs.base, width: 220 }}
+                title="Forma"
+              >
+                <option value="">Forma: vše</option>
+                {formFilterOptions.map((form) => (
+                  <option key={form} value={form}>
+                    {form}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          {loading ? <div style={UI.sectionSubtitle}>Načítám sklad materiálu...</div> : null}
-          {error ? <div style={{ color: "#b91c1c", fontWeight: 700 }}>{error}</div> : null}
+          <div style={UI.overviewCardBody}>
+          {loading ? <div style={{ ...UI.overviewStateLoading, padding: "0 0 12px" }}>Načítám sklad materiálu…</div> : null}
+          {error ? <div style={{ ...UI.overviewStateError, padding: "0 0 12px" }}>{error}</div> : null}
 
           {showCreateForm ? (
             <div style={{ ...UI.card, padding: 12, marginBottom: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
@@ -336,7 +404,7 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
           ) : null}
 
           {!loading && !error ? (
-            <div style={{ overflowX: "auto" }}>
+            <div className="erp-table-wrap" style={{ overflowX: "auto" }}>
               <table style={UI.table}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
@@ -359,7 +427,7 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((row) => (
+                  {pagedMaterialStockRows.map((row) => (
                     <tr
                       key={row.id}
                       onClick={() => onOpenStockInWorkspaceTab(row)}
@@ -424,6 +492,17 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
               </table>
             </div>
           ) : null}
+          {rows.length > 0 ? (
+            <ErpPagination
+              pageSize={materialStockPageSize}
+              onPageSizeChange={setMaterialStockPageSize}
+              offset={materialStockOffset}
+              onOffsetChange={setMaterialStockOffset}
+              total={materialStockPagedTotal}
+              currentCount={pagedMaterialStockRows.length}
+            />
+          ) : null}
+          </div>
         </div>
       </PageSection>
     </PageContainer>
