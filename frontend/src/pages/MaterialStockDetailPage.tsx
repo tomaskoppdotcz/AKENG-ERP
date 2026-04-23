@@ -46,6 +46,10 @@ function nowLocalDateTimeValue() {
 }
 
 export default function MaterialStockDetailPage({ item, onBack }: Props) {
+  const movementTypeLabel = (type: MaterialStockMovement["movement_type"]) => {
+    if (type === "storno_vydeje") return "storno_vydeje";
+    return type;
+  };
   const [stockItem, setStockItem] = useState<DetailItem>(item);
   const [rows, setRows] = useState<MaterialStockMovement[]>([]);
   const [loading, setLoading] = useState(false);
@@ -54,7 +58,7 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
   const [editingMovementId, setEditingMovementId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const [movementType, setMovementType] = useState<"prijem" | "vydej" | "korekce">("prijem");
+  const [movementType, setMovementType] = useState<"prijem" | "vydej" | "korekce" | "storno_vydeje">("prijem");
   const [qty, setQty] = useState("");
   const [movementDate, setMovementDate] = useState(nowLocalDateTimeValue());
   const [reference, setReference] = useState("");
@@ -385,12 +389,15 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
                   <div style={UI.inputs.label}>Typ</div>
                   <select
                     value={movementType}
-                    onChange={(e) => setMovementType(e.target.value as "prijem" | "vydej" | "korekce")}
+                    onChange={(e) =>
+                      setMovementType(e.target.value as "prijem" | "vydej" | "korekce" | "storno_vydeje")
+                    }
                     style={UI.inputs.base}
                   >
                     <option value="prijem">prijem</option>
                     <option value="vydej">vydej</option>
                     <option value="korekce">korekce</option>
+                    <option value="storno_vydeje">storno_vydeje</option>
                   </select>
                 </div>
                 <div>
@@ -511,7 +518,9 @@ export default function MaterialStockDetailPage({ item, onBack }: Props) {
                 <tbody>
                   {rows.map((row) => (
                     <tr key={row.id}>
-                      <td style={{ ...UI.td, padding: "10px 8px", whiteSpace: "nowrap", fontWeight: 800 }}>{row.movement_type}</td>
+                      <td style={{ ...UI.td, padding: "10px 8px", whiteSpace: "nowrap", fontWeight: 800 }}>
+                        {movementTypeLabel(row.movement_type)}
+                      </td>
                       <td style={{ ...UI.td, padding: "10px 8px", whiteSpace: "nowrap" }}>{row.qty} mm</td>
                       <td style={{ ...UI.td, padding: "10px 8px", whiteSpace: "nowrap" }}>{formatDate(row.movement_date)}</td>
                       <td style={{ ...UI.td, padding: "10px 8px", maxWidth: 140 }}>{row.heat_lot || "—"}</td>

@@ -44,6 +44,7 @@ function nowLocalDateTimeValue() {
 function movementTypeLabel(t: string): string {
   if (t === "prijem") return "Příjem";
   if (t === "vydej") return "Výdej";
+  if (t === "storno_vydeje") return "Storno výdeje";
   return "Korekce";
 }
 

@@ -10,6 +10,8 @@ Rozpoznání je deterministické:
 Výběr skladové karty (hotové výrobky): GPN z operace/VP + zákazník z navázané portfolio položky VP —
 všechny aktivní varianty portfolia se stejným GPN; existující karta = aktivní řádek product_stock_items
 s portfolio_item_id v této množině (upřednostní se karta přesně pro portfolio VP, jinak ne-EXPEDICE, jinak nejnižší id).
+U příjmu i výdeje se použije stejné mapování (viz _resolve_receipt_portfolio_item_id), aby „Výdej sklad“
+čerpal fyzický stav se stejné karty jako interní „Příjem sklad“ u téhož GPN (stock_allocation / sklad_zakaznik).
 
 Idempotence: jeden záznam product_stock_movements na planning_operation_id (UNIQUE).
 """
@@ -64,6 +66,13 @@ def _text_implies_vydej_sklad(text: str | None) -> bool:
 
 
 def classify_tp_product_stock_effect(db: Session, op: PlanningOperation) -> StockEffectKind | None:
+    # Prefer explicit operation text first: it is closest to the TP intent and
+    # avoids wrong direction when workplace/machine metadata is stale.
+    if _text_implies_vydej_sklad(op.operation_name):
+        return "product_vydej"
+    if _text_implies_prijem_sklad(op.operation_name):
+        return "product_prijem"
+
     wid = getattr(op, "workplace_library_item_id", None)
     if wid is not None:
         wp = db.get(WorkplaceLibraryItem, int(wid))
@@ -86,10 +95,6 @@ def classify_tp_product_stock_effect(db: Session, op: PlanningOperation) -> Stoc
                 return "product_prijem"
             if mc in _WORKPLACE_CODES_VYDEJ:
                 return "product_vydej"
-    if _text_implies_prijem_sklad(op.operation_name):
-        return "product_prijem"
-    if _text_implies_vydej_sklad(op.operation_name):
-        return "product_vydej"
     return None
 
 
@@ -103,9 +108,87 @@ def _resolve_po_for_planning_op(db: Session, op: PlanningOperation) -> Productio
 def _movement_delta(movement_type: str, qty: float) -> float:
     if movement_type == "prijem":
         return qty
+    if movement_type == "storno_vydeje":
+        return qty
     if movement_type == "vydej":
         return -qty
     return qty
+
+
+def revert_kiosk_tp_stock_effect_for_planning_operation(db: Session, planning_operation_id: int) -> bool:
+    """
+    Undo TP stock effect (movement + optional receipt) for one planning operation.
+    Returns True when at least one related stock row was removed.
+    """
+    reverted = False
+    mv = db.scalar(
+        select(ProductStockMovement).where(ProductStockMovement.planning_operation_id == int(planning_operation_id))
+    )
+    if mv is not None:
+        stock = db.get(ProductStockItem, int(mv.stock_item_id))
+        mv_type = str(mv.movement_type or "")
+        mv_qty = float(mv.qty or 0)
+        if mv_type == "vydej":
+            storno_ref = (
+                f"STORNO_VYDEJE_OF:{int(mv.id)};"
+                f"PLO:{int(planning_operation_id)};"
+                f"ORIG_REF:{(mv.reference or '').strip()}"
+            )
+            existing_storno = db.scalar(
+                select(ProductStockMovement).where(
+                    ProductStockMovement.movement_type == "storno_vydeje",
+                    ProductStockMovement.stock_item_id == int(mv.stock_item_id),
+                    ProductStockMovement.reference == storno_ref,
+                )
+            )
+            if existing_storno is None:
+                if stock is not None:
+                    stock.current_qty = float(stock.current_qty or 0) + mv_qty
+                db.add(
+                    ProductStockMovement(
+                        stock_item_id=int(mv.stock_item_id),
+                        movement_type="storno_vydeje",
+                        qty=mv_qty,
+                        movement_date=datetime.utcnow(),
+                        reference=storno_ref,
+                        note=(
+                            "Auto storno vydeje pri rollbacku TP; "
+                            f"orig_movement_id={int(mv.id)}; VP/PLO={((mv.reference or '').strip() or '-')}"
+                        ),
+                        planning_operation_id=None,
+                    )
+                )
+                reverted = True
+        else:
+            if stock is not None:
+                stock.current_qty = float(stock.current_qty or 0) - _movement_delta(mv_type, mv_qty)
+            db.delete(mv)
+            reverted = True
+    rc = db.scalar(
+        select(ProductStockReceipt).where(ProductStockReceipt.planning_operation_id == int(planning_operation_id))
+    )
+    if rc is not None:
+        db.delete(rc)
+        reverted = True
+    return reverted
+
+
+def rollback_kiosk_tp_stock_effects_for_vp_code(db: Session, vp_code: str | None) -> int:
+    """
+    Undo all TP stock effects linked to planning operations of one VP/work_order_no.
+    Returns count of planning operations that had reverted stock effect.
+    """
+    code = (vp_code or "").strip()
+    if not code:
+        return 0
+    op_ids = db.scalars(
+        select(PlanningOperation.id).where(func.lower(func.trim(PlanningOperation.work_order_no)) == code.lower())
+    ).all()
+    reverted = 0
+    for op_id in op_ids:
+        if revert_kiosk_tp_stock_effect_for_planning_operation(db, int(op_id)):
+            reverted += 1
+    return reverted
 
 
 def _qty_for_stock_effect(
@@ -169,9 +252,10 @@ def _resolve_target_portfolio_item_id(db: Session, po: ProductionOrder, op: Plan
 
 def _resolve_receipt_portfolio_item_id(db: Session, po: ProductionOrder, op: PlanningOperation) -> int | None:
     """
-    For product receipt (Příjem sklad), prefer a portfolio variant that already has an active stock card
-    for the same real product (GPN/customer), ideally logistic_mode='sklad'.
-    This prevents splitting finished-goods stock across sibling portfolio variants.
+    Který portfolio_item_id reprezentuje fyzickou skladovou kartu pro tento GPN (a zákazníka):
+    pro příjem i výdej (TP kiosk), aby pohyb a stav odpovídaly internímu naskladnění, ne logistické
+    variantě VP (sklad vs. sklad_zakaznik).
+    Preferuje aktivní kartu se stejným GPN, ideálně logistic_mode='sklad'.
     """
     base_pid = _resolve_target_portfolio_item_id(db, po, op)
     base_item = db.get(PortfolioItem, int(base_pid)) if base_pid is not None else None
@@ -179,7 +263,7 @@ def _resolve_receipt_portfolio_item_id(db: Session, po: ProductionOrder, op: Pla
     if not gpn_norm:
         return base_pid
 
-    q = (
+    q_base = (
         select(ProductStockItem.portfolio_item_id)
         .join(PortfolioItem, PortfolioItem.id == ProductStockItem.portfolio_item_id)
         .where(
@@ -187,27 +271,52 @@ def _resolve_receipt_portfolio_item_id(db: Session, po: ProductionOrder, op: Pla
             func.lower(func.trim(PortfolioItem.gpn)) == gpn_norm.lower(),
         )
     )
-    if base_item is not None:
-        q = q.where(PortfolioItem.customer_id == int(base_item.customer_id))
     # Prefer sklad variant first, then deterministic by portfolio id.
-    q = q.order_by(
+    ordering = (
         (PortfolioItem.logistic_mode == "sklad").desc(),
         PortfolioItem.id.asc(),
         ProductStockItem.id.asc(),
     )
-    preferred_pid = db.scalars(q).first()
-    if preferred_pid is not None:
-        resolved = int(preferred_pid)
-        if base_pid is not None and int(base_pid) != resolved:
+
+    # Pass 1: same GPN + same customer_id (if base item/customer is known).
+    if base_item is not None and getattr(base_item, "customer_id", None) is not None:
+        q_same_customer = q_base.where(PortfolioItem.customer_id == int(base_item.customer_id)).order_by(*ordering)
+        preferred_same_customer = db.scalars(q_same_customer).first()
+        if preferred_same_customer is not None:
+            resolved = int(preferred_same_customer)
             logger.info(
-                "[kiosk_tp_stock] receipt_portfolio_override planning_op_id=%s vp=%s base_portfolio_item_id=%s resolved_portfolio_item_id=%s gpn=%s",
+                "[kiosk_tp_stock] receipt_portfolio_resolution path=same_customer planning_op_id=%s vp=%s base_portfolio_item_id=%s resolved_portfolio_item_id=%s gpn=%s customer_id=%s",
                 int(op.id),
                 (po.vp_code or ""),
-                int(base_pid),
+                int(base_pid) if base_pid is not None else None,
                 resolved,
                 gpn_norm,
+                int(base_item.customer_id),
             )
+            return resolved
+
+    # Pass 2: fallback to any active card with same GPN.
+    q_any_customer = q_base.order_by(*ordering)
+    preferred_any_customer = db.scalars(q_any_customer).first()
+    if preferred_any_customer is not None:
+        resolved = int(preferred_any_customer)
+        logger.info(
+            "[kiosk_tp_stock] receipt_portfolio_resolution path=same_gpn_any_customer planning_op_id=%s vp=%s base_portfolio_item_id=%s resolved_portfolio_item_id=%s gpn=%s",
+            int(op.id),
+            (po.vp_code or ""),
+            int(base_pid) if base_pid is not None else None,
+            resolved,
+            gpn_norm,
+        )
         return resolved
+
+    logger.info(
+        "[kiosk_tp_stock] receipt_portfolio_resolution path=base_fallback planning_op_id=%s vp=%s base_portfolio_item_id=%s gpn=%s",
+        int(op.id),
+        (po.vp_code or ""),
+        int(base_pid) if base_pid is not None else None,
+        gpn_norm,
+    )
     return base_pid
 
 
@@ -311,11 +420,7 @@ def apply_kiosk_tp_stock_effect_on_operation_complete(
         )
         return {"stock_effect": kind, "skipped": True, "reason": "workflow_inactive"}
 
-    target_portfolio_item_id = (
-        _resolve_receipt_portfolio_item_id(db, po, op)
-        if kind == "product_prijem"
-        else _resolve_target_portfolio_item_id(db, po, op)
-    )
+    target_portfolio_item_id = _resolve_receipt_portfolio_item_id(db, po, op)
     if target_portfolio_item_id is None:
         logger.warning(
             "[kiosk_tp_stock] skip effect=%s planning_op_id=%s: missing portfolio_item_id link",

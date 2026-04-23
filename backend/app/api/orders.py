@@ -45,6 +45,8 @@ from app.services.sklad_zakaznik_fulfillment import (
     normalize_restock_resolution_strategy,
     wip_primary_restock_po_for_plan,
 )
+from app.services.kiosk_planner_queue import cancel_open_planning_operations_for_vp_code
+from app.services.kiosk_tp_stock_effects import rollback_kiosk_tp_stock_effects_for_vp_code
 from app.services.vp_operation_generator import (
     _vp_planning_pipeline_snapshot,
     ensure_planning_operations_for_production_order,
@@ -68,6 +70,10 @@ from app.services.material_reservation_sync import (
     sum_eligible_reserved_qty_for_material,
     supersede_active_tp_auto_for_po,
 )
+from app.services.material_issue_rollback import (
+    rollback_material_issue_movements_for_cancelled_production_order,
+)
+from app.services.planning_engine import PlanningEngineService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -798,6 +804,47 @@ def _open_restock_production_for_skld_portfolio(db: Session, skld_portfolio_item
     )
 
 
+def _pending_restock_wip_reserved_qty_by_source_po_ids(
+    db: Session, source_po_ids: list[int]
+) -> dict[int, int]:
+    """Součet pending rezervací WIP po zdrojových restock VP."""
+    ids = sorted({int(pid) for pid in source_po_ids if int(pid) > 0})
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(
+            RestockWipReservation.source_production_order_id,
+            func.coalesce(func.sum(RestockWipReservation.reserved_qty), 0),
+        ).where(
+            RestockWipReservation.source_production_order_id.in_(ids),
+            RestockWipReservation.status == "pending",
+        ).group_by(RestockWipReservation.source_production_order_id)
+    ).all()
+    out: dict[int, int] = {}
+    for source_po_id, reserved_sum in rows:
+        if source_po_id is None:
+            continue
+        out[int(source_po_id)] = int(reserved_sum or 0)
+    return out
+
+
+def _net_open_restock_wip_quantity(
+    db: Session, restock_pos: list[ProductionOrder]
+) -> int:
+    """Net WIP = součet max(0, po.quantity - pending_reserved_qty)."""
+    if not restock_pos:
+        return 0
+    pending_by_source = _pending_restock_wip_reserved_qty_by_source_po_ids(
+        db, [int(p.id) for p in restock_pos]
+    )
+    total = 0
+    for po in restock_pos:
+        gross = int(po.quantity or 0)
+        pending_reserved = int(pending_by_source.get(int(po.id), 0))
+        total += max(0, gross - pending_reserved)
+    return int(total)
+
+
 def _open_restock_wip_quantity_for_job_item(db: Session, item: JobItem, has_portfolio: bool) -> int:
     """Součet množství otevřených VP restock_allocation pro skladovou variantu GPN (stejná logika jako náhled)."""
     if not has_portfolio:
@@ -806,7 +853,7 @@ def _open_restock_wip_quantity_for_job_item(db: Session, item: JobItem, has_port
         skld = _resolve_portfolio_variant_by_gpn_and_logistics(db, gpn=item.gpn, logistic_mode="sklad")
         wip_all = _open_restock_production_for_skld_portfolio(db, int(skld.id))
         wip = [p for p in wip_all if _restock_po_is_open_wip(p)]
-        return int(sum(int(p.quantity or 0) for p in wip))
+        return _net_open_restock_wip_quantity(db, wip)
     except HTTPException:
         return 0
 
@@ -1038,7 +1085,7 @@ def _allocation_preview_for_customer_order(db: Session, customer_order_id: int) 
                 skld_id = int(skld.id)
                 wip_all = _open_restock_production_for_skld_portfolio(db, skld_id)
                 wip = [p for p in wip_all if _restock_po_is_open_wip(p)]
-                qo = int(sum(int(p.quantity or 0) for p in wip))
+                qo = _net_open_restock_wip_quantity(db, wip)
                 restock_wip = {
                     "quantity_open": qo,
                     "production_order_ids": [int(p.id) for p in wip],
@@ -1270,6 +1317,54 @@ def _ensure_internal_restock_allocation_po(
             has_desc,
         )
 
+    existing_internal_restock_po = db.scalar(
+        select(ProductionOrder)
+        .where(
+            ProductionOrder.job_item_id == int(internal_item.id),
+            ProductionOrder.source_type == "restock_allocation",
+            ProductionOrder.logistic_mode == "sklad",
+            workflow_active_sql(ProductionOrder.workflow_status),
+        )
+        .order_by(ProductionOrder.id.desc())
+    )
+    if existing_internal_restock_po is not None:
+        if not getattr(existing_internal_restock_po, "scan_code", None):
+            existing_internal_restock_po.scan_code = production_order_scan_code_for_id(
+                int(existing_internal_restock_po.id)
+            )
+        target_q = int(add_q)
+        if int(existing_internal_restock_po.quantity or 0) != target_q:
+            existing_internal_restock_po.quantity = target_q
+            db.flush()
+            rebuild_tp_material_reservations_for_production_order(db, existing_internal_restock_po)
+        _ensure_production_order_operation_scans(
+            db,
+            production_order_id=int(existing_internal_restock_po.id),
+            portfolio_item_id=resolved_portfolio_item_id,
+        )
+        plan_info = ensure_planning_operations_for_production_order(db, existing_internal_restock_po)
+        _vp_planning_pipeline_snapshot(
+            db,
+            existing_internal_restock_po,
+            "orders_after_existing_vp_internal_restock",
+            plan_info,
+        )
+        _sync_internal_restock_job_item_qty(db, internal_item.id)
+        result.append(
+            {
+                "id": existing_internal_restock_po.id,
+                "vp_code": existing_internal_restock_po.vp_code,
+                "job_item_id": existing_internal_restock_po.job_item_id,
+                "source_type": existing_internal_restock_po.source_type or "restock_allocation",
+                "logistic_mode": existing_internal_restock_po.logistic_mode or "sklad",
+                "quantity": int(existing_internal_restock_po.quantity or 0),
+                "status": existing_internal_restock_po.status or "planned",
+                "state": "existing",
+                "duplicate_flow": len(restock_existing) > 1,
+            }
+        )
+        return internal_co, internal_job, existing_internal_restock_po
+
     po = ProductionOrder(
         vp_code=next_vp_code(db),
         job_item_id=internal_item.id,
@@ -1356,9 +1451,15 @@ def _ensure_customer_facing_allocation_po(
         )
         ensure_planning_operations_for_production_order(db, existing)
         target_q = int(round(c["quantity"]))
-        if int(existing.quantity or 0) != target_q:
+        qty_changed = int(existing.quantity or 0) != target_q
+        if qty_changed:
             existing.quantity = target_q
             db.flush()
+        if qty_changed or (
+            str(c.get("logistic_mode", "")).strip() == "sklad_zakaznik" and c.get("source_type") == "stock_allocation"
+        ):
+            # Heal pre-fix stock_allocation VPs: supersede old TP material reservations, refresh
+            # is_material_released_to_production, sync planning_operations.material_ready.
             rebuild_tp_material_reservations_for_production_order(db, existing)
         if c["source_type"] == "order_allocation":
             _ensure_job_item_coverage(
@@ -1429,6 +1530,15 @@ def _ensure_customer_facing_allocation_po(
             portfolio_item_id=resolved_portfolio_item_id,
         )
         ensure_planning_operations_for_production_order(db, existing)
+        target_q2 = int(round(c["quantity"]))
+        qty_changed2 = int(existing.quantity or 0) != target_q2
+        if qty_changed2:
+            existing.quantity = target_q2
+            db.flush()
+        if qty_changed2 or (
+            str(c.get("logistic_mode", "")).strip() == "sklad_zakaznik" and c.get("source_type") == "stock_allocation"
+        ):
+            rebuild_tp_material_reservations_for_production_order(db, existing)
         if c["source_type"] == "order_allocation":
             _ensure_job_item_coverage(
                 db,
@@ -2260,7 +2370,9 @@ def _create_material_reservations_for_po(
     quantity: int,
 ) -> None:
     mode = str(po.logistic_mode or "").strip()
-    if mode not in {"vyroba_zakaznik", "sklad", "sklad_zakaznik"}:
+    # sklad_zakaznik flow starts with finished-goods stock issue ("Výdej ze skladu"),
+    # so TP material reservations would incorrectly gate the VP as "not released".
+    if mode not in {"vyroba_zakaznik", "sklad"}:
         return
     template_id = _select_active_template_id(db, portfolio_item_id)
     if template_id is None:
@@ -2445,6 +2557,9 @@ def storno_customer_order(
             it.workflow_status = WORKFLOW_STATUS_CANCELLED
             for po in db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id == it.id)).all():
                 po.workflow_status = WORKFLOW_STATUS_CANCELLED
+                rollback_kiosk_tp_stock_effects_for_vp_code(db, po.vp_code)
+                rollback_material_issue_movements_for_cancelled_production_order(db, po)
+                cancel_open_planning_operations_for_vp_code(db, po.vp_code)
             for mid in db.scalars(
                 select(MaterialReservation.material_library_item_id).where(
                     MaterialReservation.job_item_id == int(it.id)
@@ -2713,6 +2828,9 @@ def storno_job_item(
     row.workflow_status = WORKFLOW_STATUS_CANCELLED
     for po in db.scalars(select(ProductionOrder).where(ProductionOrder.job_item_id == item_id)).all():
         po.workflow_status = WORKFLOW_STATUS_CANCELLED
+        rollback_kiosk_tp_stock_effects_for_vp_code(db, po.vp_code)
+        rollback_material_issue_movements_for_cancelled_production_order(db, po)
+        cancel_open_planning_operations_for_vp_code(db, po.vp_code)
     material_ids: set[int] = {
         int(mid)
         for mid in db.scalars(
@@ -2899,6 +3017,7 @@ def create_production_orders_from_allocation(
                     "duplicate_flow": False,
                 }
             )
+        PlanningEngineService(db).rebuild_global_schedules(date.today())
         db.commit()
         return {
             "production_orders": result,
@@ -3129,6 +3248,7 @@ def create_production_orders_from_allocation(
                 result=result,
             )
 
+    PlanningEngineService(db).rebuild_global_schedules(date.today())
     db.commit()
     for it in items:
         n = db.scalar(

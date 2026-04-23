@@ -39,12 +39,17 @@ from app.services.material_readiness import (
     evaluate_production_order_material_released,
 )
 from app.services.material_reservation_sync import cancel_active_reservations_for_production_order
+from app.services.material_issue_rollback import (
+    rollback_material_issue_movements_for_cancelled_production_order,
+)
 from app.services.material_traceability_vp import vp_material_traceability_for_input
 from app.services.planning_operation_status import normalize_production_order_status
 from app.services.production_order_operation_runtime import (
     operation_nos_for_production_order,
     operation_statuses_for_production_order,
 )
+from app.services.kiosk_planner_queue import cancel_open_planning_operations_for_vp_code
+from app.services.kiosk_tp_stock_effects import rollback_kiosk_tp_stock_effects_for_vp_code
 from app.services.planning_engine import PlanningEngineService
 from app.services.planning_operation_status import normalize_planning_operation_status
 from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
@@ -601,6 +606,9 @@ def storno_production_order(
     if not workflow_record_active(po):
         raise HTTPException(status_code=409, detail="Výrobní příkaz je již stornován.")
     po.workflow_status = WORKFLOW_STATUS_CANCELLED
+    rollback_kiosk_tp_stock_effects_for_vp_code(db, po.vp_code)
+    rollback_material_issue_movements_for_cancelled_production_order(db, po)
+    cancel_open_planning_operations_for_vp_code(db, po.vp_code)
     ji_id = int(po.job_item_id) if po.job_item_id is not None else None
     material_ids: set[int] = set()
     if ji_id is not None:

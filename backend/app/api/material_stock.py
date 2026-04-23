@@ -46,7 +46,7 @@ from app.services.material_reservation_sync import MATERIAL_RESERVATION_ACTIVE_S
 
 router = APIRouter()
 
-ALLOWED_MOVEMENT_TYPES = frozenset({"prijem", "vydej", "korekce"})
+ALLOWED_MOVEMENT_TYPES = frozenset({"prijem", "vydej", "korekce", "storno_vydeje"})
 ALLOWED_ATTACHMENT_MIME = frozenset({"application/pdf", "image/jpeg", "image/png"})
 MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 _MAX_FILES_PER_UPLOAD = 12
@@ -345,6 +345,8 @@ def _normalize_location(value: str | None) -> str | None:
 
 def _movement_delta(movement_type: str, qty: float) -> float:
     if movement_type == "prijem":
+        return qty
+    if movement_type == "storno_vydeje":
         return qty
     if movement_type == "vydej":
         return -qty
@@ -672,7 +674,7 @@ def create_movement(
     if mtype not in ALLOWED_MOVEMENT_TYPES:
         raise HTTPException(
             status_code=422,
-            detail="movement_type must be one of: prijem, vydej, korekce",
+            detail="movement_type must be one of: prijem, vydej, korekce, storno_vydeje",
         )
     if payload.qty <= 0:
         raise HTTPException(status_code=422, detail="qty must be greater than 0")
@@ -724,7 +726,7 @@ def update_movement(
     if mtype not in ALLOWED_MOVEMENT_TYPES:
         raise HTTPException(
             status_code=422,
-            detail="movement_type must be one of: prijem, vydej, korekce",
+            detail="movement_type must be one of: prijem, vydej, korekce, storno_vydeje",
         )
     if payload.qty <= 0:
         raise HTTPException(status_code=422, detail="qty must be greater than 0")

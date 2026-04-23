@@ -326,6 +326,76 @@ export type AllocationPreviewResponse = {
   any_needs_user_choice: boolean;
 };
 
+function coerceNumber(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeAllocationPreviewResponse(raw: unknown): AllocationPreviewResponse {
+  if (raw == null || typeof raw !== "object") {
+    throw new Error("Nepodařilo se načíst náhled alokace (neplatná odpověď serveru).");
+  }
+  const obj = raw as Record<string, unknown>;
+  const rawLines = Array.isArray(obj.lines) ? obj.lines : [];
+  const lines: AllocationPreviewLine[] = rawLines.map((lineRaw) => {
+    const line = (lineRaw && typeof lineRaw === "object" ? lineRaw : {}) as Record<string, unknown>;
+    const rawWip =
+      line.restock_wip && typeof line.restock_wip === "object"
+        ? (line.restock_wip as Record<string, unknown>)
+        : {};
+    const restock_wip = {
+      quantity_open: coerceNumber(rawWip.quantity_open, 0),
+      production_order_ids: Array.isArray(rawWip.production_order_ids)
+        ? rawWip.production_order_ids.map((v) => coerceNumber(v, 0)).filter((v) => v > 0)
+        : [],
+      vp_codes: Array.isArray(rawWip.vp_codes)
+        ? rawWip.vp_codes.map((v) => String(v ?? "").trim()).filter((v) => v.length > 0)
+        : [],
+    };
+    return {
+      job_item_id: coerceNumber(line.job_item_id, 0),
+      gpn: typeof line.gpn === "string" ? line.gpn : "",
+      required_qty: coerceNumber(line.required_qty, 0),
+      from_stock_qty: coerceNumber(line.from_stock_qty, 0),
+      to_production_qty: coerceNumber(line.to_production_qty, 0),
+      restock_qty: coerceNumber(line.restock_qty, 0),
+      internal_replenishment_qty:
+        line.internal_replenishment_qty == null ? undefined : coerceNumber(line.internal_replenishment_qty, 0),
+      finished_stock_qty: line.finished_stock_qty == null ? undefined : coerceNumber(line.finished_stock_qty, 0),
+      minimum_stock_target_qty:
+        line.minimum_stock_target_qty == null ? undefined : coerceNumber(line.minimum_stock_target_qty, 0),
+      wip_restock_qty: line.wip_restock_qty == null ? undefined : coerceNumber(line.wip_restock_qty, 0),
+      stock_after_customer_issue_qty:
+        line.stock_after_customer_issue_qty == null ? undefined : coerceNumber(line.stock_after_customer_issue_qty, 0),
+      future_stock_after_wip_qty:
+        line.future_stock_after_wip_qty == null ? undefined : coerceNumber(line.future_stock_after_wip_qty, 0),
+      wip_covers_minimum_after_customer_issue:
+        line.wip_covers_minimum_after_customer_issue == null
+          ? undefined
+          : Boolean(line.wip_covers_minimum_after_customer_issue),
+      restock_resolution_options: Array.isArray(line.restock_resolution_options)
+        ? (line.restock_resolution_options as RestockResolutionOption[])
+        : [],
+      recommended_fulfillment_strategy:
+        typeof line.recommended_fulfillment_strategy === "string"
+          ? (line.recommended_fulfillment_strategy as RestockConflictStrategy)
+          : null,
+      restock_wip,
+      needs_user_choice: Boolean(line.needs_user_choice),
+      line_logistic_mode: line.line_logistic_mode == null ? undefined : String(line.line_logistic_mode),
+      reserve_wip_plan:
+        line.reserve_wip_plan && typeof line.reserve_wip_plan === "object"
+          ? (line.reserve_wip_plan as AllocationPreviewLine["reserve_wip_plan"])
+          : null,
+    };
+  });
+  return {
+    customer_order_id: coerceNumber(obj.customer_order_id, 0),
+    lines,
+    any_needs_user_choice: Boolean(obj.any_needs_user_choice),
+  };
+}
+
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
     const j = await res.json();
@@ -569,7 +639,8 @@ export async function getAllocationPreview(customerOrderId: number): Promise<All
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Nepodařilo se načíst náhled alokace."));
   }
-  return res.json();
+  const raw = await res.json();
+  return normalizeAllocationPreviewResponse(raw);
 }
 
 export async function createProductionOrdersFromAllocation(

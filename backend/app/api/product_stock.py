@@ -18,7 +18,7 @@ from app.models.product_stock import ProductStockItem, ProductStockMovement
 
 router = APIRouter()
 
-ALLOWED_MOVEMENT_TYPES = frozenset({"prijem", "vydej", "korekce"})
+ALLOWED_MOVEMENT_TYPES = frozenset({"prijem", "vydej", "korekce", "storno_vydeje"})
 
 
 def ensure_product_stock_sqlite_schema(engine: Engine) -> None:
@@ -155,6 +155,8 @@ def _normalize_location(value: str | None) -> str | None:
 
 def _movement_delta(movement_type: str, qty: float) -> float:
     if movement_type == "prijem":
+        return qty
+    if movement_type == "storno_vydeje":
         return qty
     if movement_type == "vydej":
         return -qty
@@ -361,7 +363,7 @@ def create_movement(
     if mtype not in ALLOWED_MOVEMENT_TYPES:
         raise HTTPException(
             status_code=422,
-            detail="movement_type musí být: prijem, vydej, korekce",
+            detail="movement_type musí být: prijem, vydej, korekce, storno_vydeje",
         )
     if payload.qty <= 0:
         raise HTTPException(status_code=422, detail="qty musí být větší než 0")
@@ -406,7 +408,7 @@ def update_movement(
     if mtype_new not in ALLOWED_MOVEMENT_TYPES:
         raise HTTPException(
             status_code=422,
-            detail="movement_type musí být: prijem, vydej, korekce",
+            detail="movement_type musí být: prijem, vydej, korekce, storno_vydeje",
         )
 
     qty_new = movement.qty

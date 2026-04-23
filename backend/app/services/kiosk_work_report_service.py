@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from fastapi import HTTPException
@@ -24,6 +25,15 @@ from app.services.planning_operation_status import normalize_planning_operation_
 from app.services.work_report_code import allocate_next_work_report_code
 
 logger = logging.getLogger(__name__)
+_CZECH_TZ = ZoneInfo("Europe/Prague")
+
+
+def _runtime_now() -> datetime:
+    """
+    Runtime timestamps in ERP are stored as local naive wall-clock.
+    Always generate Czech local time regardless of server system timezone.
+    """
+    return datetime.now(_CZECH_TZ).replace(tzinfo=None)
 
 PAUSE_REASONS: tuple[str, ...] = (
     "seřízení",
@@ -66,7 +76,7 @@ def _audit(
             action=action,
             actor=(actor or None),
             details_json=json.dumps(details or {}, ensure_ascii=False, default=str),
-            created_at=datetime.now(),
+            created_at=_runtime_now(),
         )
     )
 
@@ -168,12 +178,12 @@ def _maybe_operation_event(
             machine_id=int(machine_id),
             employee_id=int(employee_id),
             event_type=event_type,
-            event_time=datetime.now(),
+            event_time=_runtime_now(),
             qty_ok=qty_ok,
             qty_nok=qty_nok,
             reason=reason,
             note=note,
-            created_at=datetime.now(),
+            created_at=_runtime_now(),
         )
     )
 
@@ -234,7 +244,7 @@ def work_report_start(
 
     ensure_planning_operation_material_ready_for_start(db, op)
 
-    now = datetime.now()
+    now = _runtime_now()
     open_rep = _get_open_report(db, op.id)
     if open_rep:
         if _get_open_pause(db, open_rep.id):
@@ -242,7 +252,7 @@ def work_report_start(
                 status_code=409,
                 detail="Operace je v přestávce — použijte Pokračovat (resume).",
             )
-        now_idem = datetime.now()
+        now_idem = _runtime_now()
         op.status = "bezi"
         if op.actual_start is None:
             op.actual_start = now_idem
@@ -320,7 +330,7 @@ def work_report_pause(
         rep.employee_id = int(effective_employee_id)
     if incoming_operator and not (rep.operator_display or "").strip():
         rep.operator_display = incoming_operator
-    now = datetime.now()
+    now = _runtime_now()
     p = WorkReportPause(
         work_report_id=rep.id,
         pause_start=now,
@@ -378,7 +388,7 @@ def work_report_resume(
         rep.employee_id = int(effective_employee_id)
     if incoming_operator and not (rep.operator_display or "").strip():
         rep.operator_display = incoming_operator
-    now = datetime.now()
+    now = _runtime_now()
     open_p.pause_end = now
     _maybe_operation_event(db, op=op, machine_id=machine.id, employee_id=effective_employee_id, event_type="resume")
     op.status = "bezi"
@@ -418,7 +428,7 @@ def work_report_complete(
         rep.employee_id = int(effective_employee_id)
     if incoming_operator and not (rep.operator_display or "").strip():
         rep.operator_display = incoming_operator
-    now = datetime.now()
+    now = _runtime_now()
     open_p = _get_open_pause(db, rep.id)
     if open_p:
         open_p.pause_end = now

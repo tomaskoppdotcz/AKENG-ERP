@@ -34,7 +34,7 @@ export type MaterialStockMovementAttachment = {
 
 export type MaterialStockMovement = {
   id: number;
-  movement_type: "prijem" | "vydej" | "korekce";
+  movement_type: "prijem" | "vydej" | "korekce" | "storno_vydeje";
   qty: number;
   movement_date: string;
   reference: string | null;
@@ -48,7 +48,7 @@ export type MaterialStockMovement = {
 };
 
 export type MaterialStockMovementCreatePayload = {
-  movement_type: "prijem" | "vydej" | "korekce";
+  movement_type: "prijem" | "vydej" | "korekce" | "storno_vydeje";
   qty: number;
   movement_date: string;
   reference: string | null;

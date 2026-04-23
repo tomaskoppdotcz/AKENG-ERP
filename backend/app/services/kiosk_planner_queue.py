@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.orm import Session, aliased
 
 from app.models.master_data import Machine
 from app.models.master_libraries import WorkplaceLibraryItem
+from app.models.orders import ProductionOrder
 from app.models.planning import PlanningOperation
+from app.services.business_workflow import workflow_active_sql
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +179,47 @@ def _open_queue_status_clause():
     )
 
 
+def _kiosk_queue_active_production_workflow_clause():
+    """
+    Odfiltrovat řádky, jejichž work_order_no odpovídá production_orders (vp) se zrušeným
+    nebo jinak neaktivním workflow (stejná logika jako workflow_record_active / workflow_active_sql).
+    Řádky bez WOO (NULL/prázdné) ponecháme.
+    """
+    woo_trim = func.trim(PlanningOperation.work_order_no)
+    inactive_matches_vp = exists(
+        select(1)
+        .select_from(ProductionOrder)
+        .where(
+            func.lower(func.trim(ProductionOrder.vp_code)) == func.lower(woo_trim),
+            ~workflow_active_sql(ProductionOrder.workflow_status),
+        )
+    )
+    return or_(
+        PlanningOperation.work_order_no.is_(None),
+        woo_trim == "",
+        ~inactive_matches_vp,
+    )
+
+
+def cancel_open_planning_operations_for_vp_code(db: Session, vp_code: str | None) -> int:
+    """Nastaví otevřené planning operace pro daný WOO/vp na status cancelled (synchron s VP stornem)."""
+    code = (vp_code or "").strip()
+    if not code:
+        return 0
+    r = db.execute(
+        update(PlanningOperation)
+        .where(func.lower(func.trim(PlanningOperation.work_order_no)) == func.lower(code))
+        .where(
+            or_(
+                PlanningOperation.status.is_(None),
+                ~PlanningOperation.status.in_(["hotovo", "cancelled"]),
+            )
+        )
+        .values(status="cancelled")
+    )
+    return int(r.rowcount or 0)
+
+
 def list_planning_operations_for_kiosk_machine(db: Session, machine: Machine) -> list[PlanningOperation]:
     """Operace na vybraném stroji, na kotvě __WP_{wp}__, nebo se stejným efektivním pracovištěm jako Planner."""
     wid = resolve_workplace_id_for_kiosk_machine(db, machine)
@@ -192,6 +235,7 @@ def list_planning_operations_for_kiosk_machine(db: Session, machine: Machine) ->
             select(PlanningOperation)
             .where(PlanningOperation.machine_id == int(machine.id))
             .where(_open_queue_status_clause())
+            .where(_kiosk_queue_active_production_workflow_clause())
             .order_by(
                 PlanningOperation.planned_start.asc().nulls_last(),
                 PlanningOperation.queue_position.asc().nulls_last(),
@@ -224,6 +268,7 @@ def list_planning_operations_for_kiosk_machine(db: Session, machine: Machine) ->
             )
         )
         .where(_open_queue_status_clause())
+        .where(_kiosk_queue_active_production_workflow_clause())
         .order_by(
             PlanningOperation.planned_start.asc().nulls_last(),
             PlanningOperation.queue_position.asc().nulls_last(),

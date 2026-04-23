@@ -18,7 +18,6 @@ from app.models.master_data import Machine
 from app.models.master_libraries import WorkplaceLibraryItem
 from app.models.orders import ProductionOrder
 from app.models.planning import PlanningOperation
-from app.models.product_stock import ProductStockItem, ProductStockMovement, ProductStockReceipt
 from app.models.work_report import WorkReport, WorkReportAuditLog, WorkReportPause
 from app.services.work_report_code import allocate_next_work_report_code
 from app.services.kiosk_planner_queue import operation_on_same_planner_row_as_machine
@@ -29,7 +28,10 @@ from app.services.kiosk_work_report_service import (
     resolve_report_links,
     validate_pause_reason,
 )
-from app.services.kiosk_tp_stock_effects import apply_kiosk_tp_stock_effect_on_operation_complete
+from app.services.kiosk_tp_stock_effects import (
+    apply_kiosk_tp_stock_effect_on_operation_complete,
+    revert_kiosk_tp_stock_effect_for_planning_operation,
+)
 from app.services.planning_engine import PlanningEngineService
 from app.services.planning_operation_status import (
     LEGACY_PLANNING_STATUS_TO_CANONICAL,
@@ -245,33 +247,12 @@ def _normalize_runtime_dt(value: datetime | None) -> datetime | None:
     return value.replace(tzinfo=None)
 
 
-def _movement_delta(movement_type: str, qty: float) -> float:
-    mt = str(movement_type or "").strip().lower()
-    if mt == "prijem":
-        return float(qty or 0)
-    if mt == "vydej":
-        return -float(qty or 0)
-    return float(qty or 0)
-
-
 def _revert_tp_stock_effect_for_operation(db: Session, planning_operation_id: int) -> None:
     """
     Undo kiosk TP stock effect created on HOTOVO for one planning operation.
     Works on current schema (product_stock_movements / product_stock_receipts).
     """
-    mv = db.scalar(
-        select(ProductStockMovement).where(ProductStockMovement.planning_operation_id == int(planning_operation_id))
-    )
-    if mv is not None:
-        stock = db.get(ProductStockItem, int(mv.stock_item_id))
-        if stock is not None:
-            stock.current_qty = float(stock.current_qty or 0) - _movement_delta(mv.movement_type, float(mv.qty or 0))
-        db.delete(mv)
-    rc = db.scalar(
-        select(ProductStockReceipt).where(ProductStockReceipt.planning_operation_id == int(planning_operation_id))
-    )
-    if rc is not None:
-        db.delete(rc)
+    revert_kiosk_tp_stock_effect_for_planning_operation(db, int(planning_operation_id))
 
 
 def _recompute_po_status_from_chain(db: Session, op: PlanningOperation) -> str | None:
