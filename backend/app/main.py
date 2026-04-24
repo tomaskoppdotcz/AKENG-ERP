@@ -80,6 +80,7 @@ from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryIt
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
 from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
 from app.models.material_stock import (
+    MaterialReceiptUnit,
     MaterialStockItem,
     MaterialStockMovement,
     MaterialStockMovementAttachment,

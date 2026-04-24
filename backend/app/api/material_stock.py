@@ -21,6 +21,7 @@ from app.core.scan_code import material_stock_movement_scan_code_for_id, materia
 from app.models.material_library import MaterialLibraryItem
 from app.models.orders import ProductionOrder
 from app.models.material_stock import (
+    MaterialReceiptUnit,
     MaterialReservation,
     MaterialStockItem,
     MaterialStockMovement,
@@ -41,6 +42,17 @@ from app.services.material_readiness import (
     rebuild_machine_schedules_after_vps_became_material_ready,
     refresh_material_readiness_for_material_library_item,
     refresh_production_order_material_readiness,
+)
+from app.services.material_issue_allocation_engine import (
+    AllocationLine,
+    allocate_material_issue_by_receipt_units,
+    ReceiptUnitSnapshot,
+)
+from app.services.material_receipt_unit_service import (
+    apply_fifo_decrement_for_vydej,
+    create_receipt_unit_for_prijem,
+    load_fifo_receipt_units,
+    restore_remaining_after_vydej_delete,
 )
 from app.services.material_reservation_sync import MATERIAL_RESERVATION_ACTIVE_STATUSES
 
@@ -199,6 +211,48 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
                     )
                 )
 
+    # --- material_receipt_units + movements.receipt_unit_id (additive SQLite backfill; STEP 1 schema only)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS material_receipt_units ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "stock_item_id INTEGER NOT NULL REFERENCES material_stock_items (id) ON DELETE CASCADE, "
+                "received_qty REAL NOT NULL, "
+                "remaining_qty REAL NOT NULL, "
+                "uom VARCHAR(40) NULL, "
+                "heat_lot VARCHAR(120) NULL, "
+                "certificate_no VARCHAR(120) NULL, "
+                "delivery_note_no VARCHAR(120) NULL, "
+                "invoice_no VARCHAR(120) NULL, "
+                "supplier_name VARCHAR(200) NULL, "
+                "received_at TIMESTAMP NOT NULL, "
+                "status VARCHAR(20) NOT NULL DEFAULT 'active'"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_material_receipt_units_stock_item_id "
+                "ON material_receipt_units (stock_item_id)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_material_receipt_units_status ON material_receipt_units (status)")
+        )
+    insp = sa_inspect(engine)
+    if "material_stock_movements" in insp.get_table_names():
+        mv3 = {c["name"] for c in insp.get_columns("material_stock_movements")}
+        with engine.begin() as conn:
+            if "receipt_unit_id" not in mv3:
+                conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN receipt_unit_id INTEGER NULL"))
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_receipt_unit_id "
+                        "ON material_stock_movements (receipt_unit_id)"
+                    )
+                )
+
 
 def _stock_item_payload(row: MaterialStockItem) -> dict:
     lib = row.material_library_item
@@ -296,6 +350,7 @@ def list_material_issues_for_job_item(job_item_id: int, db: Session = Depends(ge
                 "movement_date": _iso_movement_dt(m.movement_date),
                 "qty": float(m.qty or 0),
                 "heat_lot": m.heat_lot,
+                "receipt_unit_id": int(m.receipt_unit_id) if m.receipt_unit_id is not None else None,
                 "scan_code": m.scan_code,
                 "reference": m.reference,
                 "note": m.note,
@@ -331,6 +386,7 @@ def _movement_payload(row: MaterialStockMovement, attachments: list[dict] | None
         "supplier_name": getattr(row, "supplier_name", None),
         "delivery_note_no": getattr(row, "delivery_note_no", None),
         "certificate_no": getattr(row, "certificate_no", None),
+        "receipt_unit_id": getattr(row, "receipt_unit_id", None),
         "attachments": attachments if attachments is not None else [],
     }
     return out
@@ -387,6 +443,7 @@ class MovementCreate(BaseModel):
     supplier_name: str | None = None
     delivery_note_no: str | None = None
     certificate_no: str | None = None
+    invoice_no: str | None = None
 
     @model_validator(mode="after")
     def require_heat_lot_for_prijem(self):
@@ -413,6 +470,7 @@ class MovementUpdate(BaseModel):
     supplier_name: str | None = None
     delivery_note_no: str | None = None
     certificate_no: str | None = None
+    invoice_no: str | None = None
 
     @model_validator(mode="after")
     def require_heat_lot_for_prijem(self):
@@ -699,6 +757,21 @@ def create_movement(
         certificate_no=(payload.certificate_no.strip() if payload.certificate_no else None),
     )
     db.add(movement)
+    if mtype == "prijem":
+        inv = payload.invoice_no.strip() if payload.invoice_no else None
+        mru = create_receipt_unit_for_prijem(
+            db,
+            stock=stock,
+            received_qty=float(payload.qty),
+            uom=stock.unit,
+            heat_lot=movement.heat_lot,
+            certificate_no=movement.certificate_no,
+            delivery_note_no=movement.delivery_note_no,
+            invoice_no=inv,
+            supplier_name=movement.supplier_name,
+            received_at=movement.movement_date,
+        )
+        movement.receipt_unit_id = int(mru.id)
     stock.current_qty = stock.current_qty + delta
     from app.services.material_readiness import refresh_material_readiness_for_material_library_item
 
@@ -781,6 +854,8 @@ def delete_movement(
         fp = root / a.stored_relpath
         if fp.is_file():
             fp.unlink()
+    if str(movement.movement_type or "").strip().lower() == "vydej":
+        restore_remaining_after_vydej_delete(db, movement)
     db.delete(movement)
     from app.services.material_readiness import refresh_material_readiness_for_material_library_item
 
@@ -854,6 +929,85 @@ def download_movement_attachment(
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Soubor na disku neexistuje.")
     return FileResponse(path, filename=row.original_filename, media_type=row.mime_type)
+
+
+def _receipt_unit_row_to_engine_snapshot(ru: MaterialReceiptUnit) -> ReceiptUnitSnapshot:
+    return ReceiptUnitSnapshot(
+        id=int(ru.id),
+        remaining_qty=float(ru.remaining_qty or 0.0),
+        received_at=ru.received_at,
+        heat_lot=ru.heat_lot,
+        certificate_no=ru.certificate_no,
+        delivery_note_no=ru.delivery_note_no,
+    )
+
+
+def _receipt_unit_snapshot_payload(ru: MaterialReceiptUnit) -> dict:
+    return {
+        "id": int(ru.id),
+        "remaining_qty": float(ru.remaining_qty or 0.0),
+        "received_at": _iso_movement_dt(ru.received_at),
+        "heat_lot": ru.heat_lot,
+        "certificate_no": ru.certificate_no,
+        "delivery_note_no": ru.delivery_note_no,
+    }
+
+
+def _allocation_line_payload(line: AllocationLine) -> dict:
+    return {
+        "receipt_unit_id": int(line.receipt_unit_id),
+        "allocated_mm": float(line.allocated_mm),
+        "finished_piece_count": int(line.finished_piece_count),
+        "segment": line.segment,
+        "heat_lot": line.heat_lot,
+        "certificate_no": line.certificate_no,
+        "delivery_note_no": line.delivery_note_no,
+    }
+
+
+@router.get("/issue-allocation-preview")
+def get_material_issue_allocation_preview(
+    stock_item_id: int = Query(..., ge=1, description="Skladová karta materiálu."),
+    requested_piece_count: int = Query(..., ge=0, description="Počet hotových kusů."),
+    delka_na_kus_mm: float = Query(..., gt=0, description="Délka na 1 hotový kus (mm)."),
+    vyrabeno_po: int = Query(..., ge=1, description="Kusů na 1 polotovar (výrobní dávka)."),
+    povolit_deleni_polotovaru: bool = Query(
+        ..., description="Povolit vydat nedoplňovaný zbytek (částečný polotovar)."
+    ),
+    minimalni_zbytek_pouzitelny_mm: float = Query(0.0, ge=0, description="Min. zbylý úsek, který lze ponechat na tyči."),
+    minimalni_vydavana_delka_mm: float = Query(0.0, ge=0, description="Min. délka jednoho výdejového odběru (mm)."),
+    db: Session = Depends(get_db),
+):
+    """
+    Náhled (read-only) plánu výdeje po délce podle FIFO příjmových jednotek.
+    Neprovádí žádné zápisy (žádné pohyby, žádná změna current_qty/remaining_qty).
+    """
+    stock = db.get(MaterialStockItem, int(stock_item_id))
+    if stock is None:
+        raise HTTPException(status_code=404, detail="Stock item not found.")
+
+    rows = load_fifo_receipt_units(db, int(stock_item_id))
+    snapshots = [_receipt_unit_row_to_engine_snapshot(ru) for ru in rows]
+    res = allocate_material_issue_by_receipt_units(
+        requested_finished_piece_count=int(requested_piece_count),
+        delka_na_kus_mm=float(delka_na_kus_mm),
+        vyrabeno_po=int(vyrabeno_po),
+        povolit_deleni_polotovaru=bool(povolit_deleni_polotovaru),
+        minimalni_zbytek_pouzitelny_mm=float(minimalni_zbytek_pouzitelny_mm),
+        minimalni_vydavana_delka_mm=float(minimalni_vydavana_delka_mm),
+        receipt_units=snapshots,
+    )
+    return {
+        "ok": res.ok,
+        "demand_total_mm": res.demand_total_mm,
+        "polotovar_length_mm": res.polotovar_length_mm,
+        "full_batches": res.full_batches,
+        "remainder_pieces": res.remainder_pieces,
+        "receipt_units": [_receipt_unit_snapshot_payload(ru) for ru in rows],
+        "lines": [_allocation_line_payload(ln) for ln in res.lines],
+        "error_code": res.error_code.value,
+        "message": res.message,
+    }
 
 
 @router.get("/issue-proposal")
@@ -966,20 +1120,39 @@ def issue_material(
             detail="Nedostatečné dostupné množství na kartě (po odečtení rezervací).",
         )
 
-    movement = MaterialStockMovement(
-        stock_item_id=int(stock.id),
-        movement_type="vydej",
-        qty=issue_qty,
-        movement_date=datetime.now(timezone.utc),
-        reference=f"RES-{reservation.id}",
-        heat_lot=resolve_issue_heat_lot(db, int(stock.id), payload.heat_lot),
-        production_order_id=int(reservation.production_order_id),
-        job_item_id=int(reservation.job_item_id),
-        note=(payload.note.strip() if payload.note else reservation.note),
-    )
-    db.add(movement)
+    mdate = datetime.now(timezone.utc)
+    ref = f"RES-{reservation.id}"
+    issue_note = payload.note.strip() if payload.note else reservation.note
+    heat_resolved = resolve_issue_heat_lot(db, int(stock.id), payload.heat_lot)
+
+    def _issue_segment_heat_lot(unit: MaterialReceiptUnit | None) -> str | None:
+        if unit is not None:
+            uhl = (unit.heat_lot or "").strip()
+            if uhl:
+                return uhl
+        return heat_resolved
+
+    def _build_vydej_row(take: float, unit: MaterialReceiptUnit | None) -> MaterialStockMovement:
+        m = MaterialStockMovement(
+            stock_item_id=int(stock.id),
+            movement_type="vydej",
+            qty=take,
+            movement_date=mdate,
+            reference=ref,
+            heat_lot=_issue_segment_heat_lot(unit),
+            production_order_id=int(reservation.production_order_id),
+            job_item_id=int(reservation.job_item_id),
+            note=issue_note,
+            receipt_unit_id=int(unit.id) if unit is not None else None,
+        )
+        db.add(m)
+        return m
+
+    segs = apply_fifo_decrement_for_vydej(db, int(stock.id), issue_qty, _build_vydej_row)
     db.flush()
-    movement.scan_code = material_stock_movement_scan_code_for_id(int(movement.id))
+    for m in segs:
+        m.scan_code = material_stock_movement_scan_code_for_id(int(m.id))
+    movement = segs[0]
     stock.current_qty = float(stock.current_qty or 0) - issue_qty
     reservation.status = "issued"
     reservation.reserved_qty = issue_qty
@@ -1037,4 +1210,5 @@ def issue_material(
         "reservation_id": int(reservation.id),
         "issued_qty": issue_qty,
         "movement": _movement_payload(movement, attachments=[]),
+        "movements": [_movement_payload(m, attachments=[]) for m in segs],
     }

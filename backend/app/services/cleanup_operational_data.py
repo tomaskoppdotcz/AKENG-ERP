@@ -50,6 +50,7 @@ _SQLITE_SEQUENCE_TABLES = (
     "restock_wip_reservations",
     "material_stock_movement_attachments",
     "material_stock_movements",
+    "material_receipt_units",
 )
 
 
@@ -197,6 +198,7 @@ def _execute_cleanup_deletes(
     if material_stock_mode == "reset":
         d("material_stock_movement_attachments", "DELETE FROM material_stock_movement_attachments")
         d("material_stock_movements", "DELETE FROM material_stock_movements")
+        d("material_receipt_units", "DELETE FROM material_receipt_units")
     deleted["material_stock_items_qty_recomputed"] = recompute_material_stock_current_qty_from_movements(db)
 
     # Coverage / issues before order hierarchy

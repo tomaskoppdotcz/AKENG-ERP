@@ -1,0 +1,20 @@
+be1746c docs: milestone checkpoint 2026-04-23_11-05
+221a36e milestone: planner+kiosk+finished-goods+material-stock rollback stable 2026-04-23_11-05
+8143f86 docs: milestone runtime flow 2026-04-22_12-21
+33e57ae docs: milestone runtime flow 2026-04-22_12-20
+bd14773 Milestone: runtime flow (kiosk + work reports + stock + planner) OK 2026-04-22_12-20
+f711497 docs: project state checkpoint
+ca33512 checkpoint: workreports + order item integration stable
+9cf007b Milestone: overview UI polish + metrics + layouts + search 2026-04-16_19-08
+bc8b7a3 Milestone: operational metrics + table layouts + unified overview UI 2026-04-16_17-17
+110e872 Milestone: runtime flow (kiosk + work reports + stock + planner) OK 2026-04-16_12-47
+1044691 Milestone: runtime flow (kiosk + work reports + stock + planner) OK 2026-04-16_11-45
+7566620 Milestone: planner+kiosk+reports+stock rollback/manual completion stable
+2872094 Add milestone production core doc
+965d403 Milestone: planner+kiosk+work_reports+stock_receipt OK
+d14d3ca Stabilni planner+kiosk+TP-only VP+prijem sklad OK_14_4_2026
+6ee79bb Prefer customer reassigns restock VP to customer order item
+a23ab86 Restock conflict resolution phase 2 + multi-line safeguard
+ed39fe1 Planner fixes + workplace shifts + restock conflict phase 1
+1fb7add UI standard + filters unified + sidebar improvements
+bce6dbf Checkpoint before SAP Business One style UI redesign
