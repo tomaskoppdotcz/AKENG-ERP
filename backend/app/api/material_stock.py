@@ -49,7 +49,6 @@ from app.services.material_issue_allocation_engine import (
     ReceiptUnitSnapshot,
 )
 from app.services.material_receipt_unit_service import (
-    apply_fifo_decrement_for_vydej,
     create_receipt_unit_for_prijem,
     load_fifo_receipt_units,
     restore_remaining_after_vydej_delete,
@@ -498,6 +497,12 @@ class MaterialIssuePayload(BaseModel):
     qty: float | None = None
     note: str | None = None
     heat_lot: str | None = None
+    requested_piece_count: int | None = None
+    delka_na_kus_mm: float | None = None
+    vyrabeno_po: int | None = None
+    povolit_deleni_polotovaru: bool | None = None
+    minimalni_zbytek_pouzitelny_mm: float | None = None
+    minimalni_vydavana_delka_mm: float | None = None
 
 
 @router.get("/items")
@@ -1051,6 +1056,7 @@ def issue_material(
     db: Session = Depends(get_db),
     _rbac: None = Depends(require_action("stock.mutate")),
 ):
+    mru_consumed_tolerance = 1e-6
     reservation: MaterialReservation | None = None
     if payload.reservation_id is not None:
         reservation = db.get(MaterialReservation, int(payload.reservation_id))
@@ -1090,9 +1096,30 @@ def issue_material(
         else False
     )
 
-    issue_qty = float(payload.qty if payload.qty is not None else reservation.reserved_qty)
-    if issue_qty <= 0:
-        raise HTTPException(status_code=422, detail="qty must be greater than 0")
+    requested_piece_count = payload.requested_piece_count
+    delka_na_kus_mm = payload.delka_na_kus_mm
+    vyrabeno_po = payload.vyrabeno_po
+    povolit_deleni_polotovaru = payload.povolit_deleni_polotovaru
+    minimalni_zbytek_pouzitelny_mm = payload.minimalni_zbytek_pouzitelny_mm
+    minimalni_vydavana_delka_mm = payload.minimalni_vydavana_delka_mm
+
+    if (
+        requested_piece_count is None
+        or delka_na_kus_mm is None
+        or vyrabeno_po is None
+        or povolit_deleni_polotovaru is None
+        or minimalni_zbytek_pouzitelny_mm is None
+        or minimalni_vydavana_delka_mm is None
+    ):
+        fallback_qty = float(payload.qty if payload.qty is not None else reservation.reserved_qty)
+        if fallback_qty <= 0:
+            raise HTTPException(status_code=422, detail="qty must be greater than 0")
+        requested_piece_count = 1
+        delka_na_kus_mm = fallback_qty
+        vyrabeno_po = 1
+        povolit_deleni_polotovaru = True
+        minimalni_zbytek_pouzitelny_mm = 0.0
+        minimalni_vydavana_delka_mm = 0.0
 
     if payload.stock_item_id is not None:
         stock = db.get(MaterialStockItem, int(payload.stock_item_id))
@@ -1104,7 +1131,7 @@ def issue_material(
         prop = propose_material_issue_source(
             db,
             int(reservation.material_library_item_id),
-            issue_qty,
+            float(payload.qty if payload.qty is not None else reservation.reserved_qty),
             exclude_job_item_id=int(reservation.job_item_id),
         )
         if prop is None:
@@ -1114,7 +1141,8 @@ def issue_material(
             raise HTTPException(status_code=404, detail="No material stock item found for reserved material.")
 
     avail = available_qty_for_stock_item(db, int(stock.id), exclude_job_item_id=int(reservation.job_item_id))
-    if issue_qty > avail + 1e-6:
+    demand_estimate = float(requested_piece_count) * float(delka_na_kus_mm)
+    if demand_estimate > avail + 1e-6:
         raise HTTPException(
             status_code=409,
             detail="Nedostatečné dostupné množství na kartě (po odečtení rezervací).",
@@ -1123,39 +1151,97 @@ def issue_material(
     mdate = datetime.now(timezone.utc)
     ref = f"RES-{reservation.id}"
     issue_note = payload.note.strip() if payload.note else reservation.note
-    heat_resolved = resolve_issue_heat_lot(db, int(stock.id), payload.heat_lot)
+    _ = resolve_issue_heat_lot(db, int(stock.id), payload.heat_lot)
+    fifo_units = load_fifo_receipt_units(db, int(stock.id))
+    engine_snapshots = [_receipt_unit_row_to_engine_snapshot(ru) for ru in fifo_units]
+    alloc = allocate_material_issue_by_receipt_units(
+        requested_finished_piece_count=int(requested_piece_count),
+        delka_na_kus_mm=float(delka_na_kus_mm),
+        vyrabeno_po=int(vyrabeno_po),
+        povolit_deleni_polotovaru=bool(povolit_deleni_polotovaru),
+        minimalni_zbytek_pouzitelny_mm=float(minimalni_zbytek_pouzitelny_mm),
+        minimalni_vydavana_delka_mm=float(minimalni_vydavana_delka_mm),
+        receipt_units=engine_snapshots,
+    )
+    if not alloc.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "allocation_failed",
+                "error_code": alloc.error_code.value,
+                "message": alloc.message,
+                "demand_total_mm": float(alloc.demand_total_mm),
+                "polotovar_length_mm": float(alloc.polotovar_length_mm),
+                "full_batches": int(alloc.full_batches),
+                "remainder_pieces": int(alloc.remainder_pieces),
+                "lines": [_allocation_line_payload(ln) for ln in alloc.lines],
+            },
+        )
 
-    def _issue_segment_heat_lot(unit: MaterialReceiptUnit | None) -> str | None:
-        if unit is not None:
-            uhl = (unit.heat_lot or "").strip()
-            if uhl:
-                return uhl
-        return heat_resolved
+    units_by_id = {int(ru.id): ru for ru in fifo_units}
+    segs: list[MaterialStockMovement] = []
+    for line in alloc.lines:
+        unit = units_by_id.get(int(line.receipt_unit_id))
+        if unit is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "allocation_receipt_unit_missing",
+                    "message": "Alokacni plan odkazuje na neaktivni nebo neexistujici prijmovou jednotku.",
+                    "receipt_unit_id": int(line.receipt_unit_id),
+                },
+            )
+        take = float(line.allocated_mm)
+        if take <= 0:
+            continue
+        if float(unit.remaining_qty or 0.0) + 1e-6 < take:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "allocation_receipt_unit_insufficient",
+                    "message": "Prijmova jednotka nema dostatecny zbytek pro aplikaci alokace.",
+                    "receipt_unit_id": int(unit.id),
+                    "remaining_qty": float(unit.remaining_qty or 0.0),
+                    "required_qty": take,
+                },
+            )
+        unit.remaining_qty = max(0.0, float(unit.remaining_qty or 0.0) - take)
+        unit.status = "consumed" if float(unit.remaining_qty or 0.0) <= mru_consumed_tolerance else "active"
 
-    def _build_vydej_row(take: float, unit: MaterialReceiptUnit | None) -> MaterialStockMovement:
         m = MaterialStockMovement(
             stock_item_id=int(stock.id),
             movement_type="vydej",
             qty=take,
             movement_date=mdate,
             reference=ref,
-            heat_lot=_issue_segment_heat_lot(unit),
+            heat_lot=line.heat_lot,
             production_order_id=int(reservation.production_order_id),
             job_item_id=int(reservation.job_item_id),
             note=issue_note,
-            receipt_unit_id=int(unit.id) if unit is not None else None,
+            receipt_unit_id=int(unit.id),
+            certificate_no=line.certificate_no,
+            delivery_note_no=line.delivery_note_no,
+            length_per_piece_mm=float(delka_na_kus_mm),
         )
         db.add(m)
-        return m
+        segs.append(m)
 
-    segs = apply_fifo_decrement_for_vydej(db, int(stock.id), issue_qty, _build_vydej_row)
+    if not segs:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "allocation_empty",
+                "message": "Alokacni plan neobsahuje zadne vydavane radky.",
+            },
+        )
+
     db.flush()
     for m in segs:
         m.scan_code = material_stock_movement_scan_code_for_id(int(m.id))
     movement = segs[0]
-    stock.current_qty = float(stock.current_qty or 0) - issue_qty
+    stock.current_qty = float(stock.current_qty or 0) - float(alloc.demand_total_mm)
     reservation.status = "issued"
-    reservation.reserved_qty = issue_qty
+    reservation.reserved_qty = float(alloc.demand_total_mm)
     if payload.note:
         reservation.note = payload.note.strip() or reservation.note
 
@@ -1208,7 +1294,7 @@ def issue_material(
     return {
         "status": "ok",
         "reservation_id": int(reservation.id),
-        "issued_qty": issue_qty,
+        "issued_qty": float(alloc.demand_total_mm),
         "movement": _movement_payload(movement, attachments=[]),
         "movements": [_movement_payload(m, attachments=[]) for m in segs],
     }
