@@ -47,6 +47,11 @@ class MaterialStockItem(Base):
         cascade="all, delete-orphan",
         order_by="MaterialStockReservation.created_at.desc(), MaterialStockReservation.id.desc()",
     )
+    remnant_items: Mapped[list["MaterialRemnantStockItem"]] = relationship(
+        "MaterialRemnantStockItem",
+        back_populates="source_stock_item",
+        order_by="MaterialRemnantStockItem.created_at.desc(), MaterialRemnantStockItem.id.desc()",
+    )
 
 
 class MaterialReceiptUnit(Base):
@@ -74,6 +79,48 @@ class MaterialReceiptUnit(Base):
     movements: Mapped[list["MaterialStockMovement"]] = relationship(
         "MaterialStockMovement", back_populates="receipt_unit"
     )
+    remnant_items: Mapped[list["MaterialRemnantStockItem"]] = relationship(
+        "MaterialRemnantStockItem",
+        back_populates="source_receipt_unit",
+        order_by="MaterialRemnantStockItem.created_at.desc(), MaterialRemnantStockItem.id.desc()",
+    )
+
+
+class MaterialRemnantStockItem(Base):
+    """Sklad zbytků oddělený od hlavního skladu materiálu."""
+
+    __tablename__ = "material_remnant_stock_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_receipt_unit_id: Mapped[int] = mapped_column(
+        ForeignKey("material_receipt_units.id", ondelete="RESTRICT"), index=True, nullable=False
+    )
+    source_stock_item_id: Mapped[int] = mapped_column(
+        ForeignKey("material_stock_items.id", ondelete="RESTRICT"), index=True, nullable=False
+    )
+    material_library_item_id: Mapped[int] = mapped_column(
+        ForeignKey("material_library_items.id"), index=True, nullable=False
+    )
+    qty: Mapped[float] = mapped_column(Float, nullable=False)
+    uom: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    heat_lot: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    certificate_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    delivery_note_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    invoice_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # active | consumed | scrapped
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    source_receipt_unit: Mapped["MaterialReceiptUnit"] = relationship(
+        "MaterialReceiptUnit", back_populates="remnant_items"
+    )
+    source_stock_item: Mapped["MaterialStockItem"] = relationship(
+        "MaterialStockItem", back_populates="remnant_items"
+    )
+    material_library_item: Mapped["MaterialLibraryItem"] = relationship("MaterialLibraryItem")
 
 
 class MaterialStockMovement(Base):
@@ -99,6 +146,9 @@ class MaterialStockMovement(Base):
     certificate_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
     receipt_unit_id: Mapped[int | None] = mapped_column(
         ForeignKey("material_receipt_units.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    remnant_stock_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("material_remnant_stock_items.id", ondelete="SET NULL"), index=True, nullable=True
     )
 
     stock_item: Mapped["MaterialStockItem"] = relationship("MaterialStockItem", back_populates="movements")

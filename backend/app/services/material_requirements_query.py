@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.material_library import MaterialLibraryItem
 from app.models.material_stock import MaterialReservation, MaterialStockItem
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
+from app.services.material_reservation_rebuild import _resolve_template_row_for_reservation, _select_active_template_id
 from app.services.business_workflow import workflow_active_sql
 from app.services.material_readiness import (
     evaluate_production_order_material_covered,
@@ -23,6 +24,42 @@ from app.services.material_reservation_sync import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _issue_allocation_params_for_reservation(
+    db: Session,
+    *,
+    reservation: MaterialReservation,
+    production_order: ProductionOrder,
+) -> dict[str, Any] | None:
+    """Expose TP cutting inputs so the frontend can preview backend allocation."""
+    if production_order.portfolio_item_id is None:
+        return None
+    template_id = _select_active_template_id(db, int(production_order.portfolio_item_id))
+    if template_id is None:
+        return None
+    tm_row = _resolve_template_row_for_reservation(
+        db,
+        reservation=reservation,
+        po=production_order,
+        template_id=int(template_id),
+    )
+    if tm_row is None:
+        return None
+    delka_na_kus = float(tm_row.consumption_per_piece or 0.0)
+    vyrabeno_po = tm_row.vyrabet_max_po_ks
+    if delka_na_kus <= 0 or vyrabeno_po is None or int(vyrabeno_po) < 1:
+        return None
+    return {
+        "requested_piece_count": int(production_order.quantity or 0),
+        "delka_na_kus_mm": delka_na_kus,
+        "vyrabeno_po": int(vyrabeno_po),
+        "na_upnuti_mm": max(float(tm_row.na_upnuti_mm or 0.0), 0.0),
+        "prorez_mm": max(float(tm_row.scrap_allowance or 0.0), 0.0),
+        "povolit_deleni_polotovaru": bool(tm_row.povolit_deleni_polotovaru),
+        "minimalni_zbytek_pouzitelny_mm": 0.0,
+        "minimalni_vydavana_delka_mm": 0.0,
+    }
 
 
 def _free_unreserved_material_qty(db: Session, material_library_item_id: int) -> float:
@@ -212,6 +249,11 @@ def _material_requirements_bundle(db: Session) -> dict[str, Any] | None:
                 "required_qty": float(rr.required_qty or 0.0),
                 "reserved_qty": float(rr.reserved_qty or 0.0),
                 "status": rr.status,
+                "issue_allocation_params": _issue_allocation_params_for_reservation(
+                    db,
+                    reservation=rr,
+                    production_order=po,
+                ),
             }
         )
 

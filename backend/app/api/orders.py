@@ -18,7 +18,7 @@ from app.core.scan_code import (
     production_order_scan_code_for_id,
 )
 from app.models.master_data import Customer
-from app.models.material_stock import MaterialReservation, MaterialStockItem
+from app.models.material_stock import MaterialReservation, MaterialStockItem, MaterialStockMovement
 from app.models.master_libraries import WorkplaceLibraryItem
 from app.models.portfolio import (
     PortfolioItem,
@@ -31,9 +31,13 @@ from app.models.orders import (
     Job,
     JobItem,
     JobItemCoverage,
+    ProductIssue,
     ProductionOrder,
     ProductionOrderOperation,
+    ProductionOrderOperationLog,
 )
+from app.models.planning import PlanningOperation
+from app.models.work_report import WorkReport
 from app.models.restock_wip_reservation import RestockWipReservation
 from app.services.material_consumption import log_material_consumption_debug, total_material_consumption
 from app.services.fulfillment_decision_audit import insert_fulfillment_decision_audit
@@ -47,12 +51,14 @@ from app.services.sklad_zakaznik_fulfillment import (
 )
 from app.services.kiosk_planner_queue import cancel_open_planning_operations_for_vp_code
 from app.services.kiosk_tp_stock_effects import rollback_kiosk_tp_stock_effects_for_vp_code
+from app.services.vp_pila_operation_notes import apply_pila_cutting_notes_to_vp_operations
 from app.services.vp_operation_generator import (
     _vp_planning_pipeline_snapshot,
     ensure_planning_operations_for_production_order,
+    regenerate_single_production_order_from_tp,
 )
 from app.services.business_numbering import next_internal_code, next_vp_code, next_zak_code
-from app.services.planning_operation_status import normalize_production_order_status
+from app.services.planning_operation_status import normalize_planning_operation_status, normalize_production_order_status
 from app.services.business_workflow import (
     WORKFLOW_STATUS_CANCELLED,
     workflow_active_sql,
@@ -508,6 +514,9 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
                 conn.execute(
                     text("ALTER TABLE production_order_operations ADD COLUMN workplace_library_item_id INTEGER")
                 )
+        if "note" not in poo_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE production_order_operations ADD COLUMN note VARCHAR(2000) NULL"))
 
     if "restock_wip_reservations" in insp.get_table_names():
         rwr_cols = {c["name"] for c in sa_inspect(engine).get_columns("restock_wip_reservations")}
@@ -2009,6 +2018,207 @@ def _sync_linked_production_order_quantities_for_customer_job_item(db: Session, 
                 _sync_internal_restock_job_item_qty(db, int(internal_item.id))
 
 
+def _dependent_active_production_orders_for_job_item_quantity_change(db: Session, it: JobItem) -> list[ProductionOrder]:
+    """VPs whose derived qty/material/planning data can change when this customer line qty changes."""
+    rows: list[ProductionOrder] = list(
+        db.scalars(
+            select(ProductionOrder)
+            .where(
+                ProductionOrder.job_item_id == int(it.id),
+                workflow_active_sql(ProductionOrder.workflow_status),
+            )
+            .order_by(ProductionOrder.id.asc())
+        ).all()
+    )
+
+    cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
+    has_portfolio = "portfolio_item_id" in cols
+    if has_portfolio:
+        row = db.execute(
+            text("SELECT portfolio_item_id FROM job_items WHERE id = :id"),
+            {"id": int(it.id)},
+        ).fetchone()
+        portfolio_item_id = int(row[0]) if row is not None and row[0] is not None else None
+        line_lm = _portfolio_logistic_mode_for_job_item(db, portfolio_item_id)
+        internal_job = _get_active_internal_job(db)
+        if line_lm != "vyroba_zakaznik" and internal_job is not None:
+            try:
+                restock_variant = _resolve_portfolio_variant_by_gpn_and_logistics(
+                    db,
+                    gpn=it.gpn,
+                    logistic_mode="sklad",
+                )
+            except HTTPException:
+                restock_variant = None
+            if restock_variant is not None:
+                internal_item = _find_internal_job_item_by_portfolio(
+                    db,
+                    int(internal_job.id),
+                    int(restock_variant.id),
+                    has_portfolio,
+                )
+                if internal_item is not None:
+                    rows.extend(
+                        _production_orders_for_job_item_and_source(
+                            db,
+                            job_item_id=int(internal_item.id),
+                            source_type="restock_allocation",
+                        )
+                    )
+
+    by_id: dict[int, ProductionOrder] = {}
+    for po in rows:
+        by_id[int(po.id)] = po
+    return [by_id[k] for k in sorted(by_id)]
+
+
+def _count_for_statement(db: Session, stmt) -> int:
+    return int(db.scalar(stmt) or 0)
+
+
+def _production_order_quantity_change_conflicts(db: Session, pos: list[ProductionOrder]) -> list[dict]:
+    conflicts: list[dict] = []
+    for po in pos:
+        reasons: list[dict] = []
+        po_status = normalize_production_order_status(po.status)
+        if po_status in {"bezi", "hotovo", "cancelled"}:
+            reasons.append({"code": "production_order_status", "status": po_status})
+
+        planning_ops = db.scalars(
+            select(PlanningOperation)
+            .where(PlanningOperation.work_order_no == (po.vp_code or ""))
+            .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
+        ).all()
+        protected_planning = [
+            {
+                "planning_operation_id": int(op.id),
+                "operation_no": int(op.operation_no or 0),
+                "status": normalize_planning_operation_status(op.status),
+            }
+            for op in planning_ops
+            if normalize_planning_operation_status(op.status) in {"bezi", "hotovo", "cancelled"}
+            or op.actual_start is not None
+            or op.actual_end is not None
+            or int(op.qty_ok or 0) != 0
+            or int(op.qty_nok or 0) != 0
+        ]
+        if protected_planning:
+            reasons.append({"code": "protected_planning_operations", "rows": protected_planning})
+
+        issued_reservations = _count_for_statement(
+            db,
+            select(func.count(MaterialReservation.id)).where(
+                MaterialReservation.production_order_id == int(po.id),
+                func.lower(func.trim(MaterialReservation.status)) == "issued",
+            ),
+        )
+        issued_movements = _count_for_statement(
+            db,
+            select(func.count(MaterialStockMovement.id)).where(
+                MaterialStockMovement.production_order_id == int(po.id),
+                MaterialStockMovement.movement_type == "vydej",
+            ),
+        )
+        legacy_product_issues = _count_for_statement(
+            db,
+            select(func.count(ProductIssue.id)).where(ProductIssue.job_item_id == int(po.job_item_id or 0)),
+        )
+        if issued_reservations or issued_movements or legacy_product_issues:
+            reasons.append(
+                {
+                    "code": "issued_material_exists",
+                    "issued_reservations": issued_reservations,
+                    "issued_movements": issued_movements,
+                    "legacy_product_issues": legacy_product_issues,
+                }
+            )
+
+        planning_operation_ids = [int(op.id) for op in planning_ops]
+        work_report_count = _count_for_statement(
+            db,
+            select(func.count(WorkReport.id)).where(WorkReport.production_order_id == int(po.id)),
+        )
+        if planning_operation_ids:
+            work_report_count += _count_for_statement(
+                db,
+                select(func.count(WorkReport.id)).where(
+                    WorkReport.production_order_id.is_(None),
+                    WorkReport.planning_operation_id.in_(planning_operation_ids),
+                ),
+            )
+        operation_log_count = _count_for_statement(
+            db,
+            select(func.count(ProductionOrderOperationLog.id)).where(
+                ProductionOrderOperationLog.production_order_id == int(po.id)
+            ),
+        )
+        if work_report_count or operation_log_count:
+            reasons.append(
+                {
+                    "code": "work_reports_or_operation_logs_exist",
+                    "work_reports": work_report_count,
+                    "operation_logs": operation_log_count,
+                }
+            )
+
+        if reasons:
+            conflicts.append(
+                {
+                    "production_order_id": int(po.id),
+                    "vp_code": po.vp_code,
+                    "job_item_id": int(po.job_item_id) if po.job_item_id is not None else None,
+                    "source_type": po.source_type,
+                    "logistic_mode": po.logistic_mode,
+                    "quantity": int(po.quantity or 0),
+                    "reasons": reasons,
+                }
+            )
+    return conflicts
+
+
+def _refresh_dependent_production_data_after_quantity_change(
+    db: Session,
+    *,
+    item_id: int,
+    old_qty: int,
+    new_qty: int,
+    pos: list[ProductionOrder],
+) -> dict:
+    refreshed: list[dict] = []
+    for po in pos:
+        if not workflow_record_active(po):
+            continue
+        if po.job_item_id == item_id:
+            old_po_qty = int(po.quantity or 0)
+            po.quantity = new_qty
+            logger.info(
+                "[order_item_qty_propagation] set po quantity production_order_id=%s old_po_qty=%s new_qty=%s",
+                int(po.id),
+                old_po_qty,
+                int(new_qty),
+            )
+            db.flush()
+        material = rebuild_tp_material_reservations_for_production_order(db, po)
+        planning = regenerate_single_production_order_from_tp(db, po)
+        refreshed.append(
+            {
+                "production_order_id": int(po.id),
+                "vp_code": po.vp_code,
+                "quantity": int(po.quantity or 0),
+                "material_reservations": material,
+                "planning": planning,
+            }
+        )
+    out = {
+        "job_item_id": int(item_id),
+        "old_qty": int(old_qty),
+        "new_qty": int(new_qty),
+        "production_orders_refreshed": refreshed,
+    }
+    logger.info("[order_item_qty_propagation] refreshed %s", out)
+    return out
+
+
 def _resolve_portfolio_variant_by_gpn_and_logistics(
     db: Session,
     *,
@@ -2330,6 +2540,11 @@ def _ensure_production_order_operation_scans(
         db.add(row)
         db.flush()
         row.scan_code = production_order_operation_scan_code_for_id(int(row.id))
+
+    po = db.get(ProductionOrder, int(production_order_id))
+    if po is not None:
+        ji = db.get(JobItem, int(po.job_item_id)) if po.job_item_id is not None else None
+        apply_pila_cutting_notes_to_vp_operations(db, po=po, job_item=ji)
 
 
 def _select_active_template_id(db: Session, portfolio_item_id: int | None) -> int | None:
@@ -2780,8 +2995,12 @@ def update_job_item(
 
     _validate_portfolio_item_gpn(db, gpn, payload.portfolio_item_id)
 
+    old_qty = int(row.qty or 0)
+    new_qty = int(payload.quantity)
+    quantity_changed = old_qty != new_qty
+
     row.gpn = gpn
-    row.qty = int(payload.quantity)
+    row.qty = new_qty
     row.due_date = payload.due_date
 
     cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
@@ -2795,11 +3014,50 @@ def update_job_item(
             text("UPDATE job_items SET portfolio_item_id = :pid WHERE id = :id"),
             {"pid": payload.portfolio_item_id, "id": row.id},
         )
-    db.commit()
-    db.refresh(row)
+    db.flush()
+
+    quantity_refresh = None
+    dependent_pos: list[ProductionOrder] = []
+    if quantity_changed:
+        dependent_pos = _dependent_active_production_orders_for_job_item_quantity_change(db, row)
+        conflicts = _production_order_quantity_change_conflicts(db, dependent_pos)
+        if conflicts:
+            logger.warning(
+                "[order_item_qty_propagation] blocked job_item_id=%s old_qty=%s new_qty=%s conflicts=%s",
+                int(item_id),
+                old_qty,
+                new_qty,
+                conflicts,
+            )
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "order_item_quantity_change_conflict",
+                    "message": (
+                        "Quantity was not changed because dependent production data is already in progress, "
+                        "done/cancelled, or has issued material/work reports."
+                    ),
+                    "job_item_id": int(item_id),
+                    "old_qty": old_qty,
+                    "new_qty": new_qty,
+                    "conflicts": conflicts,
+                },
+            )
+
     _sync_linked_production_order_quantities_for_customer_job_item(db, row)
+    if quantity_changed:
+        dependent_pos = _dependent_active_production_orders_for_job_item_quantity_change(db, row)
+        quantity_refresh = _refresh_dependent_production_data_after_quantity_change(
+            db,
+            item_id=int(item_id),
+            old_qty=old_qty,
+            new_qty=new_qty,
+            pos=dependent_pos,
+        )
     rebuild_tp_material_reservations_for_job_item(db, item_id)
     db.commit()
+    db.refresh(row)
     return {
         "id": row.id,
         "job_id": row.job_id,
@@ -2809,6 +3067,7 @@ def update_job_item(
         "due_date": row.due_date.isoformat() if row.due_date else None,
         "description": payload.name.strip() if payload.name else None,
         "portfolio_item_id": payload.portfolio_item_id,
+        "quantity_change_refresh": quantity_refresh,
     }
 
 

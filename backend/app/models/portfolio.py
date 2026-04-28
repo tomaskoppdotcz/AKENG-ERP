@@ -141,6 +141,10 @@ class PortfolioTechnologyTemplateMaterial(Base):
     consumption_per_piece: Mapped[float | None] = mapped_column(Float, nullable=True)
     consumption_unit: Mapped[str | None] = mapped_column(String(120), nullable=True)
     scrap_allowance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Řezání / polotovar (doplňující parametry; spotřeba/ks a prořez zůstávají v consumption_ / scrap_).
+    na_upnuti_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vyrabet_max_po_ks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    povolit_deleni_polotovaru: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     template: Mapped["PortfolioTechnologyTemplate"] = relationship(

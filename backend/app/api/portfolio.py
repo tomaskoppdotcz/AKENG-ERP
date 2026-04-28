@@ -90,6 +90,15 @@ def ensure_portfolio_technology_material_inputs_sqlite_schema(engine: Engine) ->
         stmts.append("ALTER TABLE portfolio_technology_template_materials ADD COLUMN input_type VARCHAR(20)")
     if "portfolio_item_id" not in col_names:
         stmts.append("ALTER TABLE portfolio_technology_template_materials ADD COLUMN portfolio_item_id INTEGER")
+    if "na_upnuti_mm" not in col_names:
+        stmts.append("ALTER TABLE portfolio_technology_template_materials ADD COLUMN na_upnuti_mm FLOAT")
+    if "vyrabet_max_po_ks" not in col_names:
+        stmts.append("ALTER TABLE portfolio_technology_template_materials ADD COLUMN vyrabet_max_po_ks INTEGER")
+    if "povolit_deleni_polotovaru" not in col_names:
+        stmts.append(
+            "ALTER TABLE portfolio_technology_template_materials "
+            "ADD COLUMN povolit_deleni_polotovaru BOOLEAN NOT NULL DEFAULT 1"
+        )
     if stmts:
         with engine.begin() as conn:
             for stmt in stmts:
@@ -118,6 +127,9 @@ def ensure_portfolio_technology_material_inputs_sqlite_schema(engine: Engine) ->
                     consumption_per_piece FLOAT,
                     consumption_unit VARCHAR(120),
                     scrap_allowance FLOAT,
+                    na_upnuti_mm FLOAT,
+                    vyrabet_max_po_ks INTEGER,
+                    povolit_deleni_polotovaru BOOLEAN NOT NULL DEFAULT 1,
                     note VARCHAR(500)
                 )
                 """
@@ -129,14 +141,18 @@ def ensure_portfolio_technology_material_inputs_sqlite_schema(engine: Engine) ->
                 """
                 INSERT INTO portfolio_technology_template_materials__new (
                     id, template_id, input_type, material_library_item_id, portfolio_item_id,
-                    consumption_per_piece, consumption_unit, scrap_allowance, note
+                    consumption_per_piece, consumption_unit, scrap_allowance,
+                    na_upnuti_mm, vyrabet_max_po_ks, povolit_deleni_polotovaru,
+                    note
                 )
                 SELECT
                     id, template_id,
                     CASE WHEN input_type IS NULL OR TRIM(input_type) = '' THEN NULL ELSE input_type END,
                     material_library_item_id,
                     portfolio_item_id,
-                    consumption_per_piece, consumption_unit, scrap_allowance, note
+                    consumption_per_piece, consumption_unit, scrap_allowance,
+                    na_upnuti_mm, vyrabet_max_po_ks, COALESCE(povolit_deleni_polotovaru, 1),
+                    note
                 FROM portfolio_technology_template_materials
                 """
             )
@@ -232,6 +248,9 @@ class PortfolioTechnologyMaterialUpsert(BaseModel):
     consumption_per_piece: float | None = None
     consumption_unit: str | None = None
     scrap_allowance: float | None = None
+    na_upnuti_mm: float | None = None
+    vyrabet_max_po_ks: int | None = None
+    povolit_deleni_polotovaru: bool = True
     note: str | None = None
 
 
@@ -242,6 +261,9 @@ class PortfolioTechnologyMaterialUpdate(BaseModel):
     consumption_per_piece: float | None = None
     consumption_unit: str | None = None
     scrap_allowance: float | None = None
+    na_upnuti_mm: float | None = None
+    vyrabet_max_po_ks: int | None = None
+    povolit_deleni_polotovaru: bool | None = None
     note: str | None = None
 
 
@@ -368,6 +390,9 @@ def _material_to_payload(
         "consumption_per_piece": row.consumption_per_piece,
         "consumption_unit": row.consumption_unit,
         "scrap_allowance": row.scrap_allowance,
+        "na_upnuti_mm": row.na_upnuti_mm,
+        "vyrabet_max_po_ks": row.vyrabet_max_po_ks,
+        "povolit_deleni_polotovaru": bool(row.povolit_deleni_polotovaru),
         "note": row.note,
         "stock_item_id": stock_row.id if stock_row else None,
         "stock_location": stock_row.location if stock_row else None,
@@ -413,6 +438,9 @@ def _product_input_to_payload(
         "consumption_per_piece": row.consumption_per_piece,
         "consumption_unit": row.consumption_unit,
         "scrap_allowance": row.scrap_allowance,
+        "na_upnuti_mm": row.na_upnuti_mm,
+        "vyrabet_max_po_ks": row.vyrabet_max_po_ks,
+        "povolit_deleni_polotovaru": bool(row.povolit_deleni_polotovaru),
         "note": row.note,
         "stock_item_id": stock_row.id if stock_row else None,
         "stock_location": stock_row.location if stock_row else None,
@@ -681,6 +709,9 @@ def copy_portfolio_item(
                     consumption_per_piece=mat.consumption_per_piece,
                     consumption_unit=mat.consumption_unit,
                     scrap_allowance=mat.scrap_allowance,
+                    na_upnuti_mm=mat.na_upnuti_mm,
+                    vyrabet_max_po_ks=mat.vyrabet_max_po_ks,
+                    povolit_deleni_polotovaru=mat.povolit_deleni_polotovaru,
                     note=mat.note,
                 )
             )
@@ -1042,6 +1073,9 @@ def create_template_technology_material(
         consumption_per_piece=payload.consumption_per_piece,
         consumption_unit=payload.consumption_unit,
         scrap_allowance=payload.scrap_allowance,
+        na_upnuti_mm=payload.na_upnuti_mm,
+        vyrabet_max_po_ks=payload.vyrabet_max_po_ks,
+        povolit_deleni_polotovaru=payload.povolit_deleni_polotovaru,
         note=payload.note,
     )
     db.add(row)
@@ -1121,6 +1155,12 @@ def update_template_technology_material(
         row.consumption_unit = data["consumption_unit"]
     if "scrap_allowance" in data:
         row.scrap_allowance = data["scrap_allowance"]
+    if "na_upnuti_mm" in data:
+        row.na_upnuti_mm = data["na_upnuti_mm"]
+    if "vyrabet_max_po_ks" in data:
+        row.vyrabet_max_po_ks = data["vyrabet_max_po_ks"]
+    if "povolit_deleni_polotovaru" in data and data["povolit_deleni_polotovaru"] is not None:
+        row.povolit_deleni_polotovaru = bool(data["povolit_deleni_polotovaru"])
     if "note" in data:
         row.note = data["note"]
 

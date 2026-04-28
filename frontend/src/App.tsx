@@ -8,6 +8,7 @@ import OrdersPage from "./pages/OrdersPage.tsx";
 import DrawingsPage from "./pages/DrawingsPage.tsx";
 import PortfolioPage from "./pages/PortfolioPage";
 import MaterialStockPage from "./pages/MaterialStockPage";
+import MaterialRemnantStockPage from "./pages/MaterialRemnantStockPage";
 import ProductStockPage from "./pages/ProductStockPage";
 import ProductionOrdersPage from "./pages/ProductionOrdersPage";
 import MaterialRequirementsPage from "./pages/MaterialRequirementsPage";
@@ -950,6 +951,9 @@ export default function App() {
           }
         />
       );
+    }
+    if (moduleKey === "Sklad zbytků") {
+      return <MaterialRemnantStockPage />;
     }
     if (moduleKey === "Zakázky nabídky") {
       return <ModulePlaceholderPage moduleName="Nabídky" />;

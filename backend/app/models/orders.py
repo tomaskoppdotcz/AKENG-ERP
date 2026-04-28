@@ -119,6 +119,8 @@ class ProductionOrderOperation(Base):
     workplace_name = Column(String, nullable=True)
     workplace_library_item_id = Column(Integer, ForeignKey("workplace_library_items.id"), nullable=True)
     scan_code = Column(String(32), nullable=True)
+    # Rezani/Pila: auto cutting instructions (see vp_pila_operation_notes).
+    note = Column(String(2000), nullable=True)
 
 
 class ProductIssue(Base):

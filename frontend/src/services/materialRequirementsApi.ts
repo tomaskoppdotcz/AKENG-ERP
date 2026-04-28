@@ -1,5 +1,16 @@
 import { akengFetch } from "./akengFetch";
 
+export type MaterialIssueAllocationDefaults = {
+  requested_piece_count: number;
+  delka_na_kus_mm: number;
+  vyrabeno_po: number;
+  na_upnuti_mm: number;
+  prorez_mm: number;
+  povolit_deleni_polotovaru: boolean;
+  minimalni_zbytek_pouzitelny_mm: number;
+  minimalni_vydavana_delka_mm: number;
+};
+
 export type MaterialRequirementRelatedOrder = {
   reservation_id: number;
   /** Merged VP link: underlying reservation ids (issue picks one line). */
@@ -10,6 +21,7 @@ export type MaterialRequirementRelatedOrder = {
     required_qty: number;
     reserved_qty: number;
     status: string | null;
+    issue_allocation_params?: MaterialIssueAllocationDefaults | null;
   }>;
   production_order_id: number | null;
   vp_code: string | null;
@@ -61,6 +73,7 @@ export type VpMaterialLine = {
     required_qty: number;
     reserved_qty: number;
     status: string | null;
+    issue_allocation_params?: MaterialIssueAllocationDefaults | null;
   }>;
   production_order_id: number;
   vp_code: string | null;
@@ -202,10 +215,18 @@ export async function postMaterialPurchaseOrder(payload: {
 
 export type MaterialIssuePayload = {
   reservation_id: number;
-  qty: number;
+  qty?: number | null;
   stock_item_id?: number | null;
   heat_lot?: string | null;
   note?: string | null;
+  requested_piece_count?: number | null;
+  delka_na_kus_mm?: number | null;
+  vyrabeno_po?: number | null;
+  na_upnuti_mm?: number | null;
+  prorez_mm?: number | null;
+  povolit_deleni_polotovaru?: boolean | null;
+  minimalni_zbytek_pouzitelny_mm?: number | null;
+  minimalni_vydavana_delka_mm?: number | null;
 };
 
 export async function postMaterialIssue(payload: MaterialIssuePayload): Promise<{
@@ -218,10 +239,18 @@ export async function postMaterialIssue(payload: MaterialIssuePayload): Promise<
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       reservation_id: payload.reservation_id,
-      qty: payload.qty,
+      qty: payload.qty ?? null,
       stock_item_id: payload.stock_item_id ?? null,
       heat_lot: payload.heat_lot?.trim() || null,
       note: payload.note?.trim() || null,
+      requested_piece_count: payload.requested_piece_count ?? null,
+      delka_na_kus_mm: payload.delka_na_kus_mm ?? null,
+      vyrabeno_po: payload.vyrabeno_po ?? null,
+      na_upnuti_mm: payload.na_upnuti_mm ?? null,
+      prorez_mm: payload.prorez_mm ?? null,
+      povolit_deleni_polotovaru: payload.povolit_deleni_polotovaru ?? null,
+      minimalni_zbytek_pouzitelny_mm: payload.minimalni_zbytek_pouzitelny_mm ?? null,
+      minimalni_vydavana_delka_mm: payload.minimalni_vydavana_delka_mm ?? null,
     }),
   });
   if (!res.ok) {
@@ -229,6 +258,7 @@ export async function postMaterialIssue(payload: MaterialIssuePayload): Promise<
     try {
       const data = await res.json();
       if (typeof data?.detail === "string") message = data.detail;
+      else if (data?.detail && typeof data.detail.message === "string") message = data.detail.message;
     } catch {
       // ignore
     }

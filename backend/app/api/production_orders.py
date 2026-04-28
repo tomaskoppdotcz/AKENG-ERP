@@ -55,6 +55,7 @@ from app.services.planning_operation_status import normalize_planning_operation_
 from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
 from app.services.vp_operational_metrics import vp_operational_metrics_map, vp_operational_metrics_single
 from app.services.vp_operation_generator import regenerate_single_production_order_from_tp
+from app.services.vp_pila_operation_notes import apply_pila_cutting_notes_to_vp_operations
 
 # Rezervace materiálu z TP se synchronizují z orders (vytvoření/úprava VP, řádky zakázky) a z portfolio (vstupy TP).
 # Tento modul nemění portfolio ani množství VP tak, aby bylo potřeba zde spouštět přepočet rezervací.
@@ -399,6 +400,8 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
             # Keep VP operation scans aligned with current TP order and continuous numbering (10,20,30,...).
             if int(ex.operation_no) != int(effective_no):
                 ex.operation_no = int(effective_no)
+    ji = db.get(JobItem, int(po.job_item_id)) if po.job_item_id is not None else None
+    apply_pila_cutting_notes_to_vp_operations(db, po=po, job_item=ji)
 
 
 @router.get("")
@@ -813,6 +816,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
             operation_nos.append(int(effective_no))
             op_lib = db.get(OperationLibraryItem, op.operation_library_item_id) if op.operation_library_item_id is not None else None
             wp_lib = db.get(WorkplaceLibraryItem, op.workplace_library_item_id) if op.workplace_library_item_id is not None else None
+            scan_row = op_scan_by_no.get(int(effective_no))
             operations.append(
                 {
                     "id": int(op.id),
@@ -825,11 +829,8 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
                     "control_required": bool(op.control_required),
                     "outsourcing": bool(op.outsourcing),
                     "note": op.note,
-                    "operation_scan_code": (
-                        op_scan_by_no[int(effective_no)].scan_code
-                        if int(effective_no) in op_scan_by_no
-                        else None
-                    ),
+                    "vp_operation_note": (getattr(scan_row, "note", None) if scan_row is not None else None),
+                    "operation_scan_code": (scan_row.scan_code if scan_row is not None else None),
                 }
             )
 

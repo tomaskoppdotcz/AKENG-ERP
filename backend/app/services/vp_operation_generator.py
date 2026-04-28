@@ -23,6 +23,7 @@ from app.services.planning_operation_status import (
     normalize_planning_operation_status,
     planning_operation_status_is_protected_for_queue_normalize,
 )
+from app.services.vp_pila_operation_notes import apply_pila_cutting_notes_to_vp_operations
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +334,7 @@ def _rebuild_production_order_operation_rows_from_current_tp(
         db.flush()
         row.scan_code = production_order_operation_scan_code_for_id(int(row.id))
         created += 1
+    apply_pila_cutting_notes_to_vp_operations(db, po=po, job_item=job_item)
     return created
 
 

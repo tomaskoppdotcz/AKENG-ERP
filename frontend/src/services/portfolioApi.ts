@@ -118,6 +118,9 @@ export type PortfolioTechnologyMaterial = {
   consumption_per_piece: number | null;
   consumption_unit: string | null;
   scrap_allowance: number | null;
+  na_upnuti_mm: number | null;
+  vyrabet_max_po_ks: number | null;
+  povolit_deleni_polotovaru: boolean;
   note: string | null;
   stock_item_id: number | null;
   stock_location: string | null;
@@ -140,6 +143,9 @@ export type PortfolioTechnologyMaterialCreatePayload = {
   consumption_per_piece: number | null;
   consumption_unit: string | null;
   scrap_allowance: number | null;
+  na_upnuti_mm?: number | null;
+  vyrabet_max_po_ks?: number | null;
+  povolit_deleni_polotovaru?: boolean;
   note: string | null;
 };
 
@@ -150,6 +156,9 @@ export type PortfolioTechnologyMaterialUpdatePayload = {
   consumption_per_piece?: number | null;
   consumption_unit?: string | null;
   scrap_allowance?: number | null;
+  na_upnuti_mm?: number | null;
+  vyrabet_max_po_ks?: number | null;
+  povolit_deleni_polotovaru?: boolean | null;
   note?: string | null;
 };
 

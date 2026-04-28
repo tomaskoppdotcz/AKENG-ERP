@@ -10,8 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.material_stock import MaterialReceiptUnit, MaterialStockItem, MaterialStockMovement
+from app.services.material_issue_allocation_engine import ReceiptUnitSnapshot
 
-# Status values (no DB enum   matches existing string status pattern)
+# Status values (no DB enum — matches existing string status pattern)
 MRU_STATUS_ACTIVE = "active"
 MRU_STATUS_CONSUMED = "consumed"
 MRU_STATUS_WRITTEN_OFF = "written_off"
@@ -74,6 +75,20 @@ def load_fifo_receipt_units(db: Session, stock_item_id: int) -> list[MaterialRec
             .order_by(MaterialReceiptUnit.received_at.asc(), MaterialReceiptUnit.id.asc())
         ).all()
     )
+
+
+def receipt_unit_rows_to_engine_snapshots(units: list[MaterialReceiptUnit]) -> list[ReceiptUnitSnapshot]:
+    return [
+        ReceiptUnitSnapshot(
+            id=int(u.id),
+            remaining_qty=float(u.remaining_qty or 0.0),
+            received_at=u.received_at,
+            heat_lot=u.heat_lot,
+            certificate_no=u.certificate_no,
+            delivery_note_no=u.delivery_note_no,
+        )
+        for u in units
+    ]
 
 
 def apply_fifo_decrement_for_vydej(

@@ -100,6 +100,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   const [consumptionPerPiece, setConsumptionPerPiece] = useState("");
   const [consumptionUnit, setConsumptionUnit] = useState("");
   const [scrapAllowance, setScrapAllowance] = useState("");
+  const [naUpnutiMm, setNaUpnutiMm] = useState("");
+  const [vyrabetMaxPoKs, setVyrabetMaxPoKs] = useState("");
+  const [povolitDeleniPolotovaru, setPovolitDeleniPolotovaru] = useState(true);
   const [materialNote, setMaterialNote] = useState("");
 
   const materialById = useMemo(() => {
@@ -312,6 +315,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     setConsumptionPerPiece("");
     setConsumptionUnit("");
     setScrapAllowance("");
+    setNaUpnutiMm("");
+    setVyrabetMaxPoKs("");
+    setPovolitDeleniPolotovaru(true);
     setMaterialNote("");
     setShowAddMaterialForm(false);
   }
@@ -458,6 +464,13 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     return Number.isFinite(num) ? num : null;
   }
 
+  function toIntOrNull(value: string): number | null {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const num = parseInt(trimmed, 10);
+    return Number.isFinite(num) ? num : null;
+  }
+
   function formatMaterialOptionLabel(m: MaterialLibraryItem): string {
     const parts = [m.code?.trim(), m.name?.trim(), m.form?.trim(), m.dimension?.trim()].filter(Boolean);
     return parts.join(" | ");
@@ -479,6 +492,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     setConsumptionPerPiece(row.consumption_per_piece == null ? "" : String(row.consumption_per_piece));
     setConsumptionUnit(row.consumption_unit ?? "");
     setScrapAllowance(row.scrap_allowance == null ? "" : String(row.scrap_allowance));
+    setNaUpnutiMm(row.na_upnuti_mm == null ? "" : String(row.na_upnuti_mm));
+    setVyrabetMaxPoKs(row.vyrabet_max_po_ks == null ? "" : String(row.vyrabet_max_po_ks));
+    setPovolitDeleniPolotovaru(row.povolit_deleni_polotovaru !== false);
     setMaterialNote(row.note ?? "");
     setShowAddMaterialForm(true);
   }
@@ -492,6 +508,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
       consumption_per_piece: toNumberOrNull(consumptionPerPiece),
       consumption_unit: consumptionUnit.trim() || null,
       scrap_allowance: tpInputType === "material" ? toNumberOrNull(scrapAllowance) : null,
+      na_upnuti_mm: toNumberOrNull(naUpnutiMm),
+      vyrabet_max_po_ks: toIntOrNull(vyrabetMaxPoKs),
+      povolit_deleni_polotovaru: povolitDeleniPolotovaru,
       note: materialNote.trim() || null,
     };
     if (tpInputType === "material" && materialLibraryId == null) {
@@ -1068,6 +1087,27 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                     </div>
                   ) : null}
 
+                  <div>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Na upnutí (mm)</div>
+                    <input value={naUpnutiMm} onChange={(e) => setNaUpnutiMm(e.target.value)} style={UI.inputs.base} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Vyrábět max po (ks)</div>
+                    <input value={vyrabetMaxPoKs} onChange={(e) => setVyrabetMaxPoKs(e.target.value)} style={UI.inputs.base} />
+                  </div>
+                  <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 10, paddingTop: 4 }}>
+                    <input
+                      type="checkbox"
+                      id="akeng-tp-povolit-deleni"
+                      checked={povolitDeleniPolotovaru}
+                      onChange={(e) => setPovolitDeleniPolotovaru(e.target.checked)}
+                      style={{ width: 18, height: 18, cursor: "pointer" }}
+                    />
+                    <label htmlFor="akeng-tp-povolit-deleni" style={{ fontSize: 14, fontWeight: 600, color: "#334155", cursor: "pointer" }}>
+                      Povolit dělení polotovaru
+                    </label>
+                  </div>
+
                   <div style={{ gridColumn: "1 / -1" }}>
                     <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Poznámka</div>
                     <input value={materialNote} onChange={(e) => setMaterialNote(e.target.value)} style={UI.inputs.base} />
@@ -1121,6 +1161,9 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                         "Spotřeba / ks",
                         "Jednotka",
                         "Prořez / odpad",
+                        "Na upnutí (mm)",
+                        "Vyrábět max po (ks)",
+                        "Dělení polotovaru",
                         "Lokace",
                         "Skladem",
                         "Stav skladu",
@@ -1147,6 +1190,11 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.consumption_per_piece ?? "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.consumption_unit || "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.scrap_allowance ?? "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.na_upnuti_mm ?? "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.vyrabet_max_po_ks ?? "—"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
+                          {row.povolit_deleni_polotovaru === false ? "Ne" : "Ano"}
+                        </td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.stock_location || "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{row.stock_current_qty ?? "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{stockStatusLabel(row.stock_status)}</td>

@@ -56,6 +56,7 @@ export const ERP_NAV_GROUPS: ErpNavGroup[] = [
     label: "Sklad",
     items: [
       { label: "Sklad materiálu", moduleKey: "Sklad materiálu" },
+      { label: "Sklad zbytků", moduleKey: "Sklad zbytků" },
       { label: "Sklad výrobků", moduleKey: "Sklad výrobků" },
     ],
   },
