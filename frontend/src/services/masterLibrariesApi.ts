@@ -293,6 +293,7 @@ export type EmployeeMasterRow = {
   job_title: string | null;
   is_active: boolean;
   can_use_kiosk: boolean;
+  hourly_cost_rate: number | null;
   cost_rate_per_hour: number | null;
   note: string | null;
   chip_card_uid: string | null;
@@ -326,6 +327,7 @@ export type EmployeeMasterPayload = {
   employee_subgroup_id: number | null;
   is_active: boolean;
   can_use_kiosk: boolean;
+  hourly_cost_rate?: number | null;
   cost_rate_per_hour: number | null;
   note?: string | null;
 };

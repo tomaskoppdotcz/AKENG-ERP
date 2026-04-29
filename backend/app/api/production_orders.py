@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import date, datetime
 
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_action
 from app.core.database import get_db
+from app.models.master_data import Machine
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialLibraryItem
 from app.models.material_stock import MaterialReservation
@@ -53,9 +55,16 @@ from app.services.kiosk_tp_stock_effects import rollback_kiosk_tp_stock_effects_
 from app.services.planning_engine import PlanningEngineService
 from app.services.planning_operation_status import normalize_planning_operation_status
 from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
-from app.services.vp_operational_metrics import vp_operational_metrics_map, vp_operational_metrics_single
+from app.services.vp_operational_metrics import (
+    vp_operational_metrics_map,
+    vp_operational_metrics_single,
+)
+from app.services.production_metrics_service import (
+    operation_event_runtime_metrics_by_planning_id,
+    production_order_metrics,
+)
 from app.services.vp_operation_generator import regenerate_single_production_order_from_tp
-from app.services.vp_pila_operation_notes import apply_pila_cutting_notes_to_vp_operations
+from app.services.vp_pila_operation_notes import apply_pila_cutting_notes_to_vp_operations, is_pila_operation_name
 
 # Rezervace materiálu z TP se synchronizují z orders (vytvoření/úprava VP, řádky zakázky) a z portfolio (vstupy TP).
 # Tento modul nemění portfolio ani množství VP tak, aby bylo potřeba zde spouštět přepočet rezervací.
@@ -63,6 +72,7 @@ from app.services.pdf_generator import generate_production_order_pdf
 from app.services.restock_wip_reservation_fulfillment import fulfill_restock_wip_reservations_after_source_receipt
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 class OperationReportPayload(BaseModel):
     ok_qty: int = Field(ge=0)
@@ -121,6 +131,42 @@ def _job_item_optional_map(db: Session, item_ids: list[int]) -> tuple[dict[int, 
         if has_portfolio:
             portfolio_map[int(iid)] = row[idx]
     return (desc_map, portfolio_map)
+
+
+def _job_item_selling_price_per_piece(db: Session, ji: JobItem | None, portfolio: PortfolioItem | None) -> float | None:
+    if ji is not None:
+        cols = {r[1] for r in db.execute(text("PRAGMA table_info(job_items)")).fetchall()}
+        price_cols = [
+            c for c in ("selling_price_per_piece", "sales_price_per_unit", "sale_price_per_piece") if c in cols
+        ]
+        if price_cols:
+            row = db.execute(
+                text(f"SELECT {', '.join(price_cols)} FROM job_items WHERE id = :id"),
+                {"id": int(ji.id)},
+            ).fetchone()
+            if row:
+                for value in row:
+                    if value is not None:
+                        return float(value)
+
+    if portfolio is not None and portfolio.sale_price_per_piece is not None:
+        return float(portfolio.sale_price_per_piece)
+    return None
+
+
+def _production_order_financials(
+    selling_price_per_piece: float | None,
+    quantity: int | float | None,
+    total_cost: int | float | None,
+) -> dict[str, float | None]:
+    revenue = float(selling_price_per_piece or 0.0) * float(quantity or 0.0)
+    profit = revenue - float(total_cost or 0.0)
+    margin_percent = (profit / revenue * 100.0) if revenue > 0 else None
+    return {
+        "revenue": revenue,
+        "profit": profit,
+        "margin_percent": margin_percent,
+    }
 
 
 def _recompute_and_set_po_status(db: Session, po: ProductionOrder, operation_nos: list[int]) -> str:
@@ -250,6 +296,66 @@ def _current_phase_from_operations(operations: list[dict]) -> str | None:
     return "planned"
 
 
+def _machine_code_for_header(machine: Machine | None) -> str:
+    if machine is None:
+        return "—"
+    code = (machine.machine_code or "").strip()
+    if code:
+        return code
+    name = (machine.name or "").strip()
+    return name or "—"
+
+
+def _planning_operation_header_line(
+    op: PlanningOperation | None,
+    machines_by_id: dict[int, Machine],
+) -> str | None:
+    if op is None:
+        return None
+    machine = machines_by_id.get(int(op.machine_id)) if op.machine_id is not None else None
+    return f"{int(op.operation_no or 0)}. {op.operation_name} — {_machine_code_for_header(machine)}"
+
+
+def _planning_operation_header(
+    planning_operations: list[PlanningOperation],
+    machines_by_id: dict[int, Machine],
+) -> dict[str, str | None]:
+    sorted_ops = sorted(
+        planning_operations,
+        key=lambda op: (int(op.operation_no or 0), int(op.id or 0)),
+    )
+    if not sorted_ops:
+        return {
+            "completed_operation": None,
+            "current_operation": "Hotovo",
+            "next_operation": None,
+        }
+
+    last_done: PlanningOperation | None = None
+    for op in sorted_ops:
+        if normalize_planning_operation_status(op.status) == "hotovo":
+            last_done = op
+
+    current_index: int | None = None
+    for idx, op in enumerate(sorted_ops):
+        if normalize_planning_operation_status(op.status) != "hotovo":
+            current_index = idx
+            break
+
+    current = sorted_ops[current_index] if current_index is not None else None
+    next_op = (
+        sorted_ops[current_index + 1]
+        if current_index is not None and current_index + 1 < len(sorted_ops)
+        else None
+    )
+
+    return {
+        "completed_operation": _planning_operation_header_line(last_done, machines_by_id),
+        "current_operation": _planning_operation_header_line(current, machines_by_id) if current is not None else "Hotovo",
+        "next_operation": _planning_operation_header_line(next_op, machines_by_id),
+    }
+
+
 def _po_aggregate_status_string(
     po: ProductionOrder, operation_nos: list[int], all_done: bool, any_activity: bool
 ) -> str:
@@ -332,10 +438,10 @@ def _ensure_product_stock_receipt_for_done_po(db: Session, po: ProductionOrder) 
 
 
 def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
-    operation_nos = operation_nos_for_production_order(db, po)
-    if not operation_nos:
-        return
     portfolio_item_id = int(po.portfolio_item_id) if po.portfolio_item_id is not None else None
+    if portfolio_item_id is None and po.job_item_id is not None:
+        _, portfolio_map = _job_item_optional_map(db, [int(po.job_item_id)])
+        portfolio_item_id = portfolio_map.get(int(po.job_item_id))
     if portfolio_item_id is None:
         return
     tpl = db.scalars(
@@ -402,6 +508,20 @@ def _ensure_operation_scan_rows(db: Session, po: ProductionOrder) -> None:
                 ex.operation_no = int(effective_no)
     ji = db.get(JobItem, int(po.job_item_id)) if po.job_item_id is not None else None
     apply_pila_cutting_notes_to_vp_operations(db, po=po, job_item=ji)
+
+
+def _refresh_pila_cutting_notes_for_print_detail(db: Session, po: ProductionOrder) -> JobItem | None:
+    _ensure_operation_scan_rows(db, po)
+    ji = db.get(JobItem, int(po.job_item_id)) if po.job_item_id is not None else None
+    logger.info(
+        "[vp_pila_notes] print/detail refresh po_id=%s job_item_id=%s",
+        int(po.id),
+        int(po.job_item_id) if po.job_item_id is not None else None,
+    )
+    apply_pila_cutting_notes_to_vp_operations(db, po=po, job_item=ji)
+    db.flush()
+    db.commit()
+    return ji
 
 
 @router.get("")
@@ -522,6 +642,11 @@ def list_production_orders(
                 ),
                 "reported_time_min": int(mm.get("reported_time_min") or 0),
                 "direct_labor_cost": float(mm.get("direct_labor_cost") or 0.0),
+                "employee_labor_cost": float(mm.get("employee_labor_cost") or 0.0),
+                "machine_cost": float(mm.get("machine_cost") or 0.0),
+                "labor_cost": float(mm.get("labor_cost") or mm.get("direct_labor_cost") or 0.0),
+                "missing_employee_rate": bool(mm.get("missing_employee_rate") or False),
+                "missing_machine_rate": bool(mm.get("missing_machine_rate") or False),
                 "completion_percent": mm.get("completion_percent"),
                 "performance_percent": mm.get("performance_percent"),
             }
@@ -767,10 +892,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
     if po is None:
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
     wf = getattr(po, "workflow_status", None)
-    _ensure_operation_scan_rows(db, po)
-    db.flush()
-
-    ji = db.get(JobItem, po.job_item_id) if po.job_item_id is not None else None
+    ji = _refresh_pila_cutting_notes_for_print_detail(db, po)
     job = db.get(Job, po.job_id) if po.job_id is not None else None
     co = db.get(CustomerOrder, po.customer_order_id) if po.customer_order_id is not None else None
 
@@ -817,20 +939,30 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
             op_lib = db.get(OperationLibraryItem, op.operation_library_item_id) if op.operation_library_item_id is not None else None
             wp_lib = db.get(WorkplaceLibraryItem, op.workplace_library_item_id) if op.workplace_library_item_id is not None else None
             scan_row = op_scan_by_no.get(int(effective_no))
+            operation_name = op_lib.name if op_lib is not None else op.operation_name
+            generated_note = (getattr(scan_row, "note", None) if scan_row is not None else None)
+            note_for_detail = (
+                generated_note
+                if generated_note and is_pila_operation_name(operation_name)
+                else op.note
+            )
             operations.append(
                 {
                     "id": int(op.id),
                     "operation_no": int(effective_no),
-                    "operation_name": op_lib.name if op_lib is not None else op.operation_name,
+                    "operation_name": operation_name,
                     "workplace_library_item_id": op.workplace_library_item_id,
                     "workplace_name": wp_lib.name if wp_lib is not None else op.workplace,
                     "setup_time_min": float(op.setup_min or 0),
                     "run_min_per_piece": float(op.run_min_per_piece or 0),
                     "control_required": bool(op.control_required),
                     "outsourcing": bool(op.outsourcing),
-                    "note": op.note,
-                    "vp_operation_note": (getattr(scan_row, "note", None) if scan_row is not None else None),
+                    "note": note_for_detail,
+                    "vp_operation_note": generated_note,
                     "operation_scan_code": (scan_row.scan_code if scan_row is not None else None),
+                    "machine_id": None,
+                    "machine_code": None,
+                    "machine_name": None,
                 }
             )
 
@@ -882,15 +1014,27 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
     if operation_nos:
         log_status_by_no, _, _ = operation_statuses_for_production_order(db, int(po.id), operation_nos)
 
+    planning_rows: list[PlanningOperation] = []
     planning_by_no: dict[int, PlanningOperation] = {}
     vp_code = (po.vp_code or "").strip()
     if vp_code:
-        for prow in db.scalars(
+        planning_rows = list(db.scalars(
             select(PlanningOperation)
             .where(PlanningOperation.work_order_no == vp_code)
             .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
-        ).all():
+        ).all())
+        for prow in planning_rows:
             planning_by_no[int(prow.operation_no)] = prow
+
+    machine_ids = sorted({int(p.machine_id) for p in planning_rows if p.machine_id is not None})
+    machines_by_id = {
+        int(m.id): m
+        for m in db.scalars(select(Machine).where(Machine.id.in_(machine_ids))).all()
+    } if machine_ids else {}
+    operation_header = _planning_operation_header(planning_rows, machines_by_id)
+    runtime_by_planning_id = operation_event_runtime_metrics_by_planning_id(
+        db, planning_rows, machines_by_id
+    )
 
     wr_by_planning = _work_report_totals_by_planning_operation_ids(
         db, [int(p.id) for p in planning_by_no.values()]
@@ -912,6 +1056,16 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
             op["reported_ok_qty_total"] = int(wt["reported_ok_qty_total"]) if wt else 0
             op["reported_nok_qty_total"] = int(wt["reported_nok_qty_total"]) if wt else 0
             op["reported_minutes_total"] = int(wt["reported_minutes_total"]) if wt else 0
+            runtime_metrics = runtime_by_planning_id.get(int(pl.id)) or {}
+            op["elapsed_time_min"] = runtime_metrics.get("elapsed_time_min")
+            op["pause_time_min"] = runtime_metrics.get("pause_time_min")
+            op["working_time_min"] = runtime_metrics.get("working_time_min")
+            op["planned_time_min"] = runtime_metrics.get("planned_time_min")
+            op["performance_percent"] = runtime_metrics.get("performance_percent")
+            machine = machines_by_id.get(int(pl.machine_id)) if pl.machine_id is not None else None
+            op["machine_id"] = int(pl.machine_id) if pl.machine_id is not None else None
+            op["machine_code"] = machine.machine_code if machine is not None else None
+            op["machine_name"] = machine.name if machine is not None else None
         else:
             st = log_status_by_no.get(no)
             if st:
@@ -928,6 +1082,13 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
     mat_rel_d = evaluate_production_order_material_released(db, po) if wf_ok_detail else False
 
     om = vp_operational_metrics_single(db, po)
+    production_metrics = production_order_metrics(db, po)
+    total_cost = float(production_metrics.get("total_cost") or 0.0)
+    financials = _production_order_financials(
+        _job_item_selling_price_per_piece(db, ji, portfolio),
+        int(po.quantity or 0),
+        total_cost,
+    )
     unified_completion = _completion_percent_from_operations(operations) if operations else None
     unified_phase = _current_phase_from_operations(operations) if operations else None
 
@@ -977,12 +1138,24 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         else None,
         "operations": operations,
         "inputs": inputs,
-        "reported_time_min": int(om.get("reported_time_min") or 0),
-        "direct_labor_cost": float(om.get("direct_labor_cost") or 0.0),
+        "reported_time_min": float(production_metrics.get("reported_time_min") or 0.0),
+        "direct_labor_cost": float(production_metrics.get("labor_cost") or 0.0),
+        "labor_cost": float(production_metrics.get("labor_cost") or 0.0),
+        "employee_labor_cost": float(production_metrics.get("employee_labor_cost") or 0.0),
+        "machine_cost": float(production_metrics.get("machine_cost") or 0.0),
+        "material_cost": float(production_metrics.get("material_cost") or 0.0),
+        "total_cost": total_cost,
+        "revenue": financials["revenue"],
+        "profit": financials["profit"],
+        "margin_percent": financials["margin_percent"],
+        "missing_employee_rate": bool(production_metrics.get("missing_employee_rate") or False),
+        "missing_machine_rate": bool(production_metrics.get("missing_machine_rate") or False),
+        "missing_material_cost_data": bool(production_metrics.get("missing_material_cost_data") or False),
         "completion_percent": unified_completion if operations else om.get("completion_percent"),
-        "performance_percent": om.get("performance_percent"),
+        "performance_percent": production_metrics.get("performance_percent"),
         "current_location": om.get("current_location"),
         "current_phase": unified_phase if operations else om.get("current_phase"),
+        "operation_header": operation_header,
     }
 
 
@@ -1129,6 +1302,7 @@ def print_production_order_pdf(
     po = db.get(ProductionOrder, production_order_id)
     if po is None:
         raise HTTPException(status_code=404, detail="Výrobní příkaz nebyl nalezen.")
+    _refresh_pila_cutting_notes_for_print_detail(db, po)
     pdf_bytes = generate_production_order_pdf(int(production_order_id))
     safe_name = (po.vp_code or f"{production_order_id}").replace("/", "-")
     filename = f"VP-{safe_name}.pdf"

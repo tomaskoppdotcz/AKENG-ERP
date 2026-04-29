@@ -19,6 +19,7 @@ from app.models.master_data import EmployeeSubgroup, Machine
 from app.services.cz_card_reader_normalize import normalize_czech_keyboard_reader_numeric
 from app.services.employee_credential import NO_PHYSICAL_CARD_PREFIX, find_employee_by_credential
 from app.services.employee_pin import hash_pin
+from app.services.kiosk_machine_normalization import normalize_kiosk_machine_codes
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ def ensure_employees_sqlite_schema(engine_: Engine) -> None:
             ("birth_date", "ALTER TABLE employees ADD COLUMN birth_date DATE"),
             ("job_title", "ALTER TABLE employees ADD COLUMN job_title VARCHAR(120)"),
             ("can_use_kiosk", f"ALTER TABLE employees ADD COLUMN can_use_kiosk {bool_def}"),
+            ("hourly_cost_rate", f"ALTER TABLE employees ADD COLUMN hourly_cost_rate {float_type}"),
             ("cost_rate_per_hour", f"ALTER TABLE employees ADD COLUMN cost_rate_per_hour {float_type}"),
             ("note", "ALTER TABLE employees ADD COLUMN note TEXT"),
         ]
@@ -107,6 +109,19 @@ def ensure_employees_sqlite_schema(engine_: Engine) -> None:
             )
         except Exception:
             logger.exception("backfill chip_card_uid")
+
+        try:
+            conn.execute(
+                text(
+                    """
+                    UPDATE employees
+                    SET hourly_cost_rate = cost_rate_per_hour
+                    WHERE hourly_cost_rate IS NULL AND cost_rate_per_hour IS NOT NULL
+                    """
+                )
+            )
+        except Exception:
+            logger.exception("backfill hourly_cost_rate")
 
         for idx_sql in (
             "CREATE INDEX IF NOT EXISTS ix_employees_employee_subgroup_id ON employees (employee_subgroup_id)",
@@ -179,6 +194,25 @@ def ensure_machines_workplace_library_fk_schema(engine_: Engine) -> None:
             conn.execute(text("ALTER TABLE machines ADD COLUMN workplace_library_item_id INTEGER"))
         else:
             conn.execute(text("ALTER TABLE machines ADD COLUMN workplace_library_item_id INTEGER NULL"))
+
+
+def ensure_machines_hourly_rate_schema(engine_: Engine) -> None:
+    """Sloupec machines.hourly_rate pro výpočet nákladu práce z operation_events."""
+    try:
+        url = str(engine_.url)
+    except Exception:
+        return
+    insp = sa_inspect(engine_)
+    if "machines" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("machines")}
+    if "hourly_rate" in cols:
+        return
+    with engine_.begin() as conn:
+        if url.startswith("sqlite"):
+            conn.execute(text("ALTER TABLE machines ADD COLUMN hourly_rate FLOAT"))
+        else:
+            conn.execute(text("ALTER TABLE machines ADD COLUMN hourly_rate DOUBLE PRECISION NULL"))
 
 
 def ensure_planning_operations_workplace_library_fk_schema(engine_: Engine) -> None:
@@ -396,6 +430,7 @@ def _employee_to_out(db: Session, row: Employee) -> "EmployeeOut":
         job_title=row.job_title,
         is_active=bool(row.is_active),
         can_use_kiosk=bool(row.can_use_kiosk),
+        hourly_cost_rate=row.hourly_cost_rate,
         cost_rate_per_hour=row.cost_rate_per_hour,
         note=row.note,
         chip_card_uid=row.chip_card_uid,
@@ -414,6 +449,10 @@ def _effective_chip(payload: "EmployeePayload") -> str | None:
     return _normalize_reader_token(payload.chip_card_uid, 100) or _normalize_reader_token(
         payload.card_uid, 100
     )
+
+
+def _effective_hourly_cost_rate(payload: "EmployeePayload") -> float | None:
+    return payload.hourly_cost_rate if payload.hourly_cost_rate is not None else payload.cost_rate_per_hour
 
 
 class EmployeePayload(BaseModel):
@@ -436,6 +475,7 @@ class EmployeePayload(BaseModel):
     employee_subgroup_id: int | None = None
     is_active: bool = True
     can_use_kiosk: bool = True
+    hourly_cost_rate: float | None = None
     cost_rate_per_hour: float | None = None
     note: str | None = None
 
@@ -511,6 +551,7 @@ class EmployeeOut(BaseModel):
     job_title: str | None
     is_active: bool
     can_use_kiosk: bool
+    hourly_cost_rate: float | None
     cost_rate_per_hour: float | None
     note: str | None
     chip_card_uid: str | None
@@ -613,7 +654,8 @@ def create_employee(
         employee_subgroup_id=payload.employee_subgroup_id,
         is_active=payload.is_active,
         can_use_kiosk=payload.can_use_kiosk,
-        cost_rate_per_hour=payload.cost_rate_per_hour,
+        hourly_cost_rate=_effective_hourly_cost_rate(payload),
+        cost_rate_per_hour=_effective_hourly_cost_rate(payload),
         note=_strip_opt(payload.note),
         updated_at=datetime.utcnow(),
     )
@@ -698,7 +740,8 @@ def update_employee(
     row.employee_subgroup_id = payload.employee_subgroup_id
     row.is_active = payload.is_active
     row.can_use_kiosk = payload.can_use_kiosk
-    row.cost_rate_per_hour = payload.cost_rate_per_hour
+    row.hourly_cost_rate = _effective_hourly_cost_rate(payload)
+    row.cost_rate_per_hour = _effective_hourly_cost_rate(payload)
     row.note = _strip_opt(payload.note)
     row.updated_at = datetime.utcnow()
     db.commit()
@@ -771,8 +814,15 @@ def run_master_data_startup(db: Session) -> None:
     ensure_employees_sqlite_schema(engine)
     ensure_machines_planner_visibility_schema(engine)
     ensure_machines_workplace_library_fk_schema(engine)
+    ensure_machines_hourly_rate_schema(engine)
     ensure_planning_operations_workplace_library_fk_schema(engine)
     seed_employee_subgroups_if_empty(db)
+    try:
+        normalize_kiosk_machine_codes(db)
+        db.commit()
+    except Exception:
+        logger.exception("normalize_kiosk_machine_codes")
+        db.rollback()
     try:
         backfill_planner_resource_links(db)
     except Exception:

@@ -17,10 +17,12 @@ from sqlalchemy import select, text
 
 from app.core.database import SessionLocal
 from app.core.scan_code import production_order_operation_scan_code_for_id
+from app.models.master_data import Machine
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder, ProductionOrderOperation
 from app.models.planning import PlanningOperation
 from app.models.portfolio import PortfolioItem, PortfolioTechnologyTemplate, PortfolioTechnologyTemplateOperation
 from app.services.material_traceability_vp import vp_material_traceability_for_input
+from app.services.vp_pila_operation_notes import apply_pila_cutting_notes_to_vp_operations, is_pila_operation_name
 
 AKENG_TEXT_DARK = "#0F2A30"
 AKENG_BORDER_SOFT = "#A8C7CC"
@@ -152,6 +154,51 @@ def _wrap_text_lines(text: str, max_chars: int) -> list[str]:
         if cur:
             out.append(cur)
     return out if out else ["—"]
+
+
+def _is_cutting_operation_name(operation_name: str | None) -> bool:
+    return is_pila_operation_name(operation_name)
+
+
+def _print_operation_note(row: dict) -> str:
+    vp_note = str(row.get("vp_operation_note") or "").strip()
+    if _is_cutting_operation_name(row.get("operation_name")):
+        return vp_note or "—"
+    return str(row.get("note") or "—")
+
+
+def _operation_machine_payloads_by_no(db, vp_code: str | None) -> dict[int, dict]:
+    code = (vp_code or "").strip()
+    if not code:
+        return {}
+    rows = db.execute(
+        select(
+            PlanningOperation.operation_no,
+            Machine.id,
+            Machine.machine_code,
+            Machine.name,
+        )
+        .join(Machine, Machine.id == PlanningOperation.machine_id)
+        .where(PlanningOperation.work_order_no == code)
+        .order_by(PlanningOperation.operation_no.asc(), PlanningOperation.id.asc())
+    ).all()
+    out: dict[int, dict] = {}
+    for operation_no, machine_id, machine_code, machine_name in rows:
+        out[int(operation_no)] = {
+            "machine_id": int(machine_id) if machine_id is not None else None,
+            "machine_code": machine_code,
+            "machine_name": machine_name,
+        }
+    return out
+
+
+def _operation_workplace_print_label(row: dict) -> str:
+    return _first_non_empty(
+        row.get("machine_code"),
+        row.get("machine_name"),
+        row.get("workplace_name"),
+        "—",
+    ) or "—"
 
 
 def _first_non_empty(*values: str | None) -> str | None:
@@ -705,6 +752,14 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
                 .order_by(ProductionOrderOperation.operation_no.asc(), ProductionOrderOperation.id.asc())
             ).all()
 
+        apply_pila_cutting_notes_to_vp_operations(db, po=po, job_item=ji)
+        db.flush()
+        mapped_ops = db.scalars(
+            select(ProductionOrderOperation)
+            .where(ProductionOrderOperation.production_order_id == int(po.id))
+            .order_by(ProductionOrderOperation.operation_no.asc(), ProductionOrderOperation.id.asc())
+        ).all()
+
         created_at_text = datetime.now().strftime("%Y-%m-%d %H:%M")
         buf = io.BytesIO()
         c = FooterCanvas(buf, pagesize=A4, footer_created_at=created_at_text)
@@ -850,6 +905,7 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         c.drawString(margin_x, y, "Operace VP")
         y -= 5 * mm
 
+        machine_payload_by_no = _operation_machine_payloads_by_no(db, po.vp_code)
         rows_for_pdf: list[dict] = []
         if mapped_ops:
             by_no = {int(r.operation_no): r for r in mapped_ops}
@@ -858,28 +914,38 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
             for no in all_nos:
                 m = by_no.get(no)
                 t = tpl_ops.get(no)
+                machine_payload = machine_payload_by_no.get(int(no), {})
                 rows_for_pdf.append(
                     {
                         "operation_no": no,
                         "operation_name": (m.operation_name if m is not None else None) or (t.operation_name if t is not None else "—"),
                         "workplace_name": (m.workplace_name if m is not None else None) or (t.workplace if t is not None else "—"),
+                        "machine_id": machine_payload.get("machine_id"),
+                        "machine_code": machine_payload.get("machine_code"),
+                        "machine_name": machine_payload.get("machine_name"),
                         "setup_min": float(t.setup_min or 0) if t is not None else 0.0,
                         "run_min_per_piece": float(t.run_min_per_piece or 0) if t is not None else 0.0,
                         "note": (t.note if t is not None and t.note else "—"),
+                        "vp_operation_note": (m.note if m is not None and m.note else None),
                         "scan_code": m.scan_code if m is not None else "",
                     }
                 )
         else:
             for no in sorted(tpl_ops.keys()):
                 t = tpl_ops[no]
+                machine_payload = machine_payload_by_no.get(int(no), {})
                 rows_for_pdf.append(
                     {
                         "operation_no": no,
                         "operation_name": t.operation_name,
                         "workplace_name": t.workplace or "—",
+                        "machine_id": machine_payload.get("machine_id"),
+                        "machine_code": machine_payload.get("machine_code"),
+                        "machine_name": machine_payload.get("machine_name"),
                         "setup_min": float(t.setup_min or 0),
                         "run_min_per_piece": float(t.run_min_per_piece or 0),
                         "note": (t.note or "—"),
+                        "vp_operation_note": None,
                         "scan_code": "",
                     }
                 )
@@ -890,7 +956,7 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
         else:
             def draw_operation_block(cur_y: float, row: dict) -> float:
                 block_w = w - 2 * margin_x
-                head_h = 16 * mm
+                head_h = 19 * mm
                 instruction_title_h = 6 * mm
                 line_h = 5.2 * mm
                 note_title_h = 6 * mm
@@ -898,7 +964,7 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
                 margin_in = 3 * mm
                 gap_after = 5 * mm
 
-                lines = _wrap_text_lines(str(row.get("note") or ""), 84)
+                lines = _wrap_text_lines(_print_operation_note(row), 84)
                 instruction_h = max(14 * mm, len(lines) * line_h + 3 * mm)
                 block_h_total = head_h + instruction_title_h + instruction_h + note_title_h + note_box_h + 2 * mm
 
@@ -930,11 +996,16 @@ def generate_production_order_pdf(production_order_id: int) -> bytes:
                     op_title = op_title[:-4] + "..."
                 c.drawString(margin_x + margin_in, top - 5.6 * mm, op_title)
                 c.setFont(font_regular, 8.8)
+                workplace_text = f"Pracoviště: {_operation_workplace_print_label(row)}"
+                max_workplace_w = max(text_zone_right_x - (margin_x + margin_in), 10 * mm)
+                while pdfmetrics.stringWidth(workplace_text, font_regular, 8.8) > max_workplace_w and len(workplace_text) > 4:
+                    workplace_text = workplace_text[:-4] + "..."
+                c.drawString(margin_x + margin_in, top - 10.4 * mm, workplace_text)
                 norma_text = f"Norma: setup {float(row['setup_min']):g} min, čas / ks {float(row['run_min_per_piece']):g} min"
                 max_norma_w = max(text_zone_right_x - (margin_x + margin_in), 10 * mm)
                 while pdfmetrics.stringWidth(norma_text, font_regular, 8.8) > max_norma_w and len(norma_text) > 4:
                     norma_text = norma_text[:-4] + "..."
-                c.drawString(margin_x + margin_in, top - 10.8 * mm, norma_text)
+                c.drawString(margin_x + margin_in, top - 15.0 * mm, norma_text)
 
                 barcode_w = 80 * mm
                 barcode_h = 7 * mm

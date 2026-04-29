@@ -49,7 +49,6 @@ def _render_cutting_text(
     lines: list[CuttingInstructionLine],
     *,
     material_label: str | None = None,
-    drawing_or_order_ref: str | None = None,
 ) -> str:
     a_col = "ATEST"
     r_col = "Rozmer"
@@ -61,9 +60,7 @@ def _render_cutting_text(
     out = ["Rezat:"]
     if material_label:
         out.append(material_label)
-    if drawing_or_order_ref:
-        out.append(drawing_or_order_ref)
-    if material_label or drawing_or_order_ref:
+    if material_label:
         out.append("")
 
     out.append(f"{a_col:<{a_width}}    {r_col:<{r_width}}    {p_col}")
@@ -154,7 +151,6 @@ def build_cutting_instructions_for_pila(
     text = _render_cutting_text(
         grouped_lines,
         material_label=material_label,
-        drawing_or_order_ref=drawing_or_order_ref,
     )
     return CuttingInstructionsResult(
         ok=True,

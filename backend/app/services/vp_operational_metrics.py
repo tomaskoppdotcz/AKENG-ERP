@@ -1,24 +1,33 @@
-"""Provozní metriky VP z runtime dat (work_reports, planning_operations, sazby zaměstnanců)."""
+"""Provozní metriky VP z runtime dat (operation_events, planning_operations)."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.kiosk import Employee
 from app.models.master_data import Machine
 from app.models.orders import ProductionOrder
 from app.models.planning import PlanningOperation
-from app.models.work_report import WorkReport
 from app.services.planning_operation_status import normalize_planning_operation_status
+from app.services.production_metrics_service import (
+    operation_event_runtime_metrics_by_planning_id,
+    planned_operation_time_min,
+)
+
+
+MetricValue = float | int | str | None
+
+
+def _planned_operation_time_min(op: PlanningOperation) -> float:
+    return planned_operation_time_min(op)
 
 
 def vp_operational_metrics_map(
     db: Session,
     production_orders: list[ProductionOrder],
-) -> dict[int, dict[str, float | int | str | None]]:
+) -> dict[int, dict[str, MetricValue]]:
     """
     Metriky pro více VP najednou (minimalizace dotazů).
     """
@@ -31,36 +40,6 @@ def vp_operational_metrics_map(
         vc = (p.vp_code or "").strip()
         if vc:
             code_by_po_id[int(p.id)] = vc
-
-    time_rows = db.execute(
-        select(
-            WorkReport.production_order_id,
-            func.coalesce(func.sum(func.coalesce(WorkReport.duration_min, 0.0)), 0.0),
-        )
-        .where(WorkReport.production_order_id.in_(po_ids))
-        .group_by(WorkReport.production_order_id)
-    ).all()
-    reported_by_po: dict[int, float] = {int(r[0]): float(r[1] or 0) for r in time_rows}
-
-    cost_rows = db.execute(
-        select(
-            WorkReport.production_order_id,
-            func.coalesce(
-                func.sum(
-                    (func.coalesce(WorkReport.duration_min, 0.0) / 60.0)
-                    * func.coalesce(Employee.cost_rate_per_hour, 0.0)
-                ),
-                0.0,
-            ),
-        )
-        .select_from(WorkReport)
-        .join(Employee, Employee.id == WorkReport.employee_id)
-        .where(WorkReport.production_order_id.in_(po_ids))
-        .where(WorkReport.employee_id.isnot(None))
-        .where(Employee.cost_rate_per_hour.isnot(None))
-        .group_by(WorkReport.production_order_id)
-    ).all()
-    cost_by_po: dict[int, float] = {int(r[0]): float(r[1] or 0) for r in cost_rows}
 
     codes = sorted({c for c in code_by_po_id.values() if c})
     pl_by_code: dict[str, list[PlanningOperation]] = defaultdict(list)
@@ -78,19 +57,47 @@ def vp_operational_metrics_map(
     machine_ids: set[int] = set()
     for lst in pl_by_code.values():
         for o in lst:
-            if normalize_planning_operation_status(o.status) == "bezi" and o.machine_id is not None:
+            if o.machine_id is not None:
                 machine_ids.add(int(o.machine_id))
     machines: dict[int, Machine] = {}
     if machine_ids:
         for m in db.scalars(select(Machine).where(Machine.id.in_(sorted(machine_ids)))).all():
             machines[int(m.id)] = m
 
-    out: dict[int, dict[str, float | int | str | None]] = {}
+    runtime_by_planning_id = operation_event_runtime_metrics_by_planning_id(
+        db,
+        [op for ops in pl_by_code.values() for op in ops],
+        machines,
+    )
+
+    out: dict[int, dict[str, MetricValue]] = {}
     for pid in po_ids:
         vc = code_by_po_id.get(pid, "")
         pl_ops = pl_by_code.get(vc, [])
-        reported_time_min = float(reported_by_po.get(pid, 0.0))
-        direct_labor_cost = float(cost_by_po.get(pid, 0.0))
+        reported_time_min = float(
+            sum(
+                float((runtime_by_planning_id.get(int(o.id)) or {}).get("working_time_min") or 0.0)
+                for o in pl_ops
+            )
+        )
+        direct_labor_cost = float(
+            sum(
+                float((runtime_by_planning_id.get(int(o.id)) or {}).get("labor_cost") or 0.0)
+                for o in pl_ops
+            )
+        )
+        employee_labor_cost = float(
+            sum(
+                float((runtime_by_planning_id.get(int(o.id)) or {}).get("employee_labor_cost") or 0.0)
+                for o in pl_ops
+            )
+        )
+        machine_cost = float(
+            sum(
+                float((runtime_by_planning_id.get(int(o.id)) or {}).get("machine_cost") or 0.0)
+                for o in pl_ops
+            )
+        )
 
         total_ops = len(pl_ops)
         done = 0
@@ -107,7 +114,12 @@ def vp_operational_metrics_map(
             )
             completion_percent = round(100.0 * float(done) / float(total_ops), 1)
             planned_total = float(
-                sum(float(getattr(o, "total_operation_time_min", 0) or 0) for o in pl_ops)
+                sum(
+                    _planned_operation_time_min(o)
+                    for o in pl_ops
+                    if float((runtime_by_planning_id.get(int(o.id)) or {}).get("working_time_min") or 0.0)
+                    > 1e-9
+                )
             )
             if planned_total <= 0 or reported_time_min <= 1e-9:
                 performance_percent = None
@@ -143,6 +155,15 @@ def vp_operational_metrics_map(
         out[pid] = {
             "reported_time_min": int(round(reported_time_min)),
             "direct_labor_cost": round(direct_labor_cost, 2),
+            "employee_labor_cost": round(employee_labor_cost, 2),
+            "machine_cost": round(machine_cost, 2),
+            "labor_cost": round(direct_labor_cost, 2),
+            "missing_employee_rate": any(
+                bool((runtime_by_planning_id.get(int(o.id)) or {}).get("missing_employee_rate")) for o in pl_ops
+            ),
+            "missing_machine_rate": any(
+                bool((runtime_by_planning_id.get(int(o.id)) or {}).get("missing_machine_rate")) for o in pl_ops
+            ),
             "completion_percent": completion_percent,
             "performance_percent": performance_percent,
             "current_location": current_location,
@@ -154,9 +175,14 @@ def vp_operational_metrics_map(
     return out
 
 
-OPERATIONAL_METRICS_EMPTY: dict[str, int | float | str | None] = {
+OPERATIONAL_METRICS_EMPTY: dict[str, MetricValue] = {
     "reported_time_min": 0,
     "direct_labor_cost": 0.0,
+    "employee_labor_cost": 0.0,
+    "machine_cost": 0.0,
+    "labor_cost": 0.0,
+    "missing_employee_rate": False,
+    "missing_machine_rate": False,
     "completion_percent": None,
     "performance_percent": None,
     "current_phase": None,
@@ -166,9 +192,9 @@ OPERATIONAL_METRICS_EMPTY: dict[str, int | float | str | None] = {
 
 
 def aggregate_operational_metrics_for_po_subset(
-    vp_metrics_by_po_id: dict[int, dict[str, float | int | str | None]],
+    vp_metrics_by_po_id: dict[int, dict[str, MetricValue]],
     production_orders: list[ProductionOrder],
-) -> dict[str, int | float | str | None]:
+) -> dict[str, MetricValue]:
     """
     Součty a dominantní fáze přes podmnožinu VP; vp_metrics_by_po_id = výstup z vp_operational_metrics_map.
     Poloha: první neprázdná z VP ve fázi „bezi“ (pořadí podle id VP).
@@ -179,6 +205,8 @@ def aggregate_operational_metrics_for_po_subset(
     lst = sorted(production_orders, key=lambda p: int(p.id))
     reported = 0
     labor = 0.0
+    employee_labor = 0.0
+    machine = 0.0
     planned_sum = 0.0
     done_ops = 0
     total_ops = 0
@@ -189,6 +217,8 @@ def aggregate_operational_metrics_for_po_subset(
         m = vp_metrics_by_po_id.get(int(p.id)) or {}
         reported += int(m.get("reported_time_min") or 0)
         labor += float(m.get("direct_labor_cost") or 0.0)
+        employee_labor += float(m.get("employee_labor_cost") or 0.0)
+        machine += float(m.get("machine_cost") or 0.0)
         planned_sum += float(m.get("planned_runtime_total_min") or 0.0)
         done_ops += int(m.get("planning_operations_done") or 0)
         total_ops += int(m.get("planning_operations_total") or 0)
@@ -226,6 +256,15 @@ def aggregate_operational_metrics_for_po_subset(
     return {
         "reported_time_min": int(reported),
         "direct_labor_cost": round(labor, 2),
+        "employee_labor_cost": round(employee_labor, 2),
+        "machine_cost": round(machine, 2),
+        "labor_cost": round(labor, 2),
+        "missing_employee_rate": any(
+            bool((vp_metrics_by_po_id.get(int(p.id)) or {}).get("missing_employee_rate")) for p in lst
+        ),
+        "missing_machine_rate": any(
+            bool((vp_metrics_by_po_id.get(int(p.id)) or {}).get("missing_machine_rate")) for p in lst
+        ),
         "completion_percent": completion,
         "performance_percent": performance,
         "current_phase": dom_phase,
@@ -234,11 +273,16 @@ def aggregate_operational_metrics_for_po_subset(
     }
 
 
-def vp_operational_metrics_single(db: Session, po: ProductionOrder) -> dict[str, float | int | str | None]:
+def vp_operational_metrics_single(db: Session, po: ProductionOrder) -> dict[str, MetricValue]:
     m = vp_operational_metrics_map(db, [po])
     return m.get(int(po.id)) or {
         "reported_time_min": 0,
         "direct_labor_cost": 0.0,
+        "employee_labor_cost": 0.0,
+        "machine_cost": 0.0,
+        "labor_cost": 0.0,
+        "missing_employee_rate": False,
+        "missing_machine_rate": False,
         "completion_percent": None,
         "performance_percent": None,
         "current_location": None,

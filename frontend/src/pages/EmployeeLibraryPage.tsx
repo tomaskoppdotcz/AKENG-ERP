@@ -195,7 +195,13 @@ export default function EmployeeLibraryPage() {
     setFormCountry(r.country ?? "");
     setFormBirth(r.birth_date ? String(r.birth_date).slice(0, 10) : "");
     setFormJob(r.job_title ?? "");
-    setFormRate(r.cost_rate_per_hour != null ? String(r.cost_rate_per_hour) : "");
+    setFormRate(
+      r.hourly_cost_rate != null
+        ? String(r.hourly_cost_rate)
+        : r.cost_rate_per_hour != null
+          ? String(r.cost_rate_per_hour)
+          : ""
+    );
     setFormNote(r.note ?? "");
     setShowForm(true);
     clearFeedback();
@@ -256,6 +262,7 @@ export default function EmployeeLibraryPage() {
       employee_subgroup_id: formSubgroupId === "" ? null : Number(formSubgroupId),
       is_active: formActive,
       can_use_kiosk: formKiosk,
+      hourly_cost_rate: rate,
       cost_rate_per_hour: rate,
       note: formNote.trim() || null,
     };

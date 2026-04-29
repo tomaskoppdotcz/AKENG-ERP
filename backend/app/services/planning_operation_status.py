@@ -2,7 +2,7 @@
 Canonical strings for planning_operations.status and production_orders.status (operational VP).
 
 Single vocabulary for planner, kiosk, work reports, and API consumers:
-- Planning row: waiting_release, ready, planned, naplanovano, ceka, bezi, hotovo, blokovano, scheduling_late, cancelled
+- Planning row: waiting_release, ready, planned, naplanovano, ceka, paused, bezi, hotovo, blokovano, scheduling_late, cancelled
 - VP aggregate (production_orders.status): planned, bezi, hotovo
 
 Legacy values (finished, done, in_progress, …) are normalized at startup and should not be written by new code.
@@ -32,6 +32,7 @@ CANONICAL_PLANNING_OPERATION_STATUSES: frozenset[str] = frozenset(
         "planned",
         "naplanovano",
         "ceka",
+        "paused",
         "bezi",
         "hotovo",
         "blokovano",
@@ -55,7 +56,7 @@ def planning_operation_status_is_terminal(raw: str | None) -> bool:
 def planning_operation_status_is_protected_for_queue_normalize(raw: str | None) -> bool:
     """Do not rewrite queue head / siblings (vp_operation_generator.normalize_planning_queue_statuses_for_vp_code)."""
     s = normalize_planning_operation_status(raw)
-    return s in ("hotovo", "cancelled", "bezi", "scheduling_late", "blokovano")
+    return s in ("hotovo", "cancelled", "bezi", "paused", "scheduling_late", "blokovano")
 
 
 # --- Production order aggregate (production_orders.status) ---

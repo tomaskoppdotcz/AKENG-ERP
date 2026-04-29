@@ -45,14 +45,8 @@ const inputStyle: React.CSSProperties = {
 
 type Props = { machineCode: string };
 
-function runtimeLabel(op: KioskQueueOp | null, tick: number): string {
-  void tick;
-  if (!op) return "—";
-  if (!op.actual_start) return "—";
-  const start = new Date(op.actual_start).getTime();
-  if (Number.isNaN(start)) return "—";
-  const end = op.actual_end ? new Date(op.actual_end).getTime() : Date.now();
-  const diffSec = Math.max(0, Math.floor((end - start) / 1000));
+function formatSeconds(seconds: number): string {
+  const diffSec = Math.max(0, Math.floor(seconds || 0));
   const hh = Math.floor(diffSec / 3600)
     .toString()
     .padStart(2, "0");
@@ -65,6 +59,40 @@ function runtimeLabel(op: KioskQueueOp | null, tick: number): string {
   return `${hh}:${mm}:${ss}`;
 }
 
+function normStatus(op: KioskQueueOp | null): string {
+  return (op?.status || "").trim().toLowerCase();
+}
+
+function isRunning(op: KioskQueueOp | null): boolean {
+  return ["bezi", "running", "in_progress"].includes(normStatus(op));
+}
+
+function isPaused(op: KioskQueueOp | null): boolean {
+  return ["paused", "ceka"].includes(normStatus(op));
+}
+
+function displayedRuntime(op: KioskQueueOp | null, tick: number) {
+  void tick;
+  const base = op?.runtime ?? { total_seconds: 0, pause_seconds: 0, working_seconds: 0 };
+  if (!op || !op.actual_start || op.actual_end) return base;
+  const start = new Date(op.actual_start).getTime();
+  if (Number.isNaN(start)) return base;
+  const elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000));
+  const total = Math.max(base.total_seconds, elapsed);
+  if (isPaused(op)) {
+    const pause = Math.max(base.pause_seconds, total - base.working_seconds);
+    return { total_seconds: total, pause_seconds: pause, working_seconds: Math.max(0, total - pause) };
+  }
+  if (isRunning(op)) {
+    return {
+      total_seconds: total,
+      pause_seconds: base.pause_seconds,
+      working_seconds: Math.max(0, total - base.pause_seconds),
+    };
+  }
+  return base;
+}
+
 export default function KioskProductionPage({ machineCode }: Props) {
   const [queue, setQueue] = useState<KioskQueueOp[]>([]);
   const [machineInfo, setMachineInfo] = useState<KioskMachineInfo | null>(null);
@@ -73,9 +101,6 @@ export default function KioskProductionPage({ machineCode }: Props) {
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
   const [selected, setSelected] = useState<KioskQueueOp | null>(null);
   const [scan, setScan] = useState("");
-  const [qtyOk, setQtyOk] = useState(0);
-  const [qtyNok, setQtyNok] = useState(0);
-  const [doneNote, setDoneNote] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pauseDialogOpen, setPauseDialogOpen] = useState(false);
@@ -103,6 +128,9 @@ export default function KioskProductionPage({ machineCode }: Props) {
       const q = await kioskMachineQueue(machineCode.trim());
       setMachineInfo(q.machine);
       setQueue(q.queue);
+      setSelected((prev) =>
+        prev ? q.queue.find((op) => op.planning_operation_id === prev.planning_operation_id) ?? prev : prev
+      );
     } catch {
       setQueue([]);
     }
@@ -124,7 +152,7 @@ export default function KioskProductionPage({ machineCode }: Props) {
   }, []);
 
   const operatorLoggedIn = loginState === "active" && sessionEmployee != null;
-  const runningOp = queue.find((op) => op.status === "running") ?? null;
+  const runningOp = queue.find((op) => isRunning(op)) ?? null;
   const dominantOp = selected ?? runningOp;
 
   async function onScanSubmit() {
@@ -173,13 +201,18 @@ export default function KioskProductionPage({ machineCode }: Props) {
     return (
       <div style={{ ...shell, color: "#ffb4b4" }}>
         <h1 style={{ fontSize: 28 }}>Chybí parametr machine</h1>
-        <p style={{ fontSize: 18 }}>Otevřete např. /kiosk/production?machine=HAAS_ST40</p>
+        <p style={{ fontSize: 18 }}>Otevřete např. /kiosk/production?machine=HAASST40</p>
       </div>
     );
   }
 
   const selId = dominantOp?.planning_operation_id;
   const mc = machineInfo?.machine_code ?? machineCode.trim();
+  const currentRuntime = displayedRuntime(dominantOp, runtimeTick);
+  const canStart = Boolean(dominantOp && !dominantOp.actual_start && normStatus(dominantOp) !== "hotovo");
+  const canPause = Boolean(dominantOp && isRunning(dominantOp));
+  const canResume = Boolean(dominantOp && isPaused(dominantOp));
+  const canDone = Boolean(dominantOp && dominantOp.actual_start && normStatus(dominantOp) !== "hotovo");
 
   return (
     <div style={shell}>
@@ -260,7 +293,7 @@ export default function KioskProductionPage({ machineCode }: Props) {
                 <strong>Stav:</strong> {dominantOp.status}
               </div>
               <div>
-                <strong>Runtime:</strong> {runtimeLabel(dominantOp, runtimeTick)}
+                <strong>Timer:</strong> {formatSeconds(currentRuntime.working_seconds)}
               </div>
             </div>
           )}
@@ -322,80 +355,72 @@ export default function KioskProductionPage({ machineCode }: Props) {
                 <div>
                   <strong>Stav:</strong> {dominantOp.status}
                 </div>
+                <div>
+                  <strong>Plán ks:</strong> {dominantOp.qty}
+                  {dominantOp.qty_ok != null ? ` · OK ${dominantOp.qty_ok}` : ""}
+                </div>
               </div>
-              <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-                <label style={{ fontSize: 18 }}>
-                  OK{" "}
-                  <input
-                    type="number"
-                    min={0}
-                    value={qtyOk}
-                    onChange={(e) => setQtyOk(Number(e.target.value))}
-                    style={{ fontSize: 22, width: 100, padding: 8 }}
-                  />
-                </label>
-                <label style={{ fontSize: 18 }}>
-                  NOK{" "}
-                  <input
-                    type="number"
-                    min={0}
-                    value={qtyNok}
-                    onChange={(e) => setQtyNok(Number(e.target.value))}
-                    style={{ fontSize: 22, width: 100, padding: 8 }}
-                  />
-                </label>
+              <div style={{ background: "#0f2530", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Časy</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(120px, 1fr))", gap: 10 }}>
+                  <div>Celkem: {formatSeconds(currentRuntime.total_seconds)}</div>
+                  <div>Pauza: {formatSeconds(currentRuntime.pause_seconds)}</div>
+                  <div>Práce: {formatSeconds(currentRuntime.working_seconds)}</div>
+                </div>
               </div>
-              <label style={{ fontSize: 16, display: "block", marginBottom: 12 }}>
-                Poznámka k dokončení
-                <input
-                  type="text"
-                  value={doneNote}
-                  onChange={(e) => setDoneNote(e.target.value)}
-                  placeholder="volitelné"
-                  style={{ display: "block", fontSize: 18, width: "100%", maxWidth: 420, padding: 8, marginTop: 4 }}
-                />
-              </label>
+              <div style={{ background: "#173226", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Instrukce řezání</div>
+                <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: 16, lineHeight: 1.35 }}>
+                  {dominantOp.cutting_instructions || "—"}
+                </pre>
+              </div>
               <div>
-                <button
-                  type="button"
-                  style={{ ...bigBtn, background: "#2e7d32", color: "#fff", opacity: busy || !selId || !operatorLoggedIn ? 0.45 : 1 }}
-                  disabled={busy || !selId || !operatorLoggedIn}
-                  onClick={() => selId && run(selId, () => kioskOperationStart(machineCode.trim(), selId))}
-                >
-                  START
-                </button>
-                <button
-                  type="button"
-                  style={{ ...bigBtn, background: "#f9a825", color: "#000", opacity: busy || !selId || !operatorLoggedIn ? 0.45 : 1 }}
-                  disabled={busy || !selId || !operatorLoggedIn}
-                  onClick={() => {
-                    if (!selId || busy || !operatorLoggedIn) return;
-                    setPauseDialogOpen(true);
-                  }}
-                >
-                  PAUZA
-                </button>
-                <button
-                  type="button"
-                  style={{ ...bigBtn, background: "#0288d1", color: "#fff", opacity: busy || !selId || !operatorLoggedIn ? 0.45 : 1 }}
-                  disabled={busy || !selId || !operatorLoggedIn}
-                  onClick={() => selId && run(selId, () => kioskOperationResume(machineCode.trim(), selId))}
-                >
-                  POKRAČOVAT
-                </button>
-                <button
-                  type="button"
-                  style={{ ...bigBtn, background: "#c62828", color: "#fff", opacity: busy || !selId || !operatorLoggedIn ? 0.45 : 1 }}
-                  disabled={busy || !selId || !operatorLoggedIn}
-                  onClick={() =>
-                    selId &&
-                    run(selId, () =>
-                      kioskOperationDone(machineCode.trim(), selId, qtyOk, qtyNok, doneNote.trim() || null)
-                    )
-                  }
-                >
-                  DOKONČIT
-                </button>
+                {canStart && (
+                  <button
+                    type="button"
+                    style={{ ...bigBtn, background: "#2e7d32", color: "#fff", opacity: busy || !selId || !operatorLoggedIn ? 0.45 : 1 }}
+                    disabled={busy || !selId || !operatorLoggedIn}
+                    onClick={() => selId && run(selId, () => kioskOperationStart(machineCode.trim(), selId))}
+                  >
+                    START
+                  </button>
+                )}
+                {canPause && (
+                  <button
+                    type="button"
+                    style={{ ...bigBtn, background: "#f9a825", color: "#000", opacity: busy || !selId || !operatorLoggedIn ? 0.45 : 1 }}
+                    disabled={busy || !selId || !operatorLoggedIn}
+                    onClick={() => {
+                      if (!selId || busy || !operatorLoggedIn) return;
+                      setPauseDialogOpen(true);
+                    }}
+                  >
+                    PAUZA
+                  </button>
+                )}
+                {canResume && (
+                  <button
+                    type="button"
+                    style={{ ...bigBtn, background: "#0288d1", color: "#fff", opacity: busy || !selId || !operatorLoggedIn ? 0.45 : 1 }}
+                    disabled={busy || !selId || !operatorLoggedIn}
+                    onClick={() => selId && run(selId, () => kioskOperationResume(machineCode.trim(), selId))}
+                  >
+                    POKRAČOVAT
+                  </button>
+                )}
+                {canDone && (
+                  <button
+                    type="button"
+                    style={{ ...bigBtn, background: "#c62828", color: "#fff", opacity: busy || !selId || !operatorLoggedIn ? 0.45 : 1 }}
+                    disabled={busy || !selId || !operatorLoggedIn}
+                    onClick={() =>
+                      selId &&
+                      run(selId, () => kioskOperationDone(machineCode.trim(), selId, 0, 0, null))
+                    }
+                  >
+                    Řezání hotovo
+                  </button>
+                )}
               </div>
             </>
           )}

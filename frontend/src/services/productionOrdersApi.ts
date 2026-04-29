@@ -72,13 +72,21 @@ export type ProductionOrderOverviewRow = {
   is_material_released_to_production?: boolean | null;
   /** Alias: stejné jako is_material_released_to_production */
   is_material_ready?: boolean | null;
-  /** Součet duration_min z work_reports pro VP */
+  /** Součet čistého pracovního času z actual_start/end mínus pauzy z operation_events. */
   reported_time_min?: number;
-  /** Součet (min/60)*cost_rate jen u záznamů se zaměstnancem a sazbou */
+  /** Součet pracovního času * employees.hourly_cost_rate, pokud je dostupná. */
+  employee_labor_cost?: number;
+  /** Součet pracovního času * machines.hourly_rate, pokud je dostupná. */
+  machine_cost?: number;
+  /** Legacy: zaměstnanec + stroj. */
+  labor_cost?: number;
+  /** Legacy alias pro náklad práce. */
   direct_labor_cost?: number;
+  missing_employee_rate?: boolean;
+  missing_machine_rate?: boolean;
   /** Podíl dokončených planning_operations (hotovo) / celkem, % */
   completion_percent?: number | null;
-  /** planned_runtime / vykázaný čas * 100; null bez plánu nebo vykázaného času */
+  /** plánovaný čas / vykázaný čas * 100; null bez plánu nebo vykázaného času */
   performance_percent?: number | null;
 };
 
@@ -87,11 +95,15 @@ export type ProductionOrderOperationRow = {
   operation_no: number;
   operation_name: string;
   workplace_name: string | null;
+  machine_id?: number | null;
+  machine_code?: string | null;
+  machine_name?: string | null;
   setup_time_min: number;
   run_min_per_piece: number;
   control_required: boolean;
   outsourcing: boolean;
   note: string | null;
+  vp_operation_note?: string | null;
   operation_scan_code?: string | null;
   /** Log-derived: naplánováno / běží / hotovo (canonical with planning shopfloor). */
   operation_status?: "planned" | "bezi" | "hotovo";
@@ -100,6 +112,11 @@ export type ProductionOrderOperationRow = {
   reported_ok_qty_total?: number;
   reported_nok_qty_total?: number;
   reported_minutes_total?: number;
+  elapsed_time_min?: number | null;
+  pause_time_min?: number | null;
+  working_time_min?: number | null;
+  planned_time_min?: number | null;
+  performance_percent?: number | null;
 };
 
 export type MaterialTraceabilityAttachment = {
@@ -185,14 +202,42 @@ export type ProductionOrderDetail = {
   } | null;
   operations: ProductionOrderOperationRow[];
   inputs: ProductionOrderInputRow[];
+  /** Součet čistého pracovního času z actual_start/end mínus pauzy z operation_events. */
   reported_time_min?: number;
+  /** Součet pracovního času * employees.hourly_cost_rate, pokud je dostupná. */
+  employee_labor_cost?: number;
+  /** Součet pracovního času * machines.hourly_rate, pokud je dostupná. */
+  machine_cost?: number;
+  /** Legacy: zaměstnanec + stroj. */
+  labor_cost?: number;
+  /** Legacy alias pro náklad práce. */
   direct_labor_cost?: number;
+  /** Skutečný náklad vydaného materiálu navázaného na VP. */
+  material_cost?: number;
+  /** Materiál + práce. */
+  total_cost?: number;
+  /** selling_price_per_piece * quantity. */
+  revenue?: number;
+  /** revenue - total_cost. */
+  profit?: number;
+  /** profit / revenue * 100; null bez tržby. */
+  margin_percent?: number | null;
+  missing_employee_rate?: boolean;
+  missing_machine_rate?: boolean;
+  /** True pokud vydanému materiálu chybí cena nebo výpočtová data. */
+  missing_material_cost_data?: boolean;
   completion_percent?: number | null;
   performance_percent?: number | null;
   /** Poloha z běžící planning operace (stroj) */
   current_location?: string | null;
   /** Fáze z planning_operations: planned | bezi | hotovo */
   current_phase?: string | null;
+  /** Hlavička detailu VP počítaná backendem přímo z planning_operations. */
+  operation_header?: {
+    completed_operation: string | null;
+    current_operation: string | null;
+    next_operation: string | null;
+  } | null;
 };
 
 /** Nedávno splněné rezervace výstupu z restock VP (GET restock-wip-reservation-notices). */

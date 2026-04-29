@@ -82,6 +82,32 @@ def test_same_length_from_different_heat_lots_stays_separate():
     assert "A        220 mm    4x" in res.text
     assert "B        220 mm    2x" in res.text
     assert res.text.startswith("Rezat:\n1.4460 D81,4 (0720 0814)\n\nATEST")
+    assert "304723-FN/B" not in res.text
+
+
+def test_cutting_instructions_do_not_render_drawing_or_revision_ref():
+    units = [_u(1, 1000.0)]
+    res = build_cutting_instructions_for_pila(
+        requested_piece_count=2,
+        delka_na_kus_mm=100.0,
+        vyrabeno_po=2,
+        na_upnuti_mm=0.0,
+        prorez_mm=0.0,
+        povolit_deleni_polotovaru=True,
+        receipt_units=units,
+        material_label="0720 0814 - 1.4460",
+        drawing_or_order_ref="304723-FN/B rev. B",
+    )
+    assert res.ok
+    assert (
+        res.text
+        == "Rezat:\n"
+        "0720 0814 - 1.4460\n"
+        "\n"
+        "ATEST    Rozmer    Pocet\n"
+        "-        200 mm    1x"
+    )
+    assert "304723-FN/B rev. B" not in res.text
 
 
 def test_same_heat_lot_and_same_length_aggregates():

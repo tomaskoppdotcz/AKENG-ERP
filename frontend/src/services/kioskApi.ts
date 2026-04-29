@@ -31,6 +31,12 @@ export type KioskQueueOp = {
   qty_nok: number | null;
   actual_start: string | null;
   actual_end: string | null;
+  cutting_instructions: string | null;
+  runtime: {
+    total_seconds: number;
+    pause_seconds: number;
+    working_seconds: number;
+  };
 };
 
 async function parseJson<T>(res: Response): Promise<T> {
@@ -134,7 +140,7 @@ export async function kioskResolveScan(machineCode: string, code: string) {
 
 export async function kioskOperationStart(machineCode: string, planningOperationId: number) {
   return parseJson<Record<string, unknown>>(
-    await akengFetch(`${API_BASE}/kiosk/operation/start`, {
+    await akengFetch(`${API_BASE}/kiosk/operation-tracking/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ machine_code: machineCode, planning_operation_id: planningOperationId }),
@@ -148,7 +154,7 @@ export async function kioskOperationPause(
   pauseReason?: string
 ) {
   return parseJson<Record<string, unknown>>(
-    await akengFetch(`${API_BASE}/kiosk/operation/pause`, {
+    await akengFetch(`${API_BASE}/kiosk/operation-tracking/pause`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -163,7 +169,7 @@ export async function kioskOperationPause(
 
 export async function kioskOperationResume(machineCode: string, planningOperationId: number) {
   return parseJson<Record<string, unknown>>(
-    await akengFetch(`${API_BASE}/kiosk/operation/resume`, {
+    await akengFetch(`${API_BASE}/kiosk/operation-tracking/resume`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ machine_code: machineCode, planning_operation_id: planningOperationId }),
@@ -179,7 +185,7 @@ export async function kioskOperationDone(
   note?: string | null
 ) {
   return parseJson<Record<string, unknown>>(
-    await akengFetch(`${API_BASE}/kiosk/operation/done`, {
+    await akengFetch(`${API_BASE}/kiosk/operation-tracking/done`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

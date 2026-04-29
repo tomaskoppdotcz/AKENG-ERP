@@ -19,10 +19,9 @@ export type ProductionOrderDetailHeaderModel = {
   progressPercent: number;
   /** Např. "3 / 12 · 25 %" */
   progressLine: string;
-  workplaceWherePartIs: string;
+  completedOperationLine: string;
   currentOperationLine: string;
   nextOperationLine: string;
-  afterNextLine: string;
   /** Třetí řádek karty */
   rowIdentifiers: Array<{ key: string; label: string; value: string }>;
   /** Čtvrtý řádek */
@@ -49,7 +48,8 @@ function wpl(w: string | null | undefined): string {
 }
 
 function formatOp(op: ProductionOrderOperationRow): string {
-  return `${op.operation_no}. ${op.operation_name}`;
+  const machineCode = op.machine_code?.trim() || "—";
+  return `${op.operation_no}. ${op.operation_name} — ${machineCode}`;
 }
 
 /** Poslední dokončená operace (nejvyšší operation_no mezi hotovo). */
@@ -101,9 +101,8 @@ export function buildProductionOrderDetailHeaderModel(d: ProductionOrderDetail):
 
   const running = sorted.find((o) => isBezi(o.operation_status));
   const firstIncomplete = sorted.find((o) => !isHotovo(o.operation_status));
-  const incompletes = sorted.filter((o) => !isHotovo(o.operation_status));
-  const nextOp = firstIncomplete;
-  const afterNext = incompletes.length > 1 ? incompletes[1] : undefined;
+  const currentIndex = firstIncomplete ? sorted.findIndex((o) => o === firstIncomplete) : -1;
+  const nextOp = currentIndex >= 0 && currentIndex + 1 < sorted.length ? sorted[currentIndex + 1] : undefined;
   const lastDone = lastCompleted(sorted);
   const terminalKind = lastDone ? terminalStepKind(lastDone) : null;
   const allDone = totalCount > 0 && completedCount === totalCount;
@@ -111,33 +110,26 @@ export function buildProductionOrderDetailHeaderModel(d: ProductionOrderDetail):
   const blockedRelease = d.blocked_until_reserved_stock_receipt === true;
   const cancelled = isWorkflowCancelled(d.workflow_status);
 
-  let workplaceWherePartIs = "—";
-  let currentOperationLine = "—";
+  let completedOperationLine = lastDone ? formatOp(lastDone) : "—";
+  let currentOperationLine = firstIncomplete ? formatOp(firstIncomplete) : "Hotovo";
   let nextOperationLine = nextOp ? formatOp(nextOp) : "—";
-  let afterNextLine = afterNext ? formatOp(afterNext) : "—";
 
-  if (running) {
-    workplaceWherePartIs = wpl(running.workplace_name);
+  const backendHeader = d.operation_header ?? null;
+  if (backendHeader) {
+    completedOperationLine = backendHeader.completed_operation?.trim() || "—";
+    currentOperationLine = backendHeader.current_operation?.trim() || "Hotovo";
+    nextOperationLine = backendHeader.next_operation?.trim() || "—";
+  }
+
+  if (!backendHeader && running) {
     currentOperationLine = formatOp(running);
-  } else if (allDone && lastDone) {
-    if (terminalKind === "stock") {
-      workplaceWherePartIs = "Na skladě";
-    } else if (terminalKind === "expedition") {
-      workplaceWherePartIs = "K expedici";
-    } else {
-      workplaceWherePartIs = wpl(lastDone.workplace_name);
-    }
-    currentOperationLine = "Dokončeno";
+  } else if (!backendHeader && allDone && lastDone) {
+    currentOperationLine = "Hotovo";
     nextOperationLine = "—";
-    afterNextLine = "—";
-  } else if (lastDone && !allDone) {
-    if (terminalKind === "stock") workplaceWherePartIs = "Sklad";
-    else if (terminalKind === "expedition") workplaceWherePartIs = "Expedice";
-    else workplaceWherePartIs = wpl(lastDone.workplace_name);
-    currentOperationLine = "Čeká na zahájení";
-  } else if (nextOp) {
-    workplaceWherePartIs = wpl(nextOp.workplace_name);
-    currentOperationLine = "Čeká na zahájení";
+  } else if (!backendHeader && lastDone && !allDone) {
+    currentOperationLine = firstIncomplete ? formatOp(firstIncomplete) : "Hotovo";
+  } else if (!backendHeader && nextOp) {
+    currentOperationLine = firstIncomplete ? formatOp(firstIncomplete) : "Hotovo";
   }
 
   let mainStatusLabel = "Naplánováno";
@@ -260,10 +252,9 @@ export function buildProductionOrderDetailHeaderModel(d: ProductionOrderDetail):
     totalCount,
     progressPercent,
     progressLine,
-    workplaceWherePartIs,
+    completedOperationLine,
     currentOperationLine,
     nextOperationLine,
-    afterNextLine,
     rowIdentifiers,
     rowSource,
   };

@@ -11,7 +11,17 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.kiosk import Employee, Kiosk, KioskActivityLog, KioskSession
 from app.models.master_data import Machine
+from app.models.orders import ProductionOrderOperation
 from app.models.planning import PlanningOperation
+from app.services.operation_tracking_service import (
+    operation_tracking_done,
+    operation_tracking_pause,
+    operation_tracking_resume,
+    operation_tracking_start,
+    resolve_operation_production_order,
+    runtime_dict,
+)
+from app.services.vp_pila_operation_notes import is_pila_operation_name
 from app.services.kiosk_planner_queue import (
     list_planning_operations_for_kiosk_machine,
     operation_on_same_planner_row_as_machine,
@@ -26,6 +36,7 @@ from app.services.kiosk_work_report_service import (
     work_report_resume,
     work_report_start,
 )
+from app.services.kiosk_machine_normalization import resolve_official_kiosk_machine_code
 
 router = APIRouter()
 
@@ -125,7 +136,7 @@ def _get_or_create_kiosk_for_machine(db: Session, machine: Machine) -> Kiosk:
 
 
 def _resolve_machine(db: Session, machine_code: str) -> Machine:
-    code = (machine_code or "").strip()
+    code = resolve_official_kiosk_machine_code(machine_code)
     if not code:
         raise HTTPException(status_code=422, detail="machine_code je povinný.")
     m = db.scalar(select(Machine).where(Machine.machine_code == code))
@@ -155,7 +166,23 @@ def _get_active_session(db: Session, kiosk_id: int) -> KioskSession:
     return session
 
 
-def _serialize_op(op: PlanningOperation) -> dict:
+def _cutting_instructions_for_op(db: Session, op: PlanningOperation) -> str | None:
+    if not is_pila_operation_name(op.operation_name):
+        return None
+    po = resolve_operation_production_order(db, op)
+    if po is None:
+        return None
+    row = db.scalar(
+        select(ProductionOrderOperation)
+        .where(ProductionOrderOperation.production_order_id == int(po.id))
+        .where(ProductionOrderOperation.operation_no == int(op.operation_no or 0))
+        .order_by(ProductionOrderOperation.id.asc())
+    )
+    note = (getattr(row, "note", None) or "").strip() if row is not None else ""
+    return note or None
+
+
+def _serialize_op(db: Session, op: PlanningOperation) -> dict:
     return {
         "planning_operation_id": op.id,
         "work_order_no": op.work_order_no,
@@ -172,6 +199,8 @@ def _serialize_op(op: PlanningOperation) -> dict:
         "qty_nok": op.qty_nok,
         "actual_start": op.actual_start.isoformat() if op.actual_start else None,
         "actual_end": op.actual_end.isoformat() if op.actual_end else None,
+        "cutting_instructions": _cutting_instructions_for_op(db, op),
+        "runtime": runtime_dict(db, int(op.id)),
     }
 
 
@@ -219,7 +248,7 @@ def kiosk_machine_queue(
             if session
             else None
         ),
-        "queue": [_serialize_op(op) for op in ops],
+        "queue": [_serialize_op(db, op) for op in ops],
     }
 
 
@@ -368,7 +397,7 @@ def kiosk_resolve_scan(machine_code: str, code: str, db: Session = Depends(get_d
     if not op:
         raise HTTPException(status_code=404, detail="Operace (WOO) nebyla nalezena.")
 
-    return {"status": "ok", "operation": _serialize_op(op)}
+    return {"status": "ok", "operation": _serialize_op(db, op)}
 
 
 # --- Operation control (machine_code) -------------------------------------------
@@ -394,7 +423,7 @@ def _run_start(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
         kiosk_session_id=int(session.id),
     )
     db.refresh(op)
-    return {**r, "planning_operation_id": op.id, "operation": _serialize_op(op)}
+    return {**r, "planning_operation_id": op.id, "operation": _serialize_op(db, op)}
 
 
 def _run_pause(
@@ -454,7 +483,7 @@ def _run_resume(kiosk: Kiosk, planning_operation_id: int, db: Session) -> dict:
         actor=f"employee:{session.employee_id}",
     )
     db.refresh(op)
-    return {**r, "planning_operation_id": op.id, "operation": _serialize_op(op)}
+    return {**r, "planning_operation_id": op.id, "operation": _serialize_op(db, op)}
 
 
 def _run_done(kiosk: Kiosk, planning_operation_id: int, qty_ok: int, qty_nok: int, note: str | None, db: Session) -> dict:
@@ -483,9 +512,60 @@ def _run_done(kiosk: Kiosk, planning_operation_id: int, qty_ok: int, qty_nok: in
     out = {
         **r,
         "finished_operation_id": op.id,
-        "operation": _serialize_op(op),
+        "operation": _serialize_op(db, op),
     }
     return out
+
+
+def _tracking_op_for_kiosk(db: Session, kiosk: Kiosk, planning_operation_id: int) -> tuple[KioskSession, PlanningOperation]:
+    session = _get_active_session(db, kiosk.id)
+    op = db.get(PlanningOperation, int(planning_operation_id))
+    if not op:
+        raise HTTPException(status_code=404, detail="Planning operation not found")
+    _require_op_on_kiosk_planner_row(db, kiosk, op)
+    return session, op
+
+
+def _tracking_response(db: Session, op: PlanningOperation, event_type: str) -> dict:
+    return {
+        "status": "ok",
+        "event_type": event_type,
+        "planning_operation_id": int(op.id),
+        "operation": _serialize_op(db, op),
+    }
+
+
+@router.post("/operation-tracking/start")
+def kiosk_operation_tracking_start(payload: MachineOperationIdRequest, db: Session = Depends(get_db)):
+    kiosk = _kiosk_from_machine_code(db, payload.machine_code)
+    session, op = _tracking_op_for_kiosk(db, kiosk, payload.planning_operation_id)
+    operation_tracking_start(db, op, user_id=int(session.employee_id))
+    return _tracking_response(db, op, "start")
+
+
+@router.post("/operation-tracking/pause")
+def kiosk_operation_tracking_pause(payload: MachinePauseRequest, db: Session = Depends(get_db)):
+    kiosk = _kiosk_from_machine_code(db, payload.machine_code)
+    session, op = _tracking_op_for_kiosk(db, kiosk, payload.planning_operation_id)
+    reason = (payload.pause_reason or payload.reason or "").strip()
+    operation_tracking_pause(db, op, reason=reason, user_id=int(session.employee_id))
+    return _tracking_response(db, op, "pause")
+
+
+@router.post("/operation-tracking/resume")
+def kiosk_operation_tracking_resume(payload: MachineOperationIdRequest, db: Session = Depends(get_db)):
+    kiosk = _kiosk_from_machine_code(db, payload.machine_code)
+    session, op = _tracking_op_for_kiosk(db, kiosk, payload.planning_operation_id)
+    operation_tracking_resume(db, op, user_id=int(session.employee_id))
+    return _tracking_response(db, op, "resume")
+
+
+@router.post("/operation-tracking/done")
+def kiosk_operation_tracking_done(payload: MachineOperationIdRequest, db: Session = Depends(get_db)):
+    kiosk = _kiosk_from_machine_code(db, payload.machine_code)
+    session, op = _tracking_op_for_kiosk(db, kiosk, payload.planning_operation_id)
+    operation_tracking_done(db, op, user_id=int(session.employee_id))
+    return _tracking_response(db, op, "done")
 
 
 @router.post("/operation/start")

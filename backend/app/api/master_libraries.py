@@ -12,6 +12,7 @@ from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryIt
 from app.models.orders import ProductionOrderOperation
 from app.services.workplace_scheduling_anchor import (
     get_or_create_scheduling_machine_for_workplace,
+    sync_machine_hourly_rates_for_workplace,
     sync_synthetic_anchor_machine_names_for_workplace,
 )
 
@@ -337,6 +338,7 @@ def create_workplace_library_item(
     db.commit()
     db.refresh(row)
     get_or_create_scheduling_machine_for_workplace(db, int(row.id))
+    sync_machine_hourly_rates_for_workplace(db, int(row.id))
     db.commit()
     return _wp_to_dict(row)
 
@@ -361,6 +363,7 @@ def update_workplace_library_item(
     db.commit()
     db.refresh(row)
     sync_synthetic_anchor_machine_names_for_workplace(db, int(row.id))
+    sync_machine_hourly_rates_for_workplace(db, int(row.id))
     db.execute(
         update(ProductionOrderOperation)
         .where(ProductionOrderOperation.workplace_library_item_id == int(row.id))

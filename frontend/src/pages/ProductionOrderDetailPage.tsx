@@ -83,9 +83,27 @@ function formatDetailPercent(v: number | null | undefined): string {
   return `${Number(v)} %`;
 }
 
+function formatDetailMarginPercent(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  return `${Number(v).toFixed(1)} %`;
+}
+
 function formatDetailLaborCzk(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(Number(v))) return "—";
   if (Number(v) <= 0) return "0 Kč";
+  try {
+    return new Intl.NumberFormat("cs-CZ", {
+      style: "currency",
+      currency: "CZK",
+      maximumFractionDigits: 0,
+    }).format(Number(v));
+  } catch {
+    return `${Math.round(Number(v))} Kč`;
+  }
+}
+
+function formatDetailFinancialCzk(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
   try {
     return new Intl.NumberFormat("cs-CZ", {
       style: "currency",
@@ -589,10 +607,9 @@ export default function ProductionOrderDetailPage({
               >
                 {(
                   [
-                    ["Kde je díl", headerModel.workplaceWherePartIs],
+                    ["Dokončená operace", headerModel.completedOperationLine],
                     ["Aktuální operace", headerModel.currentOperationLine],
                     ["Následující operace", headerModel.nextOperationLine],
-                    ["Poté", headerModel.afterNextLine],
                   ] as const
                 ).map(([label, val]) => (
                   <div key={label} style={{ minWidth: 0 }}>
@@ -615,18 +632,53 @@ export default function ProductionOrderDetailPage({
                     </div>
                   </div>
                   <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Náklad práce</div>
-                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.direct_labor_cost)}</div>
+                    <div style={erpDetailKpiLabel}>Tržba</div>
+                    <div style={erpDetailKpiValue}>{formatDetailFinancialCzk(data.revenue)}</div>
                   </div>
                   <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Hotovo %</div>
-                    <div style={erpDetailKpiValue}>{formatDetailPercent(data.completion_percent)}</div>
+                    <div style={erpDetailKpiLabel}>Náklad zaměstnance</div>
+                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.employee_labor_cost)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Náklad pracoviště / stroje</div>
+                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.machine_cost)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Náklad materiálu</div>
+                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.material_cost)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Náklad</div>
+                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.total_cost)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Zisk</div>
+                    <div style={erpDetailKpiValue}>{formatDetailFinancialCzk(data.profit)}</div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={erpDetailKpiLabel}>Marže %</div>
+                    <div style={erpDetailKpiValue}>{formatDetailMarginPercent(data.margin_percent)}</div>
                   </div>
                   <div style={{ minWidth: 0 }}>
                     <div style={erpDetailKpiLabel}>Výkonnost</div>
                     <div style={erpDetailKpiValue}>{formatDetailPercent(data.performance_percent)}</div>
                   </div>
                 </div>
+                {data.missing_employee_rate ? (
+                  <div style={{ color: "#92400e", fontSize: 12, fontWeight: 700 }}>
+                    Chybí sazba zaměstnance.
+                  </div>
+                ) : null}
+                {data.missing_machine_rate ? (
+                  <div style={{ color: "#92400e", fontSize: 12, fontWeight: 700 }}>
+                    Chybí sazba pracoviště.
+                  </div>
+                ) : null}
+                {data.missing_material_cost_data ? (
+                  <div style={{ color: "#92400e", fontSize: 12, fontWeight: 700 }}>
+                    Některým vydaným materiálům chybí cena nebo data pro výpočet váhy. Náklad materiálu může být 0 Kč.
+                  </div>
+                ) : null}
                 <div
                   style={{
                     marginTop: 2,
@@ -849,7 +901,7 @@ export default function ProductionOrderDetailPage({
                     const txtCell = { ...tableBodyCell, background: rowBg };
                     const okTotal = op.reported_ok_qty_total ?? 0;
                     const nokTotal = op.reported_nok_qty_total ?? 0;
-                    const minTotal = op.reported_minutes_total ?? 0;
+                    const minTotal = op.working_time_min ?? op.reported_minutes_total ?? 0;
                     const canExec = poWorkflowActive && busyOp !== op.operation_no && canProductionExecute;
                     return (
                       <tr key={op.id}>
@@ -885,7 +937,7 @@ export default function ProductionOrderDetailPage({
                               </span>
                             </div>
                             <div style={{ fontSize: 12, fontWeight: 600, color: UI.colors.textSecondary }}>
-                              {minTotal} min
+                              {Math.round(Number(minTotal))} min
                             </div>
                           </div>
                         </td>

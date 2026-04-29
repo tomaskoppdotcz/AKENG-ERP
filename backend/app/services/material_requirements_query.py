@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -24,6 +25,60 @@ from app.services.material_reservation_sync import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _cutting_required_qty(
+    *,
+    requested_piece_count: int | float | None,
+    delka_na_kus_mm: float | None,
+    vyrabeno_po: int | None,
+    na_upnuti_mm: float | None,
+    prorez_mm: float | None,
+) -> float | None:
+    """Calculate total cut length using the same batch demand formula as material issue allocation."""
+    qty = int(requested_piece_count or 0)
+    delka = float(delka_na_kus_mm or 0.0)
+    if vyrabeno_po is None:
+        return None
+    vpo = int(vyrabeno_po)
+    upnuti = max(float(na_upnuti_mm or 0.0), 0.0)
+    prorez = max(float(prorez_mm or 0.0), 0.0)
+    if qty < 0 or delka <= 0 or vpo < 1:
+        return None
+
+    full_batches = qty // vpo
+    remainder = qty % vpo
+    full_cut_length = vpo * delka + upnuti + prorez
+    remainder_cut_length = remainder * delka + upnuti + prorez
+    return float(full_batches * full_cut_length + (remainder_cut_length if remainder > 0 else 0.0))
+
+
+def _cutting_required_qty_for_reservation(
+    db: Session,
+    *,
+    reservation: MaterialReservation,
+    production_order: ProductionOrder,
+) -> float | None:
+    if production_order.portfolio_item_id is None:
+        return None
+    template_id = _select_active_template_id(db, int(production_order.portfolio_item_id))
+    if template_id is None:
+        return None
+    tm_row = _resolve_template_row_for_reservation(
+        db,
+        reservation=reservation,
+        po=production_order,
+        template_id=int(template_id),
+    )
+    if tm_row is None:
+        return None
+    return _cutting_required_qty(
+        requested_piece_count=int(production_order.quantity or 0),
+        delka_na_kus_mm=float(tm_row.consumption_per_piece or 0.0),
+        vyrabeno_po=tm_row.vyrabet_max_po_ks,
+        na_upnuti_mm=float(tm_row.na_upnuti_mm or 0.0),
+        prorez_mm=float(tm_row.scrap_allowance or 0.0),
+    )
 
 
 def _issue_allocation_params_for_reservation(
@@ -112,7 +167,7 @@ def _material_requirements_bundle(db: Session) -> dict[str, Any] | None:
         .group_by(mr.id, mr.material_library_item_id, mr.production_order_id, mr.job_item_id)
     ).subquery()
 
-    agg_rows = db.execute(
+    seed_agg_rows = db.execute(
         select(
             base_sq.c.mid.label("material_library_item_id"),
             func.coalesce(func.sum(base_sq.c.rq), 0.0).label("required_qty"),
@@ -121,10 +176,10 @@ def _material_requirements_bundle(db: Session) -> dict[str, Any] | None:
         .group_by(base_sq.c.mid)
         .order_by(base_sq.c.mid.asc())
     ).all()
-    if not agg_rows:
+    if not seed_agg_rows:
         return None
 
-    mat_ids = [int(r.material_library_item_id) for r in agg_rows]
+    mat_ids = [int(r.material_library_item_id) for r in seed_agg_rows]
     mats = db.scalars(select(MaterialLibraryItem).where(MaterialLibraryItem.id.in_(mat_ids))).all()
     mat_by_id = {int(m.id): m for m in mats}
 
@@ -243,11 +298,23 @@ def _material_requirements_bundle(db: Session) -> dict[str, Any] | None:
                 "gpn": ji.gpn if ji is not None else po.gpn,
                 "_lines": [],
             }
+        computed_required = _cutting_required_qty_for_reservation(
+            db,
+            reservation=rr,
+            production_order=po,
+        )
+        line_required = float(computed_required if computed_required is not None else rr.required_qty or 0.0)
+        stored_required = float(rr.required_qty or 0.0)
+        stored_reserved = float(rr.reserved_qty or 0.0)
+        if stored_required > 0 and stored_reserved + 1e-9 >= stored_required:
+            line_reserved = line_required
+        else:
+            line_reserved = min(stored_reserved, line_required)
         merged[key]["_lines"].append(
             {
                 "reservation_id": int(rr.id),
-                "required_qty": float(rr.required_qty or 0.0),
-                "reserved_qty": float(rr.reserved_qty or 0.0),
+                "required_qty": line_required,
+                "reserved_qty": line_reserved,
                 "status": rr.status,
                 "issue_allocation_params": _issue_allocation_params_for_reservation(
                     db,
@@ -256,6 +323,22 @@ def _material_requirements_bundle(db: Session) -> dict[str, Any] | None:
                 ),
             }
         )
+
+    totals_by_material: dict[int, dict[str, float]] = defaultdict(
+        lambda: {"required_qty": 0.0, "reserved_qty": 0.0}
+    )
+    for (mid, _pid), payload in merged.items():
+        for line in payload["_lines"]:
+            totals_by_material[mid]["required_qty"] += float(line["required_qty"] or 0.0)
+            totals_by_material[mid]["reserved_qty"] += float(line["reserved_qty"] or 0.0)
+    agg_rows = [
+        SimpleNamespace(
+            material_library_item_id=mid,
+            required_qty=totals["required_qty"],
+            reserved_qty=totals["reserved_qty"],
+        )
+        for mid, totals in sorted(totals_by_material.items())
+    ]
 
     return {
         "agg_rows": agg_rows,

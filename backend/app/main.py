@@ -53,6 +53,7 @@ from app.api.users_auth import (
 from app.api.auth import bootstrap_admin_user, router as auth_router
 from app.api.work_reports import router as work_reports_router
 from app.services.work_report_code import ensure_work_report_code_schema
+from app.services.operation_tracking_service import ensure_operation_events_sqlite_schema
 
 from app.services.planning_operation_status import backfill_canonical_statuses
 
@@ -134,6 +135,7 @@ def startup():
     ensure_portfolio_items_sqlite_schema(engine)
     ensure_auth_sqlite_schema(engine)
     ensure_work_report_code_schema(engine)
+    ensure_operation_events_sqlite_schema(engine)
     db = SessionLocal()
     try:
         run_master_data_startup(db)

@@ -38,6 +38,7 @@ class Employee(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     can_use_kiosk: Mapped[bool] = mapped_column(Boolean, default=True)
+    hourly_cost_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     cost_rate_per_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -73,14 +74,19 @@ class OperationEvent(Base):
     __tablename__ = "operation_events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    planning_operation_id: Mapped[int] = mapped_column(ForeignKey("planning_operations.id"), nullable=False)
-    machine_id: Mapped[int] = mapped_column(ForeignKey("machines.id"))
-    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    production_order_id: Mapped[int | None] = mapped_column(ForeignKey("production_orders.id"), nullable=True, index=True)
+    planning_operation_id: Mapped[int] = mapped_column(ForeignKey("planning_operations.id"), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(30))
+    timestamp: Mapped[datetime] = mapped_column("timestamp", DateTime, default=datetime.utcnow)
+    reason: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+    # Legacy/diagnostic fields still used by older work-report logging.
+    machine_id: Mapped[int | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
+    employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     event_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     qty_ok: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     qty_nok: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    reason: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

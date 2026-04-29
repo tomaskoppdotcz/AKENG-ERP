@@ -122,7 +122,7 @@ export default function KioskAdminPage({ machineCode }: Props) {
     return (
       <div style={{ ...shell, color: "#ffb4b4" }}>
         <h1 style={{ fontSize: 28 }}>Chybí parametr machine</h1>
-        <p style={{ fontSize: 18 }}>Otevřete např. /kiosk/admin?machine=HAAS_ST40</p>
+        <p style={{ fontSize: 18 }}>Otevřete např. /kiosk/admin?machine=HAASST40</p>
       </div>
     );
   }

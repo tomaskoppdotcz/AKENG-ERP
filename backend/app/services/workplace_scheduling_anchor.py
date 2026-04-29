@@ -50,11 +50,28 @@ def get_or_create_scheduling_machine_for_workplace(db: Session, workplace_id: in
         is_plannable=False,
         is_active=True,
         default_shift_minutes=450,
+        hourly_rate=wp.hourly_rate,
     )
     db.add(row)
     db.flush()
     logger.info("[workplace_anchor] created synthetic machine id=%s code=%s workplace_id=%s", row.id, code, wid)
     return row
+
+
+def sync_machine_hourly_rates_for_workplace(db: Session, workplace_id: int) -> int:
+    """Keep machine cost rates aligned with the workplace library rate used by the UI."""
+    wid = int(workplace_id)
+    wp = db.get(WorkplaceLibraryItem, wid)
+    if wp is None:
+        return 0
+
+    updated = 0
+    for m in db.scalars(select(Machine).where(Machine.workplace_library_item_id == wid)).all():
+        if m.hourly_rate != wp.hourly_rate:
+            m.hourly_rate = wp.hourly_rate
+            updated += 1
+    db.flush()
+    return updated
 
 
 def sync_synthetic_anchor_machine_names_for_workplace(db: Session, workplace_id: int) -> None:
