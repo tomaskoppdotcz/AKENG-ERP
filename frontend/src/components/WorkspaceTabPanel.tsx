@@ -6,7 +6,6 @@ import OrderItemDetailPage from "../pages/OrderItemDetailPage";
 import ProductStockDetailPage from "../pages/ProductStockDetailPage";
 import ProductionOrderDetailPage from "../pages/ProductionOrderDetailPage";
 import PortfolioItemDetailPage from "../pages/PortfolioItemDetailPage";
-import MaterialPurchaseOrderDetailPage from "../pages/MaterialPurchaseOrderDetailPage";
 import WorkReportDetailPage from "../pages/WorkReportDetailPage";
 import WorkReportCreatePage from "../pages/WorkReportCreatePage";
 import WorkReportEditPage from "../pages/WorkReportEditPage";
@@ -419,14 +418,6 @@ export default function WorkspaceTabPanel({
           initialSnapshot={tab.snapshot}
           onBack={onCloseThisTab}
           onUpdateTabTitle={updateThisTabTitle}
-        />
-      );
-    case "materialPurchaseOrder":
-      return (
-        <MaterialPurchaseOrderDetailPage
-          materialPurchaseOrderId={tab.materialPurchaseOrderId}
-          onBack={onCloseThisTab}
-          onWorkspaceTabTitle={updateThisTabTitle}
         />
       );
     case "workReport":

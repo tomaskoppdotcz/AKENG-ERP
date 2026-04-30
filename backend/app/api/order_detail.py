@@ -12,6 +12,10 @@ from app.models.work_report import WorkReport
 from app.services.job_item_operational_metrics import job_item_operational_metrics_map
 from app.services.order_operational_metrics import order_operational_metrics_map
 from app.services.portfolio_drawing_overview import drawing_number_revision_by_portfolio_id
+from app.services.production_metrics_service import (
+  customer_order_financial_summary,
+  customer_order_item_financial_summary,
+)
 from app.services.vp_operational_metrics import OPERATIONAL_METRICS_EMPTY
 
 router = APIRouter()
@@ -103,6 +107,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
   ).first()
 
   if not job:
+    financial_summary = customer_order_financial_summary(db, int(customer_order_id))
     return {
       "job": None,
       "customer_order": co_detail,
@@ -112,6 +117,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "kusy_celkem": 0,
         "prodejni_cena": 0,
         "total_sales_price": 0.0,
+        **financial_summary,
       },
       "items": [],
     }
@@ -441,6 +447,12 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
     order_metrics = dict(
       order_operational_metrics_map(db, [int(co_pk)]).get(int(co_pk), OPERATIONAL_METRICS_EMPTY)
     )
+  financial_summary = customer_order_financial_summary(db, int(customer_order_id))
+  item_financial_summaries = {
+    int(it.id): customer_order_item_financial_summary(db, int(it.id))
+    for it in items
+    if it.id is not None
+  }
 
   return {
     "job": {
@@ -456,6 +468,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
       "prodejni_cena": prodejni_cena,
       "total_sales_price": float(total_sales_price),
       **order_metrics,
+      **financial_summary,
     },
     "items": [
       {
@@ -496,6 +509,7 @@ def get_order_detail(customer_order_id: int, db: Session = Depends(get_db)):
         "effective_portfolio_item_id": _effective_portfolio_variant_id(it),
         "work_reports": work_reports_by_item.get(int(it.id), []),
         **_item_allocation_and_coverage(it),
+        **item_financial_summaries.get(int(it.id), {}),
       }
       for it in items
     ],

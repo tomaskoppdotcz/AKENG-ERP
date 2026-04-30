@@ -97,6 +97,11 @@ export type PortfolioTechnologyOperation = {
   labor_time_per_piece_min: number;
   control_required: boolean;
   outsourcing: boolean;
+  is_cooperation: boolean;
+  default_cooperation_status: string | null;
+  cooperation_category: string | null;
+  preferred_supplier_id: number | null;
+  cooperation_note: string | null;
   note: string | null;
 };
 
@@ -170,6 +175,11 @@ export type PortfolioTechnologyOperationCreatePayload = {
   labor_time_per_piece_min: number;
   control_required: boolean;
   outsourcing: boolean;
+  is_cooperation?: boolean;
+  default_cooperation_status?: string | null;
+  cooperation_category?: string | null;
+  preferred_supplier_id?: number | null;
+  cooperation_note?: string | null;
   note: string | null;
 };
 
@@ -182,6 +192,11 @@ export type PortfolioTechnologyOperationUpdatePayload = {
   labor_time_per_piece_min?: number;
   control_required?: boolean;
   outsourcing?: boolean;
+  is_cooperation?: boolean;
+  default_cooperation_status?: string | null;
+  cooperation_category?: string | null;
+  preferred_supplier_id?: number | null;
+  cooperation_note?: string | null;
   note?: string | null;
 };
 

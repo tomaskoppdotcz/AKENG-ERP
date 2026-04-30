@@ -20,6 +20,7 @@ from app.api.auto_planner import router as auto_planner_router
 from app.api.shopfloor_kiosk import router as shopfloor_kiosk_router
 from app.api.production import router as production_router
 from app.api.production_orders import router as production_orders_router
+from app.api.cooperation import router as cooperation_router
 from app.api.scan_lookup import router as scan_lookup_router
 from app.api.seed import router as seed_router
 from app.api.kiosk import router as kiosk_router
@@ -34,6 +35,11 @@ from app.api.material_library import (
 )
 from app.api.material_stock import ensure_material_stock_sqlite_schema, router as material_stock_router
 from app.api.product_stock import ensure_product_stock_sqlite_schema, router as product_stock_router
+from app.api.supplier_purchase_orders import (
+    ensure_supplier_purchase_orders_sqlite_schema,
+    router as supplier_purchase_orders_router,
+)
+from app.api.supplier_rfqs import ensure_supplier_rfqs_sqlite_schema, router as supplier_rfqs_router
 from app.api.storage_location import ensure_storage_locations_sqlite_schema, router as storage_location_router
 from app.api.portfolio import (
     ensure_portfolio_items_sqlite_schema,
@@ -79,7 +85,8 @@ from app.models.master_data import EmployeeSubgroup, Machine  # noqa: F401 — m
 from app.models.machine_shift_template import MachineShiftTemplate  # noqa: F401 — metadata / create_all
 from app.models.master_libraries import OperationLibraryItem, WorkplaceLibraryItem
 from app.models.material_library import MaterialGroup, MaterialLibraryItem
-from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
+from app.models.supplier_purchase_order import SupplierPurchaseOrder, SupplierPurchaseOrderItem
+from app.models.supplier_rfq import ApprovedSupplier, SupplierRfq, SupplierRfqItem
 from app.models.material_stock import (
     MaterialRemnantStockItem,
     MaterialReceiptUnit,
@@ -129,6 +136,8 @@ def startup():
     ensure_material_library_sqlite_schema(engine)
     ensure_material_stock_sqlite_schema(engine)
     ensure_product_stock_sqlite_schema(engine)
+    ensure_supplier_rfqs_sqlite_schema(engine)
+    ensure_supplier_purchase_orders_sqlite_schema(engine)
     ensure_storage_locations_sqlite_schema(engine)
     ensure_portfolio_technology_operation_library_fks(engine)
     ensure_portfolio_technology_material_inputs_sqlite_schema(engine)
@@ -152,6 +161,8 @@ app.include_router(master_libraries_router, prefix="/libraries", tags=["librarie
 app.include_router(material_library_router, prefix="/materials", tags=["materials"])
 app.include_router(material_stock_router, prefix="/material-stock", tags=["material-stock"])
 app.include_router(product_stock_router, prefix="/product-stock", tags=["product-stock"])
+app.include_router(supplier_rfqs_router, tags=["supplier-rfqs"])
+app.include_router(supplier_purchase_orders_router, tags=["supplier-purchase-orders"])
 app.include_router(storage_location_router, prefix="/storage-locations", tags=["storage-locations"])
 app.include_router(orders_router, prefix="/orders", tags=["orders"])
 app.include_router(orders_overview_router, tags=["orders-overview"])
@@ -165,6 +176,7 @@ app.include_router(shopfloor_kiosk_router, prefix="/shopfloor-kiosk", tags=["sho
 app.include_router(production_router, prefix="/production", tags=["production"])
 app.include_router(work_reports_router, prefix="/work-reports", tags=["work-reports"])
 app.include_router(production_orders_router, prefix="/production-orders", tags=["production-orders"])
+app.include_router(cooperation_router, prefix="/cooperation", tags=["cooperation"])
 app.include_router(scan_lookup_router, prefix="/scan-lookup", tags=["scan-lookup"])
 app.include_router(seed_router, prefix="/seed", tags=["seed"])
 app.include_router(kiosk_router, prefix="/kiosk", tags=["kiosk"])

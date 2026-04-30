@@ -63,6 +63,11 @@ from app.services.production_metrics_service import (
     operation_event_runtime_metrics_by_planning_id,
     production_order_metrics,
 )
+from app.services.cooperation_operations import (
+    linked_supplier_po_id_for_operation,
+    normalize_cooperation_status,
+    operation_is_cooperation,
+)
 from app.services.vp_operation_generator import regenerate_single_production_order_from_tp
 from app.services.vp_pila_operation_notes import apply_pila_cutting_notes_to_vp_operations, is_pila_operation_name
 
@@ -940,6 +945,11 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
             wp_lib = db.get(WorkplaceLibraryItem, op.workplace_library_item_id) if op.workplace_library_item_id is not None else None
             scan_row = op_scan_by_no.get(int(effective_no))
             operation_name = op_lib.name if op_lib is not None else op.operation_name
+            is_coop = operation_is_cooperation(
+                operation_name=operation_name,
+                outsourcing=bool(op.outsourcing),
+                manual=bool(getattr(op, "is_cooperation", False)),
+            )
             generated_note = (getattr(scan_row, "note", None) if scan_row is not None else None)
             note_for_detail = (
                 generated_note
@@ -957,6 +967,18 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
                     "run_min_per_piece": float(op.run_min_per_piece or 0),
                     "control_required": bool(op.control_required),
                     "outsourcing": bool(op.outsourcing),
+                    "is_cooperation": is_coop,
+                    "cooperation_status": normalize_cooperation_status(
+                        getattr(op, "default_cooperation_status", None),
+                        is_cooperation=is_coop,
+                    ),
+                    "cooperation_supplier_purchase_order_id": None,
+                    "cooperation_sent_at": None,
+                    "cooperation_received_at": None,
+                    "cooperation_note": getattr(op, "cooperation_note", None),
+                    "cooperation_category": getattr(op, "cooperation_category", None),
+                    "preferred_supplier_id": getattr(op, "preferred_supplier_id", None),
+                    "planning_operation_id": None,
                     "note": note_for_detail,
                     "vp_operation_note": generated_note,
                     "operation_scan_code": (scan_row.scan_code if scan_row is not None else None),
@@ -1045,6 +1067,27 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         pl = planning_by_no.get(no)
         if pl is not None:
             op["operation_status"] = _vp_detail_operation_status_from_planning(pl.status)
+            is_coop = bool(getattr(pl, "is_cooperation", False)) or operation_is_cooperation(
+                operation_name=pl.operation_name,
+                manual=False,
+            )
+            op["is_cooperation"] = is_coop
+            op["cooperation_status"] = normalize_cooperation_status(
+                getattr(pl, "cooperation_status", None),
+                is_cooperation=is_coop,
+            )
+            op["cooperation_supplier_purchase_order_id"] = (
+                getattr(pl, "cooperation_supplier_purchase_order_id", None)
+                or linked_supplier_po_id_for_operation(db, int(pl.id))
+            )
+            op["cooperation_sent_at"] = pl.cooperation_sent_at.isoformat() if pl.cooperation_sent_at else None
+            op["cooperation_received_at"] = (
+                pl.cooperation_received_at.isoformat() if pl.cooperation_received_at else None
+            )
+            op["cooperation_note"] = getattr(pl, "cooperation_note", None)
+            op["cooperation_category"] = getattr(pl, "cooperation_category", None)
+            op["preferred_supplier_id"] = getattr(pl, "preferred_supplier_id", None)
+            op["planning_operation_id"] = int(pl.id)
             op["started_at"] = pl.actual_start.isoformat() if pl.actual_start else None
             op["last_reported_at"] = (
                 pl.actual_end.isoformat()
@@ -1144,6 +1187,7 @@ def get_production_order_detail(production_order_id: int, db: Session = Depends(
         "employee_labor_cost": float(production_metrics.get("employee_labor_cost") or 0.0),
         "machine_cost": float(production_metrics.get("machine_cost") or 0.0),
         "material_cost": float(production_metrics.get("material_cost") or 0.0),
+        "supplier_cost": float(production_metrics.get("supplier_cost") or 0.0),
         "total_cost": total_cost,
         "revenue": financials["revenue"],
         "profit": financials["profit"],

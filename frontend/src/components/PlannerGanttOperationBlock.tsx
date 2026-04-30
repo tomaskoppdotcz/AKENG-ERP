@@ -33,7 +33,7 @@ export function plannerGanttHoverDetails(item: PlannerGanttItem): string {
     `Časy: setup ${item.setupTimeMin} min · práce ${item.laborTimeTotalMin} min · celkem ${item.totalOperationTimeMin} min`,
     `Qty: ${item.qty}`,
     mat,
-    `Stav: ${plannerGanttStatusLabel(item.status)}`,
+    `Stav: ${plannerGanttStatusLabel(item.status, { item })}`,
     `Fronta: ${item.queuePosition ?? "—"}`,
   ].join("\n");
 }

@@ -92,6 +92,7 @@ export type ProductionOrderOverviewRow = {
 
 export type ProductionOrderOperationRow = {
   id: number;
+  planning_operation_id?: number | null;
   operation_no: number;
   operation_name: string;
   workplace_name: string | null;
@@ -102,6 +103,14 @@ export type ProductionOrderOperationRow = {
   run_min_per_piece: number;
   control_required: boolean;
   outsourcing: boolean;
+  is_cooperation?: boolean;
+  cooperation_status?: "none" | "pending_send" | "sent" | "received" | "cancelled" | string | null;
+  cooperation_supplier_purchase_order_id?: number | null;
+  cooperation_sent_at?: string | null;
+  cooperation_received_at?: string | null;
+  cooperation_note?: string | null;
+  cooperation_category?: string | null;
+  preferred_supplier_id?: number | null;
   note: string | null;
   vp_operation_note?: string | null;
   operation_scan_code?: string | null;
@@ -214,7 +223,9 @@ export type ProductionOrderDetail = {
   direct_labor_cost?: number;
   /** Skutečný náklad vydaného materiálu navázaného na VP. */
   material_cost?: number;
-  /** Materiál + práce. */
+  /** Přijaté nákupní/kooperační náklady navázané na VP nebo operace. */
+  supplier_cost?: number;
+  /** Materiál + zaměstnanec + stroj + přijaté nákupy. */
   total_cost?: number;
   /** selling_price_per_piece * quantity. */
   revenue?: number;
@@ -287,6 +298,49 @@ export async function getProductionOrderDetail(productionOrderId: number): Promi
     throw new Error("Nepodařilo se načíst detail výrobního příkazu.");
   }
   return res.json();
+}
+
+export async function markCooperationPendingSend(planningOperationId: number, note?: string | null): Promise<unknown> {
+  const res = await akengFetch(`${API_BASE}/cooperation/operations/${planningOperationId}/mark-pending-send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note: note ?? null }),
+  });
+  if (!res.ok) {
+    const message = await readJsonErrorDetail(res, "Kooperaci se nepodařilo označit k odeslání.");
+    throw attachHttpErrorMeta(new Error(message), res);
+  }
+  return readOptionalJsonBody(res);
+}
+
+export async function sendCooperationOperation(
+  planningOperationId: number,
+  supplierPurchaseOrderId?: number | null,
+  note?: string | null,
+): Promise<unknown> {
+  const res = await akengFetch(`${API_BASE}/cooperation/operations/${planningOperationId}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ supplier_purchase_order_id: supplierPurchaseOrderId ?? null, note: note ?? null }),
+  });
+  if (!res.ok) {
+    const message = await readJsonErrorDetail(res, "Kooperaci se nepodařilo odeslat.");
+    throw attachHttpErrorMeta(new Error(message), res);
+  }
+  return readOptionalJsonBody(res);
+}
+
+export async function receiveCooperationOperation(planningOperationId: number, note?: string | null): Promise<unknown> {
+  const res = await akengFetch(`${API_BASE}/cooperation/operations/${planningOperationId}/receive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note: note ?? null }),
+  });
+  if (!res.ok) {
+    const message = await readJsonErrorDetail(res, "Kooperaci se nepodařilo přijmout zpět.");
+    throw attachHttpErrorMeta(new Error(message), res);
+  }
+  return readOptionalJsonBody(res);
 }
 
 export async function stornoProductionOrder(productionOrderId: number): Promise<unknown> {

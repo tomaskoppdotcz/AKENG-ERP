@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -112,6 +112,11 @@ class PortfolioTechnologyTemplateOperation(Base):
     run_min_per_piece: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     control_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     outsourcing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_cooperation: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    default_cooperation_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    cooperation_category: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    preferred_supplier_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), index=True, nullable=True)
+    cooperation_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     template: Mapped["PortfolioTechnologyTemplate"] = relationship("PortfolioTechnologyTemplate", back_populates="operations")

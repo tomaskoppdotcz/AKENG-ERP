@@ -43,6 +43,12 @@ class TechnologyTemplateOperation(Base):
     labor_time_per_piece_min = Column(Float, nullable=False, default=0)
     buffer_after_min = Column(Integer, nullable=False, default=20)
 
+    is_cooperation = Column(Boolean, nullable=False, default=False)
+    default_cooperation_status = Column(String(30), nullable=True)
+    cooperation_category = Column(String(80), nullable=True)
+    preferred_supplier_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    cooperation_note = Column(String, nullable=True)
+
     note = Column(String, nullable=True)
 
     template = relationship("TechnologyTemplate", back_populates="operations")

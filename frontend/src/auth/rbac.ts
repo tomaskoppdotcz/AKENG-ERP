@@ -97,6 +97,8 @@ export type CurrentUserSnapshot = {
   permissions: Set<string>;
   roles: Set<string>;
   hasFullAccess: boolean;
+  role: string | null;
+  is_admin: boolean;
   username: string | null;
   displayName: string | null;
   loaded: boolean;
@@ -106,6 +108,8 @@ let CURRENT_USER: CurrentUserSnapshot = {
   permissions: new Set(),
   roles: new Set(),
   hasFullAccess: true, // default allow before /users/me loads — legacy pilot chování
+  role: null,
+  is_admin: false,
   username: null,
   displayName: null,
   loaded: false,

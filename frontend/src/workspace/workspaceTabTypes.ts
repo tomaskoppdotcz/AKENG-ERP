@@ -12,7 +12,6 @@ export type OpenWorkspaceInput =
   | { kind: "portfolio"; portfolioItemId: number; item?: PortfolioItem | null; title?: string }
   | { kind: "materialStock"; stockItemId: number; snapshot?: MaterialStockDetailSnapshot | null; title?: string }
   | { kind: "productStock"; stockItemId: number; snapshot?: ProductStockItem | null; title?: string }
-  | { kind: "materialPurchaseOrder"; materialPurchaseOrderId: number; title?: string }
   | { kind: "workReport"; workReportId: number; title?: string }
   | { kind: "workReportEdit"; workReportId: number; title?: string }
   | { kind: "workReportNew"; title?: string };
@@ -25,7 +24,6 @@ export type WorkspaceTab =
   | { key: string; kind: "portfolio"; portfolioItemId: number; item: PortfolioItem | null; title: string }
   | { key: string; kind: "materialStock"; stockItemId: number; snapshot: MaterialStockDetailSnapshot | null; title: string }
   | { key: string; kind: "productStock"; stockItemId: number; snapshot: ProductStockItem | null; title: string }
-  | { key: string; kind: "materialPurchaseOrder"; materialPurchaseOrderId: number; title: string }
   | { key: string; kind: "workReport"; workReportId: number; title: string }
   | { key: string; kind: "workReportEdit"; workReportId: number; title: string }
   | { key: string; kind: "workReportNew"; title: string };
@@ -46,8 +44,6 @@ export function workspaceKeyFromInput(input: OpenWorkspaceInput): string {
       return `materialStock-${input.stockItemId}`;
     case "productStock":
       return `productStock-${input.stockItemId}`;
-    case "materialPurchaseOrder":
-      return `materialPurchaseOrder-${input.materialPurchaseOrderId}`;
     case "workReport":
       return `workReport-${input.workReportId}`;
     case "workReportEdit":
@@ -116,13 +112,6 @@ export function tabFromInput(input: OpenWorkspaceInput): WorkspaceTab {
         stockItemId: input.stockItemId,
         snapshot: input.snapshot ?? null,
         title: input.title?.trim() || `Sklad výrobků · #${input.stockItemId}`,
-      };
-    case "materialPurchaseOrder":
-      return {
-        key,
-        kind: "materialPurchaseOrder",
-        materialPurchaseOrderId: input.materialPurchaseOrderId,
-        title: input.title?.trim() || `NMPO · #${input.materialPurchaseOrderId}`,
       };
     case "workReport":
       return {

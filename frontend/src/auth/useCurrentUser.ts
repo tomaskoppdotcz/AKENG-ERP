@@ -9,10 +9,13 @@ import {
 } from "./rbac";
 
 export function applyMeDto(me: MeDto): void {
+  const roles = new Set(me.roles ?? []);
   setCurrentUserSnapshot({
     permissions: new Set(me.permissions ?? []),
-    roles: new Set(me.roles ?? []),
+    roles,
     hasFullAccess: !!me.has_full_access,
+    role: me.role ?? (roles.has("admin") ? "Administrator" : me.legacy_role ?? null),
+    is_admin: me.is_admin === true || roles.has("admin"),
     username: me.username ?? me.actor ?? null,
     displayName: me.display_name ?? null,
     loaded: true,
@@ -28,6 +31,8 @@ export async function refreshCurrentUser(): Promise<void> {
       permissions: new Set(),
       roles: new Set(),
       hasFullAccess: true,
+      role: null,
+      is_admin: false,
       loaded: true,
     });
   }

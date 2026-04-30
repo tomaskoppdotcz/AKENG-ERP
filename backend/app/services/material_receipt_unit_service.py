@@ -42,6 +42,7 @@ def create_receipt_unit_for_prijem(
     invoice_no: str | None,
     supplier_name: str | None,
     received_at,
+    supplier_batch: str | None = None,
 ) -> MaterialReceiptUnit:
     q = float(received_qty)
     unit = MaterialReceiptUnit(
@@ -50,6 +51,7 @@ def create_receipt_unit_for_prijem(
         remaining_qty=q,
         uom=uom,
         heat_lot=heat_lot,
+        supplier_batch=supplier_batch,
         certificate_no=certificate_no,
         delivery_note_no=delivery_note_no,
         invoice_no=invoice_no,
@@ -69,6 +71,22 @@ def load_fifo_receipt_units(db: Session, stock_item_id: int) -> list[MaterialRec
             select(MaterialReceiptUnit)
             .where(
                 MaterialReceiptUnit.stock_item_id == int(stock_item_id),
+                MaterialReceiptUnit.remaining_qty > 1e-9,
+                MaterialReceiptUnit.status == MRU_STATUS_ACTIVE,
+            )
+            .order_by(MaterialReceiptUnit.received_at.asc(), MaterialReceiptUnit.id.asc())
+        ).all()
+    )
+
+
+def load_fifo_receipt_units_for_material(db: Session, material_library_item_id: int) -> list[MaterialReceiptUnit]:
+    """FIFO across all inventory cards for one catalog material."""
+    return list(
+        db.scalars(
+            select(MaterialReceiptUnit)
+            .join(MaterialStockItem, MaterialStockItem.id == MaterialReceiptUnit.stock_item_id)
+            .where(
+                MaterialStockItem.material_library_item_id == int(material_library_item_id),
                 MaterialReceiptUnit.remaining_qty > 1e-9,
                 MaterialReceiptUnit.status == MRU_STATUS_ACTIVE,
             )

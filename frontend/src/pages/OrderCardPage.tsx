@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
+import FinancialKpiPanel from "../components/FinancialKpiPanel";
 import SimpleModal from "../components/SimpleModal";
 import {
   erpDetailIdentLabel,
@@ -39,8 +40,14 @@ import OverviewSloupceButton from "../components/overview/OverviewSloupceButton"
 import TableLayoutModal from "../components/overview/TableLayoutModal";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import { canPerformAction, hasPermission, readStoredErpRole } from "../auth/rbac";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import InlineBanner from "../components/InlineBanner";
 import { interpretError, runWriteAction, type WriteFeedback } from "../utils/writeActionFeedback";
+import {
+  formatFinancialCzk,
+  formatFinancialPercent,
+  formatFinancialTime,
+} from "../utils/financialKpiFormat";
 
 const ORDER_CARD_ITEMS_DEFAULTS: readonly TableColumnDef[] = [
   { key: "line_no", label: "Řádek", defaultWidth: 70 },
@@ -50,6 +57,10 @@ const ORDER_CARD_ITEMS_DEFAULTS: readonly TableColumnDef[] = [
   { key: "drawing_revision", label: "Revize", defaultWidth: 90, defaultVisible: false },
   { key: "qty", label: "Množství", defaultWidth: 100 },
   { key: "sale_price", label: "Prodejní cena / ks", defaultWidth: 150 },
+  { key: "revenue", label: "Tržba", defaultWidth: 130 },
+  { key: "cost", label: "Náklad", defaultWidth: 130 },
+  { key: "profit", label: "Zisk", defaultWidth: 130 },
+  { key: "margin", label: "Marže %", defaultWidth: 100 },
   { key: "due", label: "Termín", defaultWidth: 110 },
   { key: "vp", label: "Výrobní příkazy", defaultWidth: 180 },
   { key: "reported", label: "Vykázaný čas", defaultWidth: 120 },
@@ -110,24 +121,17 @@ const ORDER_SUBTABS: OrderSubtab[] = [
   "Náklady",
 ];
 
-function formatMoneyKc(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 2 })} Kč/ks`;
-}
-
 function formatQty(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "0";
   return n.toLocaleString("cs-CZ", { maximumFractionDigits: 2 });
 }
 
 function formatCzk(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(value)}\u00a0Kč`;
+  return formatFinancialCzk(value);
 }
 
 function formatLineReportedMin(m: number | null | undefined): string {
-  if (m == null || !Number.isFinite(Number(m))) return "—";
-  return `${Math.round(Number(m))} min`;
+  return formatFinancialTime(m);
 }
 
 function formatLinePct(v: number | null | undefined): string {
@@ -136,23 +140,7 @@ function formatLinePct(v: number | null | undefined): string {
 }
 
 function formatLineLabor(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  if (Number(v) === 0) return "0 Kč";
-  try {
-    return new Intl.NumberFormat("cs-CZ", {
-      style: "currency",
-      currency: "CZK",
-      maximumFractionDigits: 0,
-    }).format(Number(v));
-  } catch {
-    return `${Math.round(Number(v))} Kč`;
-  }
-}
-
-function formatOrderReportedHours(min: number | null | undefined): string {
-  if (min == null || !Number.isFinite(Number(min))) return "—";
-  const h = Number(min) / 60;
-  return `${h.toLocaleString("cs-CZ", { maximumFractionDigits: 1 })} h`;
+  return formatFinancialCzk(v);
 }
 
 function orderPhaseLabelCs(phase: string | null | undefined): string {
@@ -249,6 +237,8 @@ export default function OrderCardPage({
   const [editItemError, setEditItemError] = useState<string | null>(null);
   const editInitialGpnRef = useRef("");
 
+  const user = useCurrentUser();
+  const isAdmin = user?.role === "Administrator" || user?.is_admin === true;
   const erpRole = useMemo(() => readStoredErpRole(), []);
   const canOrdersWrite = canPerformAction(erpRole, "orders.write") && hasPermission("edit_orders");
   const canOrdersStorno = canPerformAction(erpRole, "orders.storno") && hasPermission("edit_orders");
@@ -719,6 +709,17 @@ export default function OrderCardPage({
   const totalSalesPrice = data.summary?.total_sales_price ?? 0;
   const orderOp = data.summary;
   const orderWorkflowActive = isBusinessWorkflowActive(data.customer_order?.workflow_status);
+  const financialKpis = [
+    { label: "Tržba", value: formatCzk(orderOp?.total_revenue) },
+    { label: "Náklad materiálu", value: formatCzk(orderOp?.total_material_cost) },
+    { label: "Náklad zaměstnance", value: formatCzk(orderOp?.total_employee_labor_cost) },
+    { label: "Náklad pracoviště/stroje", value: formatCzk(orderOp?.total_machine_cost) },
+    { label: "Náklad kooperace / nákup", value: formatCzk(orderOp?.total_supplier_cost) },
+    { label: "Náklad celkem", value: formatCzk(orderOp?.total_cost) },
+    { label: "Zisk", value: formatCzk(orderOp?.total_profit) },
+    { label: "Marže %", value: formatFinancialPercent(orderOp?.margin_percent) },
+    { label: "Vykázaný čas", value: formatFinancialTime(orderOp?.total_reported_time_min) },
+  ];
 
   const conflictLines = (restockPreviewSnapshot?.lines ?? []).filter((l) => l.needs_user_choice);
 
@@ -949,6 +950,14 @@ export default function OrderCardPage({
                   </div>
                 </div>
               </div>
+              {isAdmin && (
+                <>
+                  <div style={{ ...erpDetailSectionEyebrow, color: UI.colors.neutralFg, margin: "14px 0 8px" }}>
+                    Náklady a marže
+                  </div>
+                  <FinancialKpiPanel title="Finanční KPI" kpis={financialKpis} />
+                </>
+              )}
             </div>
           }
         />
@@ -1378,6 +1387,10 @@ export default function OrderCardPage({
                             { key: "drawing_revision", label: "Revize", align: "left" as const, show: showDrawingRevision },
                             { key: "qty", label: "Množství", align: "right" as const, show: true },
                             { key: "sale_price", label: "Prodejní cena / ks", align: "right" as const, show: true },
+                            { key: "revenue", label: "Tržba", align: "right" as const, show: true },
+                            { key: "cost", label: "Náklad", align: "right" as const, show: true },
+                            { key: "profit", label: "Zisk", align: "right" as const, show: true },
+                            { key: "margin", label: "Marže %", align: "right" as const, show: true },
                             { key: "due", label: "Termín", align: "left" as const, show: true },
                             { key: "vp", label: "Výrobní příkazy", align: "left" as const, show: true },
                             { key: "reported", label: "Vykázaný čas", align: "right" as const, show: true },
@@ -1484,6 +1497,10 @@ export default function OrderCardPage({
                             ) : null}
                             <td style={numCell}>{item.qty} ks</td>
                             <td style={numCell}>{formatCzk(item.sale_price_per_piece)}</td>
+                            <td style={numCell}>{formatCzk(item.revenue)}</td>
+                            <td style={numCell}>{formatCzk(item.total_cost)}</td>
+                            <td style={numCell}>{formatCzk(item.profit)}</td>
+                            <td style={numCell}>{formatFinancialPercent(item.margin_percent)}</td>
                             <td style={txtCell}>{item.due_date ?? "—"}</td>
                             <td style={txtCell} onClick={(e) => e.stopPropagation()}>
                               {hasVp ? (
@@ -1538,7 +1555,7 @@ export default function OrderCardPage({
                             <td style={numCell}>{formatLineReportedMin(item.reported_time_min)}</td>
                             <td style={numCell}>{formatLinePct(item.completion_percent)}</td>
                             <td style={numCell}>{formatLineLabor(item.direct_labor_cost)}</td>
-                            <td style={numCell}>{formatLinePct(item.performance_percent)}</td>
+                            <td style={numCell}>{formatFinancialPercent(item.performance_percent)}</td>
                             <td
                               style={txtCell}
                               onClick={(e) => e.stopPropagation()}
@@ -1576,7 +1593,7 @@ export default function OrderCardPage({
                       {filteredItems.length === 0 ? (
                         <tr>
                           <td
-                            colSpan={12 + (showDrawingNumber ? 1 : 0) + (showDrawingRevision ? 1 : 0)}
+                            colSpan={16 + (showDrawingNumber ? 1 : 0) + (showDrawingRevision ? 1 : 0)}
                             style={{
                               ...tableBodyCell,
                               textAlign: "center",

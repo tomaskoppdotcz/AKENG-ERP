@@ -14,7 +14,7 @@ export type DashboardPageProps = {
   onOpenProductionOrder?: (productionOrderId: number, title?: string) => void;
   onOpenCustomerOrder?: (customerOrderId: number, title?: string) => void;
   onOpenMaterialRequirements?: () => void;
-  onOpenMaterialPurchase?: () => void;
+  onOpenSupplierPurchaseOrders?: () => void;
   onOpenPlanning?: () => void;
 };
 
@@ -291,7 +291,7 @@ export default function DashboardPage({
   onOpenProductionOrder,
   onOpenCustomerOrder,
   onOpenMaterialRequirements,
-  onOpenMaterialPurchase,
+  onOpenSupplierPurchaseOrders,
   onOpenPlanning,
 }: DashboardPageProps) {
   const [activeOrders, setActiveOrders] = useState<ProductionOrderOverviewRow[] | null>(null);
@@ -400,10 +400,10 @@ export default function DashboardPage({
           Požadavky materiálu
         </button>
       ) : null}
-      {onOpenMaterialPurchase ? (
+      {onOpenSupplierPurchaseOrders ? (
         <button
           type="button"
-          onClick={onOpenMaterialPurchase}
+          onClick={onOpenSupplierPurchaseOrders}
           style={{
             flex: "1 1 140px",
             padding: "10px 12px",
@@ -416,7 +416,7 @@ export default function DashboardPage({
             cursor: "pointer",
           }}
         >
-          Nákup materiálu
+          Objednávky
         </button>
       ) : null}
     </div>
@@ -599,9 +599,9 @@ export default function DashboardPage({
                           VP
                         </button>
                       ) : null}
-                      {onOpenMaterialPurchase ? (
-                        <button type="button" style={linkSmall} onClick={onOpenMaterialPurchase}>
-                          Nákup
+                      {onOpenSupplierPurchaseOrders ? (
+                        <button type="button" style={linkSmall} onClick={onOpenSupplierPurchaseOrders}>
+                          Objednávky
                         </button>
                       ) : null}
                     </div>

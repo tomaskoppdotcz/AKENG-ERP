@@ -1,13 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
+import FinancialKpiPanel from "../components/FinancialKpiPanel";
 import SimpleModal from "../components/SimpleModal";
 import {
   erpDetailIdentGrid,
   erpDetailIdentLabel,
   erpDetailIdentValue,
   erpDetailKpiLabel,
-  erpDetailKpiPanel,
-  erpDetailKpiRow,
   erpDetailKpiValue,
   erpDetailRowLabel,
   erpDetailRowValue,
@@ -18,18 +17,27 @@ import {
 import { buildProductionOrderDetailHeaderModel, vpHeaderBadgeStyle } from "../utils/productionOrderDetailHeader";
 import {
   getProductionOrderDetail,
+  markCooperationPendingSend,
   openProductionOrderPdfInNewTab,
   regenerateProductionOrderFromTp,
+  receiveCooperationOperation,
   receiveFinishedGoodsToStock,
   reportProductionOrderOperation,
+  sendCooperationOperation,
   startProductionOrderOperation,
   stornoProductionOrder,
   type ProductionOrderDetail,
 } from "../services/productionOrdersApi";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import { canPerformAction, readStoredErpRole } from "../auth/rbac";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import InlineBanner from "../components/InlineBanner";
 import { interpretError, runWriteAction, type WriteFeedback } from "../utils/writeActionFeedback";
+import {
+  formatFinancialCzk,
+  formatFinancialPercent,
+  formatFinancialTime,
+} from "../utils/financialKpiFormat";
 
 const API_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -78,41 +86,13 @@ function formatPlanningPhaseCs(phase: string | null | undefined): string {
   return (phase || "").trim() ? String(phase) : "—";
 }
 
-function formatDetailPercent(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  return `${Number(v)} %`;
-}
-
-function formatDetailMarginPercent(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  return `${Number(v).toFixed(1)} %`;
-}
-
-function formatDetailLaborCzk(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  if (Number(v) <= 0) return "0 Kč";
-  try {
-    return new Intl.NumberFormat("cs-CZ", {
-      style: "currency",
-      currency: "CZK",
-      maximumFractionDigits: 0,
-    }).format(Number(v));
-  } catch {
-    return `${Math.round(Number(v))} Kč`;
-  }
-}
-
-function formatDetailFinancialCzk(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  try {
-    return new Intl.NumberFormat("cs-CZ", {
-      style: "currency",
-      currency: "CZK",
-      maximumFractionDigits: 0,
-    }).format(Number(v));
-  } catch {
-    return `${Math.round(Number(v))} Kč`;
-  }
+function cooperationStatusLabel(status: string | null | undefined): string {
+  const s = String(status ?? "").trim().toLowerCase();
+  if (s === "pending_send" || s === "none" || !s) return "Čeká na odeslání";
+  if (s === "sent") return "Odesláno do kooperace";
+  if (s === "received") return "Přijato z kooperace";
+  if (s === "cancelled") return "Zrušeno";
+  return status || "—";
 }
 
 export default function ProductionOrderDetailPage({
@@ -150,6 +130,8 @@ export default function ProductionOrderDetailPage({
   const [regenerateBusy, setRegenerateBusy] = useState(false);
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
 
+  const user = useCurrentUser();
+  const isAdmin = user?.role === "Administrator" || user?.is_admin === true;
   const erpRole = useMemo(() => readStoredErpRole(), []);
   const canProductionExecute = canPerformAction(erpRole, "production.execute");
   const canProductionStorno = canPerformAction(erpRole, "production.storno");
@@ -245,6 +227,40 @@ export default function ProductionOrderDetailPage({
       {
         successMessage: `Operace č. ${operationNo}: odvedeno OK ${ok_qty} / NOK ${nok_qty}, ${reported_minutes} min.`,
         errorMessage: "Odvedení operace se nezdařilo.",
+      },
+    );
+    setActionFeedback(fb);
+    setBusyOp(null);
+    if (fb.kind === "success" || fb.kind === "info") {
+      await loadDetail({ silent: true });
+    }
+  }
+
+  async function handleCooperationAction(
+    operationNo: number,
+    planningOperationId: number | null | undefined,
+    action: "pending" | "send" | "receive",
+  ) {
+    if (!planningOperationId) {
+      setActionFeedback({ kind: "error", message: "Operace nemá navázaný plánovací řádek." });
+      return;
+    }
+    setActionFeedback(null);
+    setBusyOp(operationNo);
+    const fb = await runWriteAction(
+      () => {
+        if (action === "send") return sendCooperationOperation(planningOperationId);
+        if (action === "receive") return receiveCooperationOperation(planningOperationId);
+        return markCooperationPendingSend(planningOperationId);
+      },
+      {
+        successMessage:
+          action === "receive"
+            ? `Kooperace č. ${operationNo} byla přijata zpět.`
+            : action === "send"
+              ? `Kooperace č. ${operationNo} byla odeslána.`
+              : `Kooperace č. ${operationNo} čeká na odeslání.`,
+        errorMessage: "Změna stavu kooperace se nezdařila.",
       },
     );
     setActionFeedback(fb);
@@ -622,87 +638,52 @@ export default function ProductionOrderDetailPage({
           }
           summaryTiles={
             <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "100%", minWidth: 0 }}>
-              <div style={erpDetailKpiPanel}>
-                <div style={erpDetailSectionEyebrow}>Provozní metriky</div>
-                <div style={erpDetailKpiRow}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Vykázaný čas</div>
-                    <div style={erpDetailKpiValue}>
-                      {Math.round(Number(data.reported_time_min ?? 0))} min
+              {isAdmin && (
+                <FinancialKpiPanel
+                  title="Provozní metriky"
+                  kpis={[
+                    { label: "Vykázaný čas", value: formatFinancialTime(data.reported_time_min) },
+                    { label: "Tržba", value: formatFinancialCzk(data.revenue) },
+                    { label: "Náklad materiálu", value: formatFinancialCzk(data.material_cost) },
+                    { label: "Náklad zaměstnance", value: formatFinancialCzk(data.employee_labor_cost) },
+                    { label: "Náklad pracoviště / stroje", value: formatFinancialCzk(data.machine_cost) },
+                    { label: "Náklad kooperace / nákup", value: formatFinancialCzk(data.supplier_cost) },
+                    { label: "Náklad celkem", value: formatFinancialCzk(data.total_cost) },
+                    { label: "Zisk", value: formatFinancialCzk(data.profit) },
+                    { label: "Marže %", value: formatFinancialPercent(data.margin_percent) },
+                    { label: "Výkonnost", value: formatFinancialPercent(data.performance_percent) },
+                  ]}
+                  warnings={[
+                    ...(data.missing_employee_rate ? ["Chybí sazba zaměstnance."] : []),
+                    ...(data.missing_machine_rate ? ["Chybí sazba pracoviště."] : []),
+                    ...(data.missing_material_cost_data
+                      ? ["Některým vydaným materiálům chybí cena nebo data pro výpočet váhy. Náklad materiálu může být 0,00 Kč."]
+                      : []),
+                  ]}
+                  footer={
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                        gap: 14,
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={erpDetailKpiLabel}>Poloha (běžící operace)</div>
+                        <div style={{ ...erpDetailKpiValue, fontSize: 17 }}>
+                          {data.current_location?.trim() ? data.current_location : "—"}
+                        </div>
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={erpDetailKpiLabel}>Fáze VP</div>
+                        <div style={{ ...erpDetailKpiValue, fontSize: 17 }}>
+                          {formatPlanningPhaseCs(data.current_phase)}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Tržba</div>
-                    <div style={erpDetailKpiValue}>{formatDetailFinancialCzk(data.revenue)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Náklad zaměstnance</div>
-                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.employee_labor_cost)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Náklad pracoviště / stroje</div>
-                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.machine_cost)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Náklad materiálu</div>
-                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.material_cost)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Náklad</div>
-                    <div style={erpDetailKpiValue}>{formatDetailLaborCzk(data.total_cost)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Zisk</div>
-                    <div style={erpDetailKpiValue}>{formatDetailFinancialCzk(data.profit)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Marže %</div>
-                    <div style={erpDetailKpiValue}>{formatDetailMarginPercent(data.margin_percent)}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Výkonnost</div>
-                    <div style={erpDetailKpiValue}>{formatDetailPercent(data.performance_percent)}</div>
-                  </div>
-                </div>
-                {data.missing_employee_rate ? (
-                  <div style={{ color: "#92400e", fontSize: 12, fontWeight: 700 }}>
-                    Chybí sazba zaměstnance.
-                  </div>
-                ) : null}
-                {data.missing_machine_rate ? (
-                  <div style={{ color: "#92400e", fontSize: 12, fontWeight: 700 }}>
-                    Chybí sazba pracoviště.
-                  </div>
-                ) : null}
-                {data.missing_material_cost_data ? (
-                  <div style={{ color: "#92400e", fontSize: 12, fontWeight: 700 }}>
-                    Některým vydaným materiálům chybí cena nebo data pro výpočet váhy. Náklad materiálu může být 0 Kč.
-                  </div>
-                ) : null}
-                <div
-                  style={{
-                    marginTop: 2,
-                    paddingTop: 12,
-                    borderTop: `1px solid ${UI.colors.divider}`,
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                    gap: 14,
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Poloha (běžící operace)</div>
-                    <div style={{ ...erpDetailKpiValue, fontSize: 17 }}>
-                      {data.current_location?.trim() ? data.current_location : "—"}
-                    </div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={erpDetailKpiLabel}>Fáze VP</div>
-                    <div style={{ ...erpDetailKpiValue, fontSize: 17 }}>
-                      {formatPlanningPhaseCs(data.current_phase)}
-                    </div>
-                  </div>
-                </div>
-              </div>
+                  }
+                />
+              )}
 
               <div style={subtleCard}>
                 <div style={identEyebrow}>Identifikace a objednávka</div>
@@ -903,13 +884,39 @@ export default function ProductionOrderDetailPage({
                     const nokTotal = op.reported_nok_qty_total ?? 0;
                     const minTotal = op.working_time_min ?? op.reported_minutes_total ?? 0;
                     const canExec = poWorkflowActive && busyOp !== op.operation_no && canProductionExecute;
+                    const isCooperation = !!op.is_cooperation;
+                    const coopStatus = String(op.cooperation_status ?? "none").trim().toLowerCase();
+                    const coopDone = coopStatus === "received";
                     return (
                       <tr key={op.id}>
                         <td style={{ ...numCell, fontWeight: 900, color: UI.colors.textPrimary }}>
                           {op.operation_no}
                         </td>
                         <td style={{ ...txtCell, fontWeight: 700, color: UI.colors.textPrimary }}>
-                          {op.operation_name}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span>{op.operation_name}</span>
+                            {isCooperation ? (
+                              <span
+                                style={{
+                                  ...UI.statusBadgeBase,
+                                  color: "#9A3412",
+                                  background: "#FFEDD5",
+                                  borderColor: "#FDBA74",
+                                  boxShadow: "none",
+                                }}
+                              >
+                                Kooperace
+                              </span>
+                            ) : null}
+                          </div>
+                          {isCooperation ? (
+                            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: "#9A3412" }}>
+                              {cooperationStatusLabel(op.cooperation_status)}
+                              {op.cooperation_supplier_purchase_order_id
+                                ? ` · PO #${op.cooperation_supplier_purchase_order_id}`
+                                : ""}
+                            </div>
+                          ) : null}
                         </td>
                         <td style={txtCell}>{op.workplace_name ?? "—"}</td>
                         <td style={numCell}>{op.setup_time_min}</td>
@@ -950,25 +957,60 @@ export default function ProductionOrderDetailPage({
                               gap: 10,
                             }}
                           >
-                            <button
-                              type="button"
-                              style={UI.buttons.secondary}
-                              disabled={!canExec}
-                              onClick={() => handleStartOperation(op.operation_no)}
-                            >
-                              Zahájit
-                            </button>
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "flex-end",
-                                gap: 8,
-                                padding: "6px 10px",
-                                borderRadius: 10,
-                                background: UI.colors.card,
-                                border: `1px solid ${UI.colors.border}`,
-                              }}
-                            >
+                            {isCooperation ? (
+                              <>
+                                <button
+                                  type="button"
+                                  style={UI.buttons.secondary}
+                                  disabled={!canExec || coopStatus === "sent" || coopDone}
+                                  onClick={() => handleCooperationAction(op.operation_no, op.planning_operation_id, "send")}
+                                >
+                                  Odeslat do kooperace
+                                </button>
+                                <button
+                                  type="button"
+                                  style={UI.buttons.primary}
+                                  disabled={!canExec || coopDone}
+                                  onClick={() => handleCooperationAction(op.operation_no, op.planning_operation_id, "receive")}
+                                >
+                                  Přijmout z kooperace
+                                </button>
+                                <button
+                                  type="button"
+                                  style={UI.buttons.secondary}
+                                  disabled={!canExec}
+                                  onClick={() =>
+                                    setActionFeedback({
+                                      kind: "info",
+                                      message:
+                                        "Objednávku navážete v Dodavatelských objednávkách výběrem stejné VP a operace.",
+                                    })
+                                  }
+                                >
+                                  Navázat objednávku
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  style={UI.buttons.secondary}
+                                  disabled={!canExec}
+                                  onClick={() => handleStartOperation(op.operation_no)}
+                                >
+                                  Zahájit
+                                </button>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "flex-end",
+                                    gap: 8,
+                                    padding: "6px 10px",
+                                    borderRadius: 10,
+                                    background: UI.colors.card,
+                                    border: `1px solid ${UI.colors.border}`,
+                                  }}
+                                >
                               <label style={{ display: "flex", flexDirection: "column" }}>
                                 <span style={fieldLabel}>OK</span>
                                 <input
@@ -1001,7 +1043,9 @@ export default function ProductionOrderDetailPage({
                               >
                                 Odvést
                               </button>
-                            </div>
+                                </div>
+                              </>
+                            )}
                           </div>
                         </td>
                         <td style={{ ...txtCell, maxWidth: 220, whiteSpace: "normal" }}>

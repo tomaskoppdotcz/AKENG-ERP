@@ -46,6 +46,8 @@ export type MeDto = {
   display_name: string | null;
   user_id: number | null;
   is_active: boolean;
+  role?: string | null;
+  is_admin?: boolean;
   roles: string[];
   legacy_role: string | null;
   permissions: string[];

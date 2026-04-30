@@ -52,6 +52,7 @@ from app.services.material_issue_allocation_engine import (
     ReceiptUnitSnapshot,
     RemnantStockSnapshot,
 )
+from app.services.material_issue_suggestion import build_material_issue_suggestion
 from app.services.material_receipt_unit_service import (
     create_receipt_unit_for_prijem,
     load_fifo_receipt_units,
@@ -131,6 +132,8 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN scan_code VARCHAR(32)"))
         if "heat_lot" not in mv_cols:
             conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN heat_lot VARCHAR(120)"))
+        if "supplier_batch" not in mv_cols:
+            conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN supplier_batch VARCHAR(120)"))
         if "length_per_piece_mm" not in mv_cols:
             conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN length_per_piece_mm FLOAT"))
         if "weight_per_piece_kg" not in mv_cols:
@@ -139,6 +142,17 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN production_order_id INTEGER"))
         if "job_item_id" not in mv_cols:
             conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN job_item_id INTEGER"))
+        if "supplier_purchase_order_item_id" not in mv_cols:
+            conn.execute(
+                text("ALTER TABLE material_stock_movements ADD COLUMN supplier_purchase_order_item_id INTEGER NULL")
+            )
+        if "purchase_order_item_id" in mv_cols:
+            conn.execute(
+                text(
+                    "UPDATE material_stock_movements SET supplier_purchase_order_item_id = purchase_order_item_id "
+                    "WHERE supplier_purchase_order_item_id IS NULL AND purchase_order_item_id IS NOT NULL"
+                )
+            )
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_production_order_id "
@@ -149,6 +163,12 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_job_item_id "
                 "ON material_stock_movements (job_item_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_supplier_purchase_order_item_id "
+                "ON material_stock_movements (supplier_purchase_order_item_id)"
             )
         )
         if "supplier_name" not in mv_cols:
@@ -227,6 +247,7 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
                 "remaining_qty REAL NOT NULL, "
                 "uom VARCHAR(40) NULL, "
                 "heat_lot VARCHAR(120) NULL, "
+                "supplier_batch VARCHAR(120) NULL, "
                 "certificate_no VARCHAR(120) NULL, "
                 "delivery_note_no VARCHAR(120) NULL, "
                 "invoice_no VARCHAR(120) NULL, "
@@ -291,6 +312,11 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
             )
         )
     insp = sa_inspect(engine)
+    if "material_receipt_units" in insp.get_table_names():
+        ru_cols = {c["name"] for c in insp.get_columns("material_receipt_units")}
+        with engine.begin() as conn:
+            if "supplier_batch" not in ru_cols:
+                conn.execute(text("ALTER TABLE material_receipt_units ADD COLUMN supplier_batch VARCHAR(120)"))
     if "material_stock_movements" in insp.get_table_names():
         mv3 = {c["name"] for c in insp.get_columns("material_stock_movements")}
         with engine.begin() as conn:
@@ -298,6 +324,17 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN receipt_unit_id INTEGER NULL"))
             if "remnant_stock_item_id" not in mv3:
                 conn.execute(text("ALTER TABLE material_stock_movements ADD COLUMN remnant_stock_item_id INTEGER NULL"))
+            if "supplier_purchase_order_item_id" not in mv3:
+                conn.execute(
+                    text("ALTER TABLE material_stock_movements ADD COLUMN supplier_purchase_order_item_id INTEGER NULL")
+                )
+            if "purchase_order_item_id" in mv3:
+                conn.execute(
+                    text(
+                        "UPDATE material_stock_movements SET supplier_purchase_order_item_id = purchase_order_item_id "
+                        "WHERE supplier_purchase_order_item_id IS NULL AND purchase_order_item_id IS NOT NULL"
+                    )
+                )
 
             conn.execute(
                 text(
@@ -309,6 +346,12 @@ def ensure_material_stock_sqlite_schema(engine: Engine) -> None:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_remnant_stock_item_id "
                     "ON material_stock_movements (remnant_stock_item_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_material_stock_movements_supplier_purchase_order_item_id "
+                    "ON material_stock_movements (supplier_purchase_order_item_id)"
                 )
             )
 
@@ -340,6 +383,7 @@ def _first_receipt_payload(row: MaterialStockMovement, attachments: list[dict] |
         "movement_date": _iso_movement_dt(row.movement_date),
         "receipt_unit_code": _receipt_unit_code(getattr(row, "receipt_unit_id", None)),
         "heat_lot": row.heat_lot,
+        "supplier_batch": getattr(row, "supplier_batch", None),
         "certificate_no": row.certificate_no,
         "delivery_note_no": row.delivery_note_no,
         "supplier_name": row.supplier_name,
@@ -477,10 +521,12 @@ def _movement_payload(row: MaterialStockMovement, attachments: list[dict] | None
         "scan_code": row.scan_code,
         "reference": row.reference,
         "heat_lot": row.heat_lot,
+        "supplier_batch": getattr(row, "supplier_batch", None),
         "length_per_piece_mm": row.length_per_piece_mm,
         "weight_per_piece_kg": row.weight_per_piece_kg,
         "production_order_id": row.production_order_id,
         "job_item_id": row.job_item_id,
+        "supplier_purchase_order_item_id": getattr(row, "supplier_purchase_order_item_id", None),
         "note": row.note,
         "supplier_name": getattr(row, "supplier_name", None),
         "delivery_note_no": getattr(row, "delivery_note_no", None),
@@ -508,6 +554,7 @@ def _receipt_unit_detail_payload(row: MaterialReceiptUnit) -> dict:
         "remaining_qty": float(row.remaining_qty or 0.0),
         "uom": row.uom,
         "heat_lot": row.heat_lot,
+        "supplier_batch": getattr(row, "supplier_batch", None),
         "certificate_no": row.certificate_no,
         "delivery_note_no": row.delivery_note_no,
         "invoice_no": row.invoice_no,
@@ -1623,6 +1670,21 @@ def get_material_issue_allocation_preview(
         remnant_stock_items=remnant_snapshots,
         receipt_units=snapshots,
     )
+    alloc_suggestion = None
+    if not res.ok:
+        alloc_suggestion = build_material_issue_suggestion(
+            res,
+            requested_finished_piece_count=int(requested_piece_count),
+            delka_na_kus_mm=float(delka_na_kus_mm),
+            vyrabeno_po=int(vyrabeno_po),
+            povolit_deleni_polotovaru=bool(povolit_deleni_polotovaru),
+            minimalni_zbytek_pouzitelny_mm=float(minimalni_zbytek_pouzitelny_mm),
+            minimalni_vydavana_delka_mm=float(minimalni_vydavana_delka_mm),
+            remnant_stock_items=remnant_snapshots,
+            receipt_units=snapshots,
+            na_upnuti_mm=float(na_upnuti_mm),
+            prorez_mm=float(prorez_mm),
+        )
     return {
         "ok": res.ok,
         "demand_total_mm": res.demand_total_mm,
@@ -1635,6 +1697,7 @@ def get_material_issue_allocation_preview(
         "lines": [_allocation_line_payload(ln) for ln in res.lines],
         "error_code": res.error_code.value,
         "message": res.message,
+        "allocation_suggestion": alloc_suggestion,
     }
 
 
@@ -1807,19 +1870,32 @@ def issue_material(
         receipt_units=engine_snapshots,
     )
     if not alloc.ok:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "allocation_failed",
-                "error_code": alloc.error_code.value,
-                "message": alloc.message,
-                "demand_total_mm": float(alloc.demand_total_mm),
-                "polotovar_length_mm": float(alloc.polotovar_length_mm),
-                "full_batches": int(alloc.full_batches),
-                "remainder_pieces": int(alloc.remainder_pieces),
-                "lines": [_allocation_line_payload(ln) for ln in alloc.lines],
-            },
+        alloc_suggestion = build_material_issue_suggestion(
+            alloc,
+            requested_finished_piece_count=int(requested_piece_count),
+            delka_na_kus_mm=float(delka_na_kus_mm),
+            vyrabeno_po=int(vyrabeno_po),
+            povolit_deleni_polotovaru=bool(povolit_deleni_polotovaru),
+            minimalni_zbytek_pouzitelny_mm=float(minimalni_zbytek_pouzitelny_mm),
+            minimalni_vydavana_delka_mm=float(minimalni_vydavana_delka_mm),
+            remnant_stock_items=remnant_snapshots,
+            receipt_units=engine_snapshots,
+            na_upnuti_mm=float(na_upnuti_mm),
+            prorez_mm=float(prorez_mm),
         )
+        detail: dict = {
+            "code": "allocation_failed",
+            "error_code": alloc.error_code.value,
+            "message": alloc.message,
+            "demand_total_mm": float(alloc.demand_total_mm),
+            "polotovar_length_mm": float(alloc.polotovar_length_mm),
+            "full_batches": int(alloc.full_batches),
+            "remainder_pieces": int(alloc.remainder_pieces),
+            "lines": [_allocation_line_payload(ln) for ln in alloc.lines],
+        }
+        if alloc_suggestion is not None:
+            detail["allocation_suggestion"] = alloc_suggestion
+        raise HTTPException(status_code=409, detail=detail)
 
     main_issue_qty = sum(float(ln.allocated_mm) for ln in alloc.lines if ln.source_type == "receipt_unit")
     avail = available_qty_for_stock_item(db, int(stock.id), exclude_job_item_id=int(reservation.job_item_id))

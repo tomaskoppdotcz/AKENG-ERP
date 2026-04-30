@@ -1,10 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
+import FinancialKpiPanel from "../components/FinancialKpiPanel";
 import {
-  erpDetailKpiLabel,
-  erpDetailKpiPanel,
-  erpDetailKpiRow,
-  erpDetailKpiValue,
   erpDetailRowLabel,
   erpDetailRowValue,
   erpDetailSectionEyebrow,
@@ -34,6 +31,12 @@ import {
   type PortfolioTechnologyMaterial,
 } from "../services/portfolioApi";
 import { buildErpUrl } from "../utils/erpDeepLink";
+import {
+  formatFinancialCzk,
+  formatFinancialPercent,
+  formatFinancialTime,
+} from "../utils/financialKpiFormat";
+import { useCurrentUser } from "../auth/useCurrentUser";
 
 type Props = {
   jobItemId: number;
@@ -82,8 +85,7 @@ const SUBTABS: ItemSubtab[] = [
 ];
 
 function formatCenaZaKs(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${n.toLocaleString("cs-CZ", { maximumFractionDigits: 2 })} Kč`;
+  return formatFinancialCzk(n);
 }
 
 function formatLogisticModeCz(mode: string | null | undefined): string {
@@ -113,27 +115,12 @@ function formatMaterialNumber(value: number | null | undefined, empty = "—"): 
 }
 
 function formatItemReportedMin(m: number | null | undefined): string {
-  if (m == null || !Number.isFinite(Number(m))) return "—";
-  return `${Math.round(Number(m))} min`;
+  return formatFinancialTime(m);
 }
 
 function formatItemPct(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(Number(v))) return "—";
   return `${Number(v)} %`;
-}
-
-function formatItemLaborCzk(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  if (Number(v) === 0) return "0 Kč";
-  try {
-    return new Intl.NumberFormat("cs-CZ", {
-      style: "currency",
-      currency: "CZK",
-      maximumFractionDigits: 0,
-    }).format(Number(v));
-  } catch {
-    return `${Math.round(Number(v))} Kč`;
-  }
 }
 
 function formatCompactDateTime(value: string | null | undefined): string {
@@ -244,6 +231,9 @@ export default function OrderItemDetailPage({
   const [materialIssueLoading, setMaterialIssueLoading] = useState(false);
   const [materialIssueError, setMaterialIssueError] = useState<string | null>(null);
   const [vpReqForIssue, setVpReqForIssue] = useState<VpRequirementRow[] | null>(null);
+
+  const user = useCurrentUser();
+  const isAdmin = user?.role === "Administrator" || user?.is_admin === true;
 
   const reloadTechnologyMaterials = useCallback(async () => {
     const pid = matchedPortfolioItem?.id;
@@ -536,8 +526,7 @@ export default function OrderItemDetailPage({
   const materialTabUncovered = materialLinkedVpsForTab.some((v) => v.coverage !== "covered");
   const materialTabShowIssueAction = materialLinkedVpsForTab.some(vpHasPendingMaterialIssue);
   const materialTabAnyMovements = materialIssueRows.length > 0;
-  const reportedDurationMin = item.total_duration_min ?? item.reported_time_min;
-  const laborCost = item.labor_cost ?? item.direct_labor_cost;
+  const reportedDurationMin = item.reported_time_min;
   const hasOkNokTotals = item.total_ok_qty != null || item.total_nok_qty != null;
   const linkedWorkReports = Array.isArray(item.work_reports) ? item.work_reports : [];
 
@@ -746,52 +735,42 @@ export default function OrderItemDetailPage({
               </div>
             </div>
           }
-          summaryTiles={
-            <div style={erpDetailKpiPanel}>
-              <div style={{ ...erpDetailSectionEyebrow, color: UI.colors.neutralFg }}>
-                Souhrn položky
-              </div>
-              <div style={erpDetailKpiRow}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={erpDetailKpiLabel}>Vykázaný čas</div>
-                  <div style={{ ...erpDetailKpiValue, fontVariantNumeric: "tabular-nums" }}>
-                    {formatItemReportedMin(reportedDurationMin)}
-                  </div>
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={erpDetailKpiLabel}>Náklad práce</div>
-                  <div style={{ ...erpDetailKpiValue, fontVariantNumeric: "tabular-nums" }}>
-                    {formatItemLaborCzk(laborCost)}
-                  </div>
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={erpDetailKpiLabel}>Hotovo</div>
-                  <div style={{ ...erpDetailKpiValue, fontVariantNumeric: "tabular-nums" }}>
-                    {formatItemPct(item.completion_percent)}
-                  </div>
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={erpDetailKpiLabel}>Výkonnost</div>
-                  <div style={{ ...erpDetailKpiValue, fontVariantNumeric: "tabular-nums" }}>
-                    {formatItemPct(item.performance_percent)}
-                  </div>
-                </div>
-              </div>
-              <div
-                style={{
-                  marginTop: 2,
-                  paddingTop: 10,
-                  borderTop: `1px solid ${UI.colors.divider}`,
-                  display: "flex",
-                  flexWrap: "wrap",
-                  alignItems: "baseline",
-                  columnGap: 20,
-                  rowGap: 6,
-                  fontSize: 12.5,
-                  color: UI.colors.textSecondary,
-                  lineHeight: 1.4,
-                }}
-              >
+          summaryTiles={isAdmin ? (
+            <FinancialKpiPanel
+              title="Souhrn položky"
+              kpis={[
+                { label: "Vykázaný čas", value: formatItemReportedMin(reportedDurationMin) },
+                { label: "Tržba", value: formatFinancialCzk(item.revenue) },
+                { label: "Náklad materiálu", value: formatFinancialCzk(item.material_cost) },
+                { label: "Náklad zaměstnance", value: formatFinancialCzk(item.employee_labor_cost) },
+                { label: "Náklad pracoviště / stroje", value: formatFinancialCzk(item.machine_cost) },
+                { label: "Náklad kooperace / nákup", value: formatFinancialCzk(item.supplier_cost) },
+                { label: "Náklad celkem", value: formatFinancialCzk(item.total_cost) },
+                { label: "Zisk", value: formatFinancialCzk(item.profit) },
+                { label: "Marže %", value: formatFinancialPercent(item.margin_percent) },
+                { label: "Hotovo", value: formatItemPct(item.completion_percent) },
+                { label: "Výkonnost", value: formatFinancialPercent(item.performance_percent) },
+              ]}
+              warnings={[
+                ...(item.missing_employee_rate ? ["Chybí sazba zaměstnance."] : []),
+                ...(item.missing_machine_rate ? ["Chybí sazba pracoviště."] : []),
+                ...(item.missing_material_cost_data
+                  ? ["Některým vydaným materiálům chybí cena nebo data pro výpočet váhy. Náklad materiálu může být 0,00 Kč."]
+                  : []),
+              ]}
+              footer={
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "baseline",
+                    columnGap: 20,
+                    rowGap: 6,
+                    fontSize: 12.5,
+                    color: UI.colors.textSecondary,
+                    lineHeight: 1.4,
+                  }}
+                >
                 <span style={{ minWidth: 0, display: "inline-flex", alignItems: "baseline", gap: 6 }}>
                   <span
                     style={{
@@ -859,8 +838,9 @@ export default function OrderItemDetailPage({
                   </span>
                 ) : null}
               </div>
-            </div>
-          }
+              }
+            />
+          ) : null}
         />
 
         {orderKind === "customer" ? (

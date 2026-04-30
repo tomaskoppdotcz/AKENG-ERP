@@ -11,6 +11,13 @@ export type MaterialIssueAllocationDefaults = {
   minimalni_vydavana_delka_mm: number;
 };
 
+export type MaterialCutPlanLine = {
+  cut_length_mm: number;
+  cut_count: number;
+  finished_pieces_per_cut: number;
+  total_finished_pieces: number;
+};
+
 export type MaterialRequirementRelatedOrder = {
   reservation_id: number;
   /** Merged VP link: underlying reservation ids (issue picks one line). */
@@ -31,6 +38,19 @@ export type MaterialRequirementRelatedOrder = {
   gpn: string | null;
   required_qty: number;
   reserved_qty: number;
+  required_qty_total_mm?: number;
+  available_qty_mm?: number;
+  raw_available_qty_mm?: number;
+  usable_reserved_qty_mm?: number;
+  raw_shortage_mm?: number;
+  covered_piece_count?: number | null;
+  missing_piece_count?: number | null;
+  purchase_required_qty_mm?: number;
+  purchase_cut_plan?: MaterialCutPlanLine[];
+  required_cut_plan?: MaterialCutPlanLine[];
+  current_usable_cut_plan?: MaterialCutPlanLine[];
+  unusable_leftover_mm?: number;
+  purchase_feasibility_validated?: boolean | null;
   status: string | null;
 };
 
@@ -48,6 +68,19 @@ export type MaterialRequirementRow = {
   /** Volné množství po odečtu eligible rezervací (volitelné, backend ≥ tato úprava). */
   free_for_allocation?: number;
   shortage: number;
+  required_qty_total_mm?: number;
+  available_qty_mm?: number;
+  raw_available_qty_mm?: number;
+  usable_reserved_qty_mm?: number;
+  raw_shortage_mm?: number;
+  covered_piece_count?: number | null;
+  missing_piece_count?: number | null;
+  purchase_required_qty_mm?: number;
+  purchase_cut_plan?: MaterialCutPlanLine[];
+  required_cut_plan?: MaterialCutPlanLine[];
+  current_usable_cut_plan?: MaterialCutPlanLine[];
+  unusable_leftover_mm?: number;
+  purchase_feasibility_validated?: boolean | null;
   related_orders: MaterialRequirementRelatedOrder[];
 };
 
@@ -64,6 +97,19 @@ export type VpMaterialLine = {
   available: number;
   free_for_allocation?: number;
   shortage: number;
+  required_qty_total_mm?: number;
+  available_qty_mm?: number;
+  raw_available_qty_mm?: number;
+  usable_reserved_qty_mm?: number;
+  raw_shortage_mm?: number;
+  covered_piece_count?: number | null;
+  missing_piece_count?: number | null;
+  purchase_required_qty_mm?: number;
+  purchase_cut_plan?: MaterialCutPlanLine[];
+  required_cut_plan?: MaterialCutPlanLine[];
+  current_usable_cut_plan?: MaterialCutPlanLine[];
+  unusable_leftover_mm?: number;
+  purchase_feasibility_validated?: boolean | null;
   status: string | null;
   reservation_id: number;
   reservation_ids?: number[];
@@ -99,19 +145,6 @@ export type VpRequirementRow = {
   is_material_ready: boolean;
   coverage: "covered" | "uncovered";
   materials: VpMaterialLine[];
-};
-
-export type MaterialPurchaseLinePayload = {
-  material_library_item_id: number;
-  qty_ordered: number;
-  traceability_note?: string | null;
-};
-
-export type CustomerOption = {
-  id: number;
-  code: string;
-  name: string;
-  is_active?: boolean;
 };
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -150,58 +183,6 @@ export async function getMaterialRequirementsByVp(): Promise<VpRequirementRow[]>
   const res = await akengFetch(`${API_BASE}/planning/material/requirements-by-vp`);
   if (!res.ok) {
     let message = "Nepodařilo se načíst požadavky podle VP.";
-    try {
-      const data = await res.json();
-      if (typeof data?.detail === "string") message = data.detail;
-    } catch {
-      // ignore
-    }
-    throw new Error(message);
-  }
-  return res.json();
-}
-
-export async function listCustomersForPurchase(): Promise<CustomerOption[]> {
-  const res = await akengFetch(`${API_BASE}/customers`);
-  if (!res.ok) {
-    throw new Error("Nepodařilo se načíst dodavatele (adresář zákazníků).");
-  }
-  const raw = await res.json();
-  if (!Array.isArray(raw)) return [];
-  return raw.map((c: { id: number; code: string; name: string; is_active?: boolean }) => ({
-    id: c.id,
-    code: c.code,
-    name: c.name,
-    is_active: c.is_active,
-  }));
-}
-
-export async function postMaterialPurchaseOrder(payload: {
-  supplier_customer_id: number;
-  lines: MaterialPurchaseLinePayload[];
-  header_note?: string | null;
-}): Promise<{
-  status: string;
-  material_purchase_order_id: number;
-  order_number?: string;
-  lines_count: number;
-  supplier_name: string;
-}> {
-  const res = await akengFetch(`${API_BASE}/planning/material/purchase-orders`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      supplier_customer_id: payload.supplier_customer_id,
-      lines: payload.lines.map((l) => ({
-        material_library_item_id: l.material_library_item_id,
-        qty_ordered: l.qty_ordered,
-        traceability_note: l.traceability_note?.trim() || null,
-      })),
-      header_note: payload.header_note?.trim() || null,
-    }),
-  });
-  if (!res.ok) {
-    let message = "Uložení nákupní objednávky se nepodařilo.";
     try {
       const data = await res.json();
       if (typeof data?.detail === "string") message = data.detail;
@@ -255,14 +236,21 @@ export async function postMaterialIssue(payload: MaterialIssuePayload): Promise<
   });
   if (!res.ok) {
     let message = "Vydání materiálu se nepodařilo.";
+    let extraSuggestion: string | undefined;
     try {
       const data = await res.json();
       if (typeof data?.detail === "string") message = data.detail;
       else if (data?.detail && typeof data.detail.message === "string") message = data.detail.message;
+      const sug =
+        data?.detail && typeof data.detail === "object" && data.detail.allocation_suggestion
+          ? (data.detail.allocation_suggestion as { recommendation?: string })
+          : null;
+      extraSuggestion =
+        typeof sug?.recommendation === "string" && sug.recommendation.trim() !== "" ? sug.recommendation : undefined;
     } catch {
       // ignore
     }
-    throw new Error(message);
+    throw new Error(extraSuggestion ? `${message}\n\n${extraSuggestion}` : message);
   }
   return res.json();
 }

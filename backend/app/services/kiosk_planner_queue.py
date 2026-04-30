@@ -234,6 +234,7 @@ def list_planning_operations_for_kiosk_machine(db: Session, machine: Machine) ->
         stmt = (
             select(PlanningOperation)
             .where(PlanningOperation.machine_id == int(machine.id))
+            .where(func.coalesce(PlanningOperation.is_cooperation, False).is_(False))
             .where(_open_queue_status_clause())
             .where(_kiosk_queue_active_production_workflow_clause())
             .order_by(
@@ -267,6 +268,7 @@ def list_planning_operations_for_kiosk_machine(db: Session, machine: Machine) ->
                 func.coalesce(PlanningOperation.workplace_library_item_id, PoM.workplace_library_item_id) == wp_id,
             )
         )
+        .where(func.coalesce(PlanningOperation.is_cooperation, False).is_(False))
         .where(_open_queue_status_clause())
         .where(_kiosk_queue_active_production_workflow_clause())
         .order_by(

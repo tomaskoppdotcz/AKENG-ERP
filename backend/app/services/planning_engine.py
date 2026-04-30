@@ -14,6 +14,10 @@ from app.services.planning_operation_status import (
     normalize_planning_operation_status,
     planning_operation_status_is_terminal,
 )
+from app.services.cooperation_operations import (
+    cooperation_blocks_successors,
+    cooperation_operation_exclusion_reason,
+)
 from app.services.vp_operation_generator import normalize_planning_queue_statuses_for_vp_code
 
 
@@ -290,6 +294,10 @@ class PlanningEngineService:
         first = True
         for o in ordered_ops:
             if _chain_terminal_completed(o.status):
+                continue
+            if bool(getattr(o, "is_cooperation", False)):
+                if cooperation_blocks_successors(o):
+                    break
                 continue
             dur = self._operation_duration_min(o)
             if dur <= 0:
@@ -677,6 +685,12 @@ class PlanningEngineService:
             if _chain_terminal_completed(o.status):
                 out[oid] = "operation_completed"
                 continue
+            coop_reason = cooperation_operation_exclusion_reason(o)
+            if coop_reason is not None:
+                out[oid] = coop_reason
+                if cooperation_blocks_successors(o):
+                    chain_blocked = "blocked_after_cooperation"
+                continue
             if chain_blocked:
                 out[oid] = chain_blocked
                 continue
@@ -757,6 +771,8 @@ class PlanningEngineService:
                         "operation_no": int(op.operation_no or 0),
                         "status": op.status,
                         "material_ready": mat,
+                "is_cooperation": bool(getattr(op, "is_cooperation", False)),
+                "cooperation_status": getattr(op, "cooperation_status", None),
                         "vp_material_released": released,
                         "vp_resume_after_completed": vp_resume.isoformat() if vp_resume else None,
                         "eligible_for_schedule": is_eligible,
@@ -919,6 +935,14 @@ class PlanningEngineService:
                 if _chain_terminal_completed(op.status):
                     chain_cursor = self._bump_chain_cursor_after_op_end(chain_cursor, op, buf=buf)
                     vp_next[woo] = chain_cursor
+                    continue
+                if bool(getattr(op, "is_cooperation", False)):
+                    op.planned_start = None
+                    op.planned_end = None
+                    op.queue_position = None
+                    op.latest_start = None
+                    if cooperation_blocks_successors(op):
+                        break
                     continue
                 if _shopfloor_active(op.status):
                     end = op.actual_end or op.planned_end

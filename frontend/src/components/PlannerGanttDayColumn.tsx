@@ -1,7 +1,7 @@
 import React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import type { PlannerGanttItem } from "../services/plannerApi";
-import { plannerGanttBarColor } from "../utils/plannerGanttStatus";
+import { plannerGanttItemColor } from "../utils/plannerGanttStatus";
 import { PlannerGanttStackedBar } from "./PlannerGanttStackedBar";
 import { ganttCellItemKey } from "./plannerGanttDayUtils";
 
@@ -119,7 +119,7 @@ export function PlannerGanttDayColumn({
                 item={item}
                 isDragging={activeDragItemKey === ganttCellItemKey(item)}
                 onSelect={onSelect}
-                barColor={plannerGanttBarColor(item.status)}
+                barColor={plannerGanttItemColor(item)}
                 minBlockHeight={minBlockHeight}
               />
               <ColumnDropSpacer

@@ -6,13 +6,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from app.api.deps import require_action
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, func, inspect, or_, select, text
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
-from app.models.master_data import Customer, Machine
+from app.models.master_data import Machine
 from app.models.machine_shift_template import MachineShiftTemplate
-from app.models.material_library import MaterialLibraryItem
-from app.models.material_purchase import MaterialPurchaseOrder, MaterialPurchaseOrderLine
 from app.models.material_stock import MaterialReservation, MaterialStockItem
 from app.models.orders import CustomerOrder, Job, JobItem, ProductionOrder
 from app.models.planning import MachineCalendar, MachineSchedule, PlanningOperation, PlanningScheduleSegment
@@ -41,13 +39,37 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_planning_shift_schema() -> None:
-    """SQLite/Postgres: sloupec machine_calendar.shift_start_minutes + tabulka šablon přes metadata.create_all."""
+    """SQLite/Postgres: drobné plánovací sloupce doplněné nad starší lokální DB."""
     try:
         insp = inspect(engine)
-        cols = {c["name"] for c in insp.get_columns("machine_calendar")}
-        if "shift_start_minutes" not in cols:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            cols = {c["name"] for c in insp.get_columns("machine_calendar")}
+            if "shift_start_minutes" not in cols:
                 conn.execute(text("ALTER TABLE machine_calendar ADD COLUMN shift_start_minutes INTEGER"))
+            if "planning_operations" in insp.get_table_names():
+                op_cols = {c["name"] for c in insp.get_columns("planning_operations")}
+                for col, sql_type in (
+                    ("is_cooperation", "BOOLEAN NOT NULL DEFAULT 0"),
+                    ("cooperation_status", "VARCHAR(30)"),
+                    ("cooperation_category", "VARCHAR(80)"),
+                    ("preferred_supplier_id", "INTEGER"),
+                    ("cooperation_supplier_purchase_order_id", "INTEGER"),
+                    ("cooperation_sent_at", "DATETIME"),
+                    ("cooperation_received_at", "DATETIME"),
+                    ("cooperation_note", "TEXT"),
+                ):
+                    if col not in op_cols:
+                        conn.execute(text(f"ALTER TABLE planning_operations ADD COLUMN {col} {sql_type}"))
+                conn.execute(
+                    text(
+                        """
+                        UPDATE planning_operations
+                        SET is_cooperation = 1,
+                            cooperation_status = COALESCE(cooperation_status, 'pending_send')
+                        WHERE LOWER(COALESCE(operation_name, '')) LIKE '%kooperace%'
+                        """
+                    )
+                )
     except Exception as e:
         logger.warning("[planning] ensure_planning_shift_schema skipped: %s", e)
     _ensure_machine_shift_template_workplace_column()
@@ -116,6 +138,9 @@ class UpdatePlanningOperationRequest(BaseModel):
     status: str | None = None
     material_ready: bool | None = None
     is_locked: bool | None = None
+    is_cooperation: bool | None = None
+    cooperation_status: str | None = None
+    cooperation_note: str | None = None
 
 
 class MachineShiftTemplateUpsert(BaseModel):
@@ -535,6 +560,17 @@ def update_operation(
     if payload.is_locked is not None:
         op.is_locked = payload.is_locked
 
+    if payload.is_cooperation is not None:
+        op.is_cooperation = bool(payload.is_cooperation)
+        if op.is_cooperation and not op.cooperation_status:
+            op.cooperation_status = "pending_send"
+
+    if payload.cooperation_status is not None:
+        op.cooperation_status = payload.cooperation_status
+
+    if payload.cooperation_note is not None:
+        op.cooperation_note = payload.cooperation_note
+
     db.commit()
 
     service = PlanningEngineService(db)
@@ -554,6 +590,9 @@ def update_operation(
             "status": op.status,
             "material_ready": op.material_ready,
             "is_locked": op.is_locked,
+            "is_cooperation": bool(getattr(op, "is_cooperation", False)),
+            "cooperation_status": getattr(op, "cooperation_status", None),
+            "cooperation_note": getattr(op, "cooperation_note", None),
             "planned_start": op.planned_start.isoformat() if op.planned_start else None,
             "planned_end": op.planned_end.isoformat() if op.planned_end else None,
         },
@@ -648,175 +687,3 @@ def get_material_requirements(db: Session = Depends(get_db)):
 @router.get("/material/requirements-by-vp")
 def get_material_requirements_by_vp(db: Session = Depends(get_db)):
     return build_vp_material_requirements(db)
-
-
-class MaterialPurchaseLinePayload(BaseModel):
-    material_library_item_id: int
-    qty_ordered: float
-    traceability_note: str | None = None
-
-
-class MaterialPurchaseOrderPayload(BaseModel):
-    supplier_customer_id: int
-    lines: list[MaterialPurchaseLinePayload]
-    header_note: str | None = None
-
-
-MATERIAL_PURCHASE_ORDER_STATUSES = frozenset({"draft", "ordered", "confirmed", "received", "cancelled"})
-
-
-def _material_purchase_order_number(po_id: int) -> str:
-    return f"NMPO-{int(po_id):06d}"
-
-
-def _dt_iso(dt) -> str:
-    if dt is None:
-        return ""
-    s = dt.isoformat()
-    if getattr(dt, "tzinfo", None) is None:
-        return f"{s}Z"
-    return s
-
-
-@router.get("/material/purchase-orders")
-def list_material_purchase_orders(db: Session = Depends(get_db)):
-    pos = (
-        db.scalars(
-            select(MaterialPurchaseOrder)
-            .options(selectinload(MaterialPurchaseOrder.lines))
-            .order_by(MaterialPurchaseOrder.id.desc())
-        )
-        .unique()
-        .all()
-    )
-    items = []
-    for p in pos:
-        lines = list(p.lines or [])
-        items.append(
-            {
-                "id": int(p.id),
-                "order_number": _material_purchase_order_number(p.id),
-                "supplier_name": p.supplier_name_snapshot,
-                "supplier_customer_id": int(p.supplier_customer_id),
-                "created_at": _dt_iso(p.created_at),
-                "status": p.status,
-                "lines_count": len(lines),
-                "total_qty_ordered": float(sum(float(x.qty_ordered or 0) for x in lines)),
-            }
-        )
-    return {"items": items}
-
-
-@router.get("/material/purchase-orders/{po_id}")
-def get_material_purchase_order(po_id: int, db: Session = Depends(get_db)):
-    po = db.scalar(
-        select(MaterialPurchaseOrder)
-        .options(selectinload(MaterialPurchaseOrder.lines))
-        .where(MaterialPurchaseOrder.id == int(po_id))
-    )
-    if po is None:
-        raise HTTPException(status_code=404, detail="Nákupní objednávka nebyla nalezena.")
-    lines = sorted(po.lines or [], key=lambda x: int(x.id))
-    mat_ids = {int(l.material_library_item_id) for l in lines}
-    mats_by_id: dict[int, MaterialLibraryItem] = {}
-    if mat_ids:
-        mats = db.scalars(select(MaterialLibraryItem).where(MaterialLibraryItem.id.in_(mat_ids))).all()
-        mats_by_id = {int(m.id): m for m in mats}
-    out_lines = []
-    for ln in lines:
-        m = mats_by_id.get(int(ln.material_library_item_id))
-        out_lines.append(
-            {
-                "id": int(ln.id),
-                "material_library_item_id": int(ln.material_library_item_id),
-                "qty_ordered": float(ln.qty_ordered),
-                "unit": ln.unit or (m.unit if m else None),
-                "traceability_note": ln.traceability_note,
-                "material": {
-                    "code": m.code if m else None,
-                    "name": m.name if m else None,
-                    "dimension": m.dimension if m else None,
-                    "unit": m.unit if m else None,
-                },
-            }
-        )
-    return {
-        "id": int(po.id),
-        "order_number": _material_purchase_order_number(po.id),
-        "supplier_customer_id": int(po.supplier_customer_id),
-        "supplier_name": po.supplier_name_snapshot,
-        "status": po.status,
-        "created_at": _dt_iso(po.created_at),
-        "header_note": po.header_note,
-        "lines": out_lines,
-    }
-
-
-class MaterialPurchaseOrderPatchPayload(BaseModel):
-    status: str
-
-
-@router.patch("/material/purchase-orders/{po_id}")
-def patch_material_purchase_order(
-    po_id: int,
-    body: MaterialPurchaseOrderPatchPayload,
-    db: Session = Depends(get_db),
-    _rbac: None = Depends(require_action("purchase.write")),
-):
-    st = (body.status or "").strip().lower()
-    if st not in MATERIAL_PURCHASE_ORDER_STATUSES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Neplatný stav. Povolené: {', '.join(sorted(MATERIAL_PURCHASE_ORDER_STATUSES))}.",
-        )
-    po = db.get(MaterialPurchaseOrder, int(po_id))
-    if po is None:
-        raise HTTPException(status_code=404, detail="Nákupní objednávka nebyla nalezena.")
-    po.status = st
-    db.commit()
-    return {"status": "ok", "material_purchase_order_id": int(po.id)}
-
-
-@router.post("/material/purchase-orders")
-def create_material_purchase_order(
-    body: MaterialPurchaseOrderPayload,
-    db: Session = Depends(get_db),
-    _rbac: None = Depends(require_action("purchase.write")),
-):
-    if not body.lines:
-        raise HTTPException(status_code=422, detail="Alespoň jedna řádka objednávky.")
-    cust = db.get(Customer, int(body.supplier_customer_id))
-    if cust is None:
-        raise HTTPException(status_code=404, detail="Dodavatel (zákazník v adresáři) nebyl nalezen.")
-    po = MaterialPurchaseOrder(
-        supplier_customer_id=int(cust.id),
-        supplier_name_snapshot=(cust.name or "").strip() or cust.code,
-        status="draft",
-        header_note=(body.header_note.strip() if body.header_note else None) or None,
-    )
-    db.add(po)
-    db.flush()
-    for ln in body.lines:
-        if ln.qty_ordered <= 0:
-            raise HTTPException(status_code=422, detail="Množství musí být kladné.")
-        lib = db.get(MaterialLibraryItem, int(ln.material_library_item_id))
-        if lib is None:
-            raise HTTPException(status_code=404, detail=f"Materiál ID {ln.material_library_item_id} neexistuje.")
-        db.add(
-            MaterialPurchaseOrderLine(
-                purchase_order_id=int(po.id),
-                material_library_item_id=int(ln.material_library_item_id),
-                qty_ordered=float(ln.qty_ordered),
-                unit=(lib.unit or "").strip() or None,
-                traceability_note=(ln.traceability_note.strip() if ln.traceability_note else None) or None,
-            )
-        )
-    db.commit()
-    db.refresh(po)
-    return {
-        "status": "ok",
-        "material_purchase_order_id": int(po.id),
-        "order_number": _material_purchase_order_number(po.id),
-        "lines_count": len(body.lines),
-        "supplier_name": po.supplier_name_snapshot,
-    }

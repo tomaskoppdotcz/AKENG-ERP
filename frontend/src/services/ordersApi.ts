@@ -113,6 +113,18 @@ export type OrderDetailItem = {
   reported_time_min?: number;
   labor_cost?: number;
   direct_labor_cost?: number;
+  employee_labor_cost?: number;
+  machine_cost?: number;
+  material_cost?: number;
+  supplier_cost?: number;
+  total_cost?: number;
+  revenue?: number;
+  profit?: number;
+  margin_percent?: number | null;
+  revenue_source?: string | null;
+  missing_employee_rate?: boolean;
+  missing_machine_rate?: boolean;
+  missing_material_cost_data?: boolean;
   completion_percent?: number | null;
   performance_percent?: number | null;
   current_phase?: string | null;
@@ -170,6 +182,16 @@ export type OrderDetailResponse = {
     current_phase?: string | null;
     current_location?: string | null;
     operational_summary_cs?: string | null;
+    total_reported_time_min?: number;
+    total_employee_labor_cost?: number;
+    total_machine_cost?: number;
+    total_material_cost?: number;
+    total_supplier_cost?: number;
+    total_cost?: number;
+    total_revenue?: number;
+    total_profit?: number;
+    margin_percent?: number | null;
+    revenue_source?: string | null;
   };
   items: OrderDetailItem[];
 };
@@ -490,6 +512,26 @@ export async function getOrderDetail(customerOrderId: number): Promise<OrderDeta
             current_phase: s.current_phase ?? null,
             current_location: s.current_location ?? null,
             operational_summary_cs: s.operational_summary_cs ?? null,
+            total_reported_time_min:
+              s.total_reported_time_min != null ? Number(s.total_reported_time_min) : undefined,
+            total_employee_labor_cost:
+              s.total_employee_labor_cost != null ? Number(s.total_employee_labor_cost) : undefined,
+            total_machine_cost:
+              s.total_machine_cost != null ? Number(s.total_machine_cost) : undefined,
+            total_material_cost:
+              s.total_material_cost != null ? Number(s.total_material_cost) : undefined,
+            total_supplier_cost:
+              s.total_supplier_cost != null ? Number(s.total_supplier_cost) : undefined,
+            total_cost: s.total_cost != null ? Number(s.total_cost) : undefined,
+            total_revenue: s.total_revenue != null ? Number(s.total_revenue) : undefined,
+            total_profit: s.total_profit != null ? Number(s.total_profit) : undefined,
+            margin_percent:
+              s.margin_percent === undefined
+                ? undefined
+                : s.margin_percent === null
+                  ? null
+                  : Number(s.margin_percent),
+            revenue_source: s.revenue_source ?? null,
           };
         }
         return {

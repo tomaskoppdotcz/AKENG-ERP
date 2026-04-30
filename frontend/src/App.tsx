@@ -12,7 +12,8 @@ import MaterialRemnantStockPage from "./pages/MaterialRemnantStockPage";
 import ProductStockPage from "./pages/ProductStockPage";
 import ProductionOrdersPage from "./pages/ProductionOrdersPage";
 import MaterialRequirementsPage from "./pages/MaterialRequirementsPage";
-import MaterialPurchaseOrdersPage from "./pages/MaterialPurchaseOrdersPage";
+import SupplierRfqsPage from "./pages/SupplierRfqsPage";
+import SupplierPurchaseOrdersPage from "./pages/SupplierPurchaseOrdersPage";
 import PlannerPage from "./pages/PlannerPage";
 import ShopfloorKioskPage from "./pages/ShopfloorKioskPage";
 import WorkReportsPage from "./pages/WorkReportsPage";
@@ -367,6 +368,7 @@ export default function App() {
   const [ordersInitialCustomerOrderId, setOrdersInitialCustomerOrderId] = useState<number | null>(null);
   const [previewDrawer, setPreviewDrawer] = useState<ErpPreviewDrawerState>(null);
   const [portfolioInitialSearch, setPortfolioInitialSearch] = useState<string | null>(null);
+  const [supplierPurchaseOrderInitialId, setSupplierPurchaseOrderInitialId] = useState<number | null>(null);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState<string | null>(null);
   const [navSidebarOrder, setNavSidebarOrder] = useState<Record<string, string[]> | null>(null);
@@ -533,13 +535,13 @@ export default function App() {
         });
         setActiveModule("Požadavky materiálu");
       },
-      onOpenMaterialPurchase: () => {
+      onOpenSupplierPurchaseOrders: () => {
         openWorkspaceTab({
           kind: "module",
-          moduleKey: "Nákup materiálu",
-          title: "Nákup materiálu",
+          moduleKey: "Objednávky",
+          title: "Objednávky",
         });
-        setActiveModule("Nákup materiálu");
+        setActiveModule("Objednávky");
       },
       onOpenPlanning: () => {
         openWorkspaceTab({ kind: "module", moduleKey: "Plánování", title: "Plánování" });
@@ -677,10 +679,6 @@ export default function App() {
     }
     if (tab.kind === "productStock") {
       setActiveModule("Sklad výrobků");
-      return;
-    }
-    if (tab.kind === "materialPurchaseOrder") {
-      setActiveModule("Nákup materiálu");
       return;
     }
     if (tab.kind === "workReport" || tab.kind === "workReportEdit" || tab.kind === "workReportNew") {
@@ -1052,18 +1050,22 @@ export default function App() {
           onOpenCustomerOrderInWorkspaceTab={(customerOrderId, titleHint) =>
             openWorkspaceTab({ kind: "orderCard", customerOrderId, title: titleHint })
           }
-          onOpenMaterialPurchaseOrderInWorkspaceTab={(materialPurchaseOrderId, titleHint) =>
-            openWorkspaceTab({ kind: "materialPurchaseOrder", materialPurchaseOrderId, title: titleHint })
-          }
+          onOpenSupplierPurchaseOrderInWorkspaceTab={(supplierPurchaseOrderId) => {
+            setSupplierPurchaseOrderInitialId(supplierPurchaseOrderId);
+            openWorkspaceTab({ kind: "module", moduleKey: "Objednávky", title: "Objednávky" });
+            setActiveModule("Objednávky");
+          }}
         />
       );
     }
-    if (moduleKey === "Nákup materiálu") {
+    if (moduleKey === "Poptávky" || moduleKey === "Poptávky naše") {
+      return <SupplierRfqsPage />;
+    }
+    if (moduleKey === "Objednávky" || moduleKey === "Objednávky naše") {
       return (
-        <MaterialPurchaseOrdersPage
-          onOpenPurchaseOrderInWorkspaceTab={(materialPurchaseOrderId, titleHint) =>
-            openWorkspaceTab({ kind: "materialPurchaseOrder", materialPurchaseOrderId, title: titleHint })
-          }
+        <SupplierPurchaseOrdersPage
+          initialPurchaseOrderId={supplierPurchaseOrderInitialId}
+          onInitialPurchaseOrderOpened={() => setSupplierPurchaseOrderInitialId(null)}
         />
       );
     }

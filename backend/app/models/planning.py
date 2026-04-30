@@ -16,7 +16,7 @@ class PlanningOperation(Base):
     operation_name = Column(String(100), nullable=False)
     operation_no = Column(Integer, nullable=False)
 
-    machine_id = Column(Integer, ForeignKey("machines.id"), nullable=False)
+    machine_id = Column(Integer, ForeignKey("machines.id"), nullable=True)
     workplace_library_item_id = Column(Integer, ForeignKey("workplace_library_items.id"), nullable=True)
 
     qty = Column(Integer, nullable=False, default=0)
@@ -50,6 +50,15 @@ class PlanningOperation(Base):
     status = Column(String(20), nullable=False, default="planned")
     planning_mode = Column(String(20), nullable=True, default="auto")
     is_locked = Column(Boolean, nullable=True, default=False)
+
+    is_cooperation = Column(Boolean, nullable=False, default=False)
+    cooperation_status = Column(String(30), nullable=True)
+    cooperation_category = Column(String(80), nullable=True)
+    preferred_supplier_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
+    cooperation_supplier_purchase_order_id = Column(Integer, ForeignKey("supplier_purchase_orders.id"), nullable=True)
+    cooperation_sent_at = Column(DateTime, nullable=True)
+    cooperation_received_at = Column(DateTime, nullable=True)
+    cooperation_note = Column(Text, nullable=True)
 
 
 class MachineCalendar(Base):

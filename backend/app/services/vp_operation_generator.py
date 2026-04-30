@@ -23,6 +23,7 @@ from app.services.planning_operation_status import (
     normalize_planning_operation_status,
     planning_operation_status_is_protected_for_queue_normalize,
 )
+from app.services.cooperation_operations import normalize_cooperation_status, operation_is_cooperation
 from app.services.vp_pila_operation_notes import apply_pila_cutting_notes_to_vp_operations
 
 logger = logging.getLogger(__name__)
@@ -214,6 +215,23 @@ def _resolve_machine_for_portfolio_template_op(db: Session, op: PortfolioTechnol
     return get_or_create_scheduling_machine_for_workplace(db, int(op.workplace_library_item_id))
 
 
+def _external_cooperation_machine(db: Session) -> Machine:
+    """Fallback anchor for external operations; cooperation rows are excluded from capacity scheduling."""
+    machine = db.scalar(select(Machine).where(Machine.machine_code == "KOOPERACE-EXT"))
+    if machine is None:
+        machine = Machine(
+            machine_code="KOOPERACE-EXT",
+            name="Kooperace / externí operace",
+            machine_type="external",
+            planning_enabled=False,
+            is_plannable=False,
+            is_active=True,
+        )
+        db.add(machine)
+        db.flush()
+    return machine
+
+
 def _resolve_machine_from_vp_order_operation(
     db: Session, po: ProductionOrder, tpl_op: PortfolioTechnologyTemplateOperation
 ) -> Machine | None:
@@ -355,13 +373,20 @@ def _create_planning_ops_from_portfolio_tp(
         .order_by(PortfolioTechnologyTemplateOperation.operation_no.asc(), PortfolioTechnologyTemplateOperation.id.asc())
     ).all()
 
-    resolved: list[tuple[int, PortfolioTechnologyTemplateOperation, Machine]] = []
+    resolved: list[tuple[int, PortfolioTechnologyTemplateOperation, Machine | None]] = []
     skipped: list[dict] = []
     for idx, op in enumerate(op_rows, start=1):
+        is_coop = operation_is_cooperation(
+            operation_name=op.operation_name,
+            outsourcing=bool(getattr(op, "outsourcing", False)),
+            manual=bool(getattr(op, "is_cooperation", False)),
+        )
         machine = _resolve_machine_for_portfolio_template_op(db, op)
         if machine is None:
             machine = _resolve_machine_from_vp_order_operation(db, po, op)
-        if machine is None:
+        if machine is None and is_coop:
+            machine = _external_cooperation_machine(db)
+        if machine is None and not is_coop:
             skipped.append(
                 {
                     "operation_no": int(op.operation_no),
@@ -391,11 +416,20 @@ def _create_planning_ops_from_portfolio_tp(
         total_labor = run_piece * float(qty_pl)
         total_time = setup + total_labor
         st = "ready" if int(effective_no) == first_no else "waiting_release"
+        is_coop = operation_is_cooperation(
+            operation_name=op.operation_name,
+            outsourcing=bool(getattr(op, "outsourcing", False)),
+            manual=bool(getattr(op, "is_cooperation", False)),
+        )
         wp_fk = None
         if op.workplace_library_item_id is not None:
             wp_fk = int(op.workplace_library_item_id)
-        elif machine.workplace_library_item_id is not None:
+        elif machine is not None and machine.workplace_library_item_id is not None:
             wp_fk = int(machine.workplace_library_item_id)
+        cooperation_status = normalize_cooperation_status(
+            getattr(op, "default_cooperation_status", None),
+            is_cooperation=is_coop,
+        )
         planning = PlanningOperation(
             order_item_id=job_item.id,
             product_group_id=None,
@@ -403,7 +437,7 @@ def _create_planning_ops_from_portfolio_tp(
             gpn=gpn,
             operation_name=op.operation_name,
             operation_no=int(effective_no),
-            machine_id=int(machine.id),
+            machine_id=int(machine.id) if machine is not None else None,
             workplace_library_item_id=wp_fk,
             qty=qty_pl,
             input_diameter_mm=None,
@@ -425,6 +459,11 @@ def _create_planning_ops_from_portfolio_tp(
             status=st,
             planning_mode="auto",
             is_locked=False,
+            is_cooperation=is_coop,
+            cooperation_status=cooperation_status if is_coop else None,
+            cooperation_category=getattr(op, "cooperation_category", None),
+            preferred_supplier_id=getattr(op, "preferred_supplier_id", None),
+            cooperation_note=getattr(op, "cooperation_note", None),
         )
         db.add(planning)
         created += 1
@@ -470,22 +509,33 @@ def _create_planning_ops_from_technology_library(
     qty_pl = _planning_qty_for_vp(po, job_item)
     input_diameter = _extract_diameter_from_template(template)
 
-    resolved: list[tuple[int, Any, Machine]] = []
+    resolved: list[tuple[int, Any, Machine | None]] = []
     skipped: list[dict] = []
     ordered_ops = sorted(template.operations, key=lambda x: (int(x.operation_no or 0), int(x.id)))
     for idx, op in enumerate(ordered_ops, start=1):
+        is_coop = operation_is_cooperation(
+            operation_name=op.operation_name,
+            manual=bool(getattr(op, "is_cooperation", False)),
+        )
         wid = getattr(op, "workplace_library_item_id", None)
         if wid is None:
-            skipped.append(
-                {
-                    "operation_no": int(op.operation_no),
-                    "operation_name": op.operation_name,
-                    "reason": "missing_workplace_library_item_id",
-                }
-            )
+            if not is_coop:
+                skipped.append(
+                    {
+                        "operation_no": int(op.operation_no),
+                        "operation_name": op.operation_name,
+                        "reason": "missing_workplace_library_item_id",
+                    }
+                )
+                continue
+            machine = _external_cooperation_machine(db)
+            effective_no = idx * 10
+            resolved.append((effective_no, op, machine))
             continue
         machine = get_or_create_scheduling_machine_for_workplace(db, int(wid))
-        if machine is None:
+        if machine is None and is_coop:
+            machine = _external_cooperation_machine(db)
+        if machine is None and not is_coop:
             skipped.append(
                 {
                     "operation_no": int(op.operation_no),
@@ -513,11 +563,19 @@ def _create_planning_ops_from_technology_library(
         total_labor = float(op.labor_time_per_piece_min or 0) * float(qty_pl)
         total_time = float(op.setup_time_min or 0) + total_labor
         st = "ready" if int(effective_no) == first_no else "waiting_release"
+        is_coop = operation_is_cooperation(
+            operation_name=op.operation_name,
+            manual=bool(getattr(op, "is_cooperation", False)),
+        )
         wp_fk = getattr(op, "workplace_library_item_id", None)
-        if wp_fk is None:
+        if wp_fk is None and machine is not None:
             wp_fk = machine.workplace_library_item_id
-        if wp_fk is None:
+        if wp_fk is None and not is_coop:
             continue
+        cooperation_status = normalize_cooperation_status(
+            getattr(op, "default_cooperation_status", None),
+            is_cooperation=is_coop,
+        )
         planning = PlanningOperation(
             order_item_id=job_item.id,
             product_group_id=None,
@@ -525,8 +583,8 @@ def _create_planning_ops_from_technology_library(
             gpn=gpn,
             operation_name=op.operation_name,
             operation_no=int(effective_no),
-            machine_id=int(machine.id),
-            workplace_library_item_id=int(wp_fk),
+            machine_id=int(machine.id) if machine is not None else None,
+            workplace_library_item_id=int(wp_fk) if wp_fk is not None else None,
             qty=qty_pl,
             input_diameter_mm=input_diameter,
             setup_time_min=float(op.setup_time_min or 0),
@@ -547,6 +605,11 @@ def _create_planning_ops_from_technology_library(
             status=st,
             planning_mode="auto",
             is_locked=False,
+            is_cooperation=is_coop,
+            cooperation_status=cooperation_status if is_coop else None,
+            cooperation_category=getattr(op, "cooperation_category", None),
+            preferred_supplier_id=getattr(op, "preferred_supplier_id", None),
+            cooperation_note=getattr(op, "cooperation_note", None),
         )
         db.add(planning)
         created += 1

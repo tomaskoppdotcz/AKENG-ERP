@@ -47,6 +47,11 @@ class FinishOperationRequest(BaseModel):
 
 
 def _machine_for_shopfloor_op(db: Session, op: PlanningOperation) -> Machine:
+    if bool(getattr(op, "is_cooperation", False)):
+        raise HTTPException(
+            status_code=409,
+            detail="Kooperační operace se neprovádí na interním stroji v kiosku.",
+        )
     mid = op.machine_id
     if not mid:
         raise HTTPException(

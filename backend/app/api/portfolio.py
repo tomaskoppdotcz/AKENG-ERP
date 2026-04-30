@@ -33,7 +33,7 @@ def _sync_material_reservations_for_template(db: Session, template_id: int) -> N
 
 
 def ensure_portfolio_technology_operation_library_fks(engine: Engine) -> None:
-    """SQLite: add FK columns to template operations if missing (create_all does not migrate)."""
+    """SQLite: add TP operation columns if missing (create_all does not migrate)."""
     try:
         url = str(engine.url)
     except Exception:
@@ -55,6 +55,20 @@ def ensure_portfolio_technology_operation_library_fks(engine: Engine) -> None:
         stmts.append(
             "ALTER TABLE portfolio_technology_template_operations ADD COLUMN workplace_library_item_id INTEGER"
         )
+    if "is_cooperation" not in cols:
+        stmts.append(
+            "ALTER TABLE portfolio_technology_template_operations ADD COLUMN is_cooperation BOOLEAN NOT NULL DEFAULT 0"
+        )
+    if "default_cooperation_status" not in cols:
+        stmts.append(
+            "ALTER TABLE portfolio_technology_template_operations ADD COLUMN default_cooperation_status VARCHAR(30)"
+        )
+    if "cooperation_category" not in cols:
+        stmts.append("ALTER TABLE portfolio_technology_template_operations ADD COLUMN cooperation_category VARCHAR(80)")
+    if "preferred_supplier_id" not in cols:
+        stmts.append("ALTER TABLE portfolio_technology_template_operations ADD COLUMN preferred_supplier_id INTEGER")
+    if "cooperation_note" not in cols:
+        stmts.append("ALTER TABLE portfolio_technology_template_operations ADD COLUMN cooperation_note TEXT")
     if not stmts:
         return
 
@@ -223,6 +237,11 @@ class PortfolioOperationUpsert(BaseModel):
     labor_time_per_piece_min: float = 0
     control_required: bool = False
     outsourcing: bool = False
+    is_cooperation: bool = False
+    default_cooperation_status: str | None = None
+    cooperation_category: str | None = None
+    preferred_supplier_id: int | None = None
+    cooperation_note: str | None = None
     note: str | None = None
 
 
@@ -238,6 +257,11 @@ class PortfolioOperationUpdate(BaseModel):
     labor_time_per_piece_min: float | None = None
     control_required: bool | None = None
     outsourcing: bool | None = None
+    is_cooperation: bool | None = None
+    default_cooperation_status: str | None = None
+    cooperation_category: str | None = None
+    preferred_supplier_id: int | None = None
+    cooperation_note: str | None = None
     note: str | None = None
 
 
@@ -351,6 +375,11 @@ def _operation_to_payload(op: PortfolioTechnologyTemplateOperation) -> dict:
         "labor_time_per_piece_min": op.run_min_per_piece,
         "control_required": op.control_required,
         "outsourcing": op.outsourcing,
+        "is_cooperation": bool(getattr(op, "is_cooperation", False)),
+        "default_cooperation_status": getattr(op, "default_cooperation_status", None),
+        "cooperation_category": getattr(op, "cooperation_category", None),
+        "preferred_supplier_id": getattr(op, "preferred_supplier_id", None),
+        "cooperation_note": getattr(op, "cooperation_note", None),
         "note": op.note,
     }
 
@@ -698,6 +727,11 @@ def copy_portfolio_item(
                     run_min_per_piece=op.run_min_per_piece,
                     control_required=op.control_required,
                     outsourcing=op.outsourcing,
+                    is_cooperation=bool(getattr(op, "is_cooperation", False)),
+                    default_cooperation_status=getattr(op, "default_cooperation_status", None),
+                    cooperation_category=getattr(op, "cooperation_category", None),
+                    preferred_supplier_id=getattr(op, "preferred_supplier_id", None),
+                    cooperation_note=getattr(op, "cooperation_note", None),
                     note=op.note,
                 )
             )
@@ -911,6 +945,10 @@ def create_template_operation(
         )
         if not wp_lib:
             raise HTTPException(status_code=404, detail="Workplace library item not found")
+    if payload.preferred_supplier_id is not None:
+        supplier = db.scalar(select(Customer).where(Customer.id == payload.preferred_supplier_id))
+        if supplier is None:
+            raise HTTPException(status_code=404, detail="Preferred supplier not found")
 
     row = PortfolioTechnologyTemplateOperation(
         template_id=template_id,
@@ -923,6 +961,11 @@ def create_template_operation(
         run_min_per_piece=payload.labor_time_per_piece_min,
         control_required=payload.control_required,
         outsourcing=payload.outsourcing,
+        is_cooperation=bool(payload.is_cooperation),
+        default_cooperation_status=payload.default_cooperation_status or ("pending_send" if payload.is_cooperation else None),
+        cooperation_category=payload.cooperation_category.strip() if payload.cooperation_category else None,
+        preferred_supplier_id=payload.preferred_supplier_id,
+        cooperation_note=payload.cooperation_note.strip() if payload.cooperation_note else None,
         note=payload.note,
     )
     db.add(row)
@@ -1274,12 +1317,18 @@ def update_template_operation(
         wid = data["workplace_library_item_id"]
         if wid is None:
             row.workplace_library_item_id = None
+            row.workplace = None
         else:
             wp_lib = db.scalar(select(WorkplaceLibraryItem).where(WorkplaceLibraryItem.id == wid))
             if not wp_lib:
                 raise HTTPException(status_code=404, detail="Workplace library item not found")
             row.workplace_library_item_id = wid
             row.workplace = wp_lib.name
+
+    if "preferred_supplier_id" in data and data["preferred_supplier_id"] is not None:
+        supplier = db.scalar(select(Customer).where(Customer.id == data["preferred_supplier_id"]))
+        if supplier is None:
+            raise HTTPException(status_code=404, detail="Preferred supplier not found")
 
     if "setup_time_min" in data:
         row.setup_min = data["setup_time_min"]
@@ -1289,6 +1338,18 @@ def update_template_operation(
         row.control_required = data["control_required"]
     if "outsourcing" in data:
         row.outsourcing = data["outsourcing"]
+    if "is_cooperation" in data:
+        row.is_cooperation = bool(data["is_cooperation"])
+        if row.is_cooperation and not row.default_cooperation_status:
+            row.default_cooperation_status = "pending_send"
+    if "default_cooperation_status" in data:
+        row.default_cooperation_status = data["default_cooperation_status"]
+    if "cooperation_category" in data:
+        row.cooperation_category = data["cooperation_category"].strip() if data["cooperation_category"] else None
+    if "preferred_supplier_id" in data:
+        row.preferred_supplier_id = data["preferred_supplier_id"]
+    if "cooperation_note" in data:
+        row.cooperation_note = data["cooperation_note"].strip() if data["cooperation_note"] else None
     if "note" in data:
         row.note = data["note"]
     if "operation_no" in data and data["operation_no"] is not None:

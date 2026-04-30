@@ -44,6 +44,18 @@ export type PlannerGanttItem = {
   queuePosition: number | null;
   materialReady: boolean;
   isLocked?: boolean;
+  isCooperation?: boolean;
+  cooperationStatus?: string | null;
+  cooperationSupplierPurchaseOrderId?: number | null;
+  cooperationSentAt?: string | null;
+  cooperationReceivedAt?: string | null;
+  blockedByCooperation?: boolean;
+  cooperationBlocker?: {
+    operationId: number;
+    operationNo: number;
+    operationName: string;
+    cooperationStatus: string;
+  } | null;
 };
 
 export type PlannerGanttMachineGroup = {
@@ -274,6 +286,9 @@ export async function updatePlanningOperation(payload: {
   status?: string;
   materialReady?: boolean;
   isLocked?: boolean;
+  isCooperation?: boolean;
+  cooperationStatus?: string | null;
+  cooperationNote?: string | null;
 }) {
   return apiFetch(`${API_BASE}/planning/update-operation`, {
     method: "POST",
@@ -282,6 +297,9 @@ export async function updatePlanningOperation(payload: {
       status: payload.status,
       material_ready: payload.materialReady,
       is_locked: payload.isLocked,
+      is_cooperation: payload.isCooperation,
+      cooperation_status: payload.cooperationStatus,
+      cooperation_note: payload.cooperationNote,
     }),
   });
 }

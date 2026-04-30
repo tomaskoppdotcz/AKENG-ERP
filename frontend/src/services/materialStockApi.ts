@@ -269,6 +269,26 @@ export type MaterialIssueAllocationLine = {
   delivery_note_no: string | null;
 };
 
+/** One required cut length aggregate (heuristic when FIFO blocks). */
+export type MaterialIssueAllocationCutBucket = {
+  cut_length_mm: number;
+  cut_count: number;
+};
+
+/** Optimal reallocation hint (does not override FIFO issue; for planning only). */
+export type MaterialIssueAllocationSuggestion = {
+  can_issue: boolean;
+  reason?: string | null;
+  fifo_blocks?: boolean | null;
+  alternate_order_tried?: boolean | null;
+  usable_now: MaterialIssueAllocationCutBucket[];
+  missing: MaterialIssueAllocationCutBucket[];
+  recommendation: string;
+  totals_mm?: { demand_mm?: number; available_stock_mm?: number } | null;
+  single_bar_per_cut?: boolean | null;
+  mixing_heat_lots_per_cut?: boolean | null;
+};
+
 export type MaterialIssueAllocationPreview = {
   ok: boolean;
   demand_total_mm: number;
@@ -280,6 +300,7 @@ export type MaterialIssueAllocationPreview = {
   lines: MaterialIssueAllocationLine[];
   error_code: string;
   message: string | null;
+  allocation_suggestion?: MaterialIssueAllocationSuggestion | null;
 };
 
 function materialIssueAllocationQuery(params: MaterialIssueAllocationParams): string {

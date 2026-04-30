@@ -63,7 +63,11 @@ export const ERP_NAV_GROUPS: ErpNavGroup[] = [
   {
     id: "purchase",
     label: "Nákup",
-    items: [{ label: "Požadavky materiálu", moduleKey: "Požadavky materiálu" }],
+    items: [
+      { label: "Požadavky materiálu", moduleKey: "Požadavky materiálu" },
+      { label: "Poptávky", moduleKey: "Poptávky" },
+      { label: "Objednávky", moduleKey: "Objednávky" },
+    ],
   },
   {
     id: "master_data",

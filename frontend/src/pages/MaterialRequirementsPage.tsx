@@ -13,32 +13,76 @@ import {
 import {
   getMaterialRequirements,
   getMaterialRequirementsByVp,
-  listCustomersForPurchase,
   postMaterialIssue,
-  postMaterialPurchaseOrder,
   postMaterialReservationsRebuildAll,
-  type CustomerOption,
   type MaterialIssueAllocationDefaults,
-  type MaterialPurchaseLinePayload,
+  type MaterialCutPlanLine,
   type MaterialRequirementRelatedOrder,
   type MaterialRequirementRow,
   type VpMaterialLine,
   type VpRequirementRow,
 } from "../services/materialRequirementsApi";
+import { listApprovedSuppliersForRfqs, type ApprovedSupplierOption } from "../services/supplierRfqsApi";
+import { createSupplierPurchaseOrderFromMaterialRequirement } from "../services/supplierPurchaseOrdersApi";
 
 type Props = {
   onOpenProductionOrderInWorkspaceTab?: (productionOrderId: number, titleHint?: string) => void;
   onOpenCustomerOrderInWorkspaceTab?: (customerOrderId: number, titleHint?: string) => void;
-  onOpenMaterialPurchaseOrderInWorkspaceTab?: (materialPurchaseOrderId: number, titleHint?: string) => void;
+  onOpenSupplierPurchaseOrderInWorkspaceTab?: (supplierPurchaseOrderId: number, titleHint?: string) => void;
 };
 
 type ViewMode = "by_vp" | "by_material";
 
-const PURCHASE_BUFFER = 1.1;
-
 function formatQty(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "0";
   return n.toLocaleString("cs-CZ", { maximumFractionDigits: 3 });
+}
+
+function formatCutPlan(lines: MaterialCutPlanLine[] | null | undefined): string {
+  if (!lines || lines.length === 0) return "";
+  return lines
+    .map((ln) => `${formatQty(ln.cut_count)}x ${formatQty(ln.cut_length_mm)} mm`)
+    .join(", ");
+}
+
+function formatCutBuckets(rows: ReadonlyArray<{ cut_length_mm: number; cut_count: number }>): string {
+  if (!rows || rows.length === 0) return "—";
+  return rows.map((r) => `${r.cut_count}× ${formatQty(r.cut_length_mm)} mm`).join(", ");
+}
+
+function purchaseQtyForLine(m: Pick<VpMaterialLine, "purchase_required_qty_mm" | "shortage">): number {
+  return Number(m.purchase_required_qty_mm ?? m.shortage ?? 0);
+}
+
+function usableReservedQty(m: { usable_reserved_qty_mm?: number; reserved_qty?: number; reserved?: number }): number {
+  return Number(m.usable_reserved_qty_mm ?? m.reserved_qty ?? m.reserved ?? 0);
+}
+
+function shortageTitle(m: {
+  required_qty_total_mm?: number;
+  required_cut_plan?: MaterialCutPlanLine[];
+  raw_available_qty_mm?: number;
+  usable_reserved_qty_mm?: number;
+  raw_shortage_mm?: number;
+  current_usable_cut_plan?: MaterialCutPlanLine[];
+  purchase_cut_plan?: MaterialCutPlanLine[];
+  purchase_required_qty_mm?: number;
+  unusable_leftover_mm?: number;
+}): string | undefined {
+  const parts: string[] = [];
+  if (m.required_qty_total_mm != null) parts.push(`Požadováno (řez): ${formatQty(m.required_qty_total_mm)} mm`);
+  const need = formatCutPlan(m.required_cut_plan);
+  if (need) parts.push(`Potřeba (TP řezy): ${need}`);
+  if (m.raw_available_qty_mm != null) parts.push(`Skladem raw: ${formatQty(m.raw_available_qty_mm)} mm`);
+  const usableCuts = formatCutPlan(m.current_usable_cut_plan);
+  if (usableCuts) parts.push(`Použitelné ze skladu: ${usableCuts}`);
+  if (m.usable_reserved_qty_mm != null)
+    parts.push(`Rezervace/skald použité (řezové mm součtu): ${formatQty(m.usable_reserved_qty_mm)} mm`);
+  if (m.raw_shortage_mm != null) parts.push(`Raw shortage: ${formatQty(m.raw_shortage_mm)} mm`);
+  if (m.unusable_leftover_mm != null) parts.push(`Nevyužitelné zbytky (odhad): ${formatQty(m.unusable_leftover_mm)} mm`);
+  const plan = formatCutPlan(m.purchase_cut_plan);
+  if (plan) parts.push(`Objednat (řezný plán nákupu): ${plan}`);
+  return parts.length ? parts.join("\n") : undefined;
 }
 
 function norm(v: string): string {
@@ -145,6 +189,18 @@ function syntheticRowFromVp(vp: VpRequirementRow, m: VpMaterialLine): MaterialRe
     required: m.required_qty,
     available: m.available,
     shortage: m.shortage,
+    required_qty_total_mm: m.required_qty_total_mm,
+    available_qty_mm: m.available_qty_mm,
+    raw_available_qty_mm: m.raw_available_qty_mm,
+    usable_reserved_qty_mm: m.usable_reserved_qty_mm,
+    raw_shortage_mm: m.raw_shortage_mm,
+    covered_piece_count: m.covered_piece_count,
+    missing_piece_count: m.missing_piece_count,
+    purchase_required_qty_mm: m.purchase_required_qty_mm,
+    purchase_cut_plan: m.purchase_cut_plan,
+    required_cut_plan: m.required_cut_plan,
+    current_usable_cut_plan: m.current_usable_cut_plan,
+    unusable_leftover_mm: m.unusable_leftover_mm,
     related_orders: [
       {
         reservation_id: m.reservation_id,
@@ -166,8 +222,7 @@ function syntheticRowFromVp(vp: VpRequirementRow, m: VpMaterialLine): MaterialRe
 }
 
 function uncoveredBaseForLine(m: VpMaterialLine): number {
-  const gap = Math.max(0, Number(m.required_qty || 0) - Number(m.reserved_qty || 0));
-  return Math.max(gap, Number(m.shortage || 0));
+  return purchaseQtyForLine(m);
 }
 
 type PurchaseDraftLine = {
@@ -177,22 +232,39 @@ type PurchaseDraftLine = {
   unit: string | null;
   qty: number;
   traceability_note: string;
+  purchase_cut_plan?: MaterialCutPlanLine[];
 };
 
 function buildPurchaseDraftForVp(vp: VpRequirementRow): PurchaseDraftLine[] {
   const byMid = new Map<
     number,
-    { base: number; traces: string[]; code: string | null; name: string | null; unit: string | null }
+    {
+      base: number;
+      traces: string[];
+      code: string | null;
+      name: string | null;
+      unit: string | null;
+      purchase_cut_plan: MaterialCutPlanLine[];
+    }
   >();
   for (const m of vp.materials) {
     const base = uncoveredBaseForLine(m);
     if (base <= 1e-9) continue;
-    const trace = `Zakázka ${vp.zakazka ?? "—"} · ${vp.vp_code ?? "VP"} · GPN ${vp.gpn ?? m.gpn ?? "—"} · ${m.material.code ?? "?"} · požadavek ${formatQty(m.required_qty)} / rez. ${formatQty(m.reserved_qty)} / sklad ${formatQty(m.available)}`;
+    const cutPlan = formatCutPlan(m.purchase_cut_plan);
+    const usableStock = formatCutPlan(m.current_usable_cut_plan);
+    const trace = [
+      `Zakázka ${vp.zakazka ?? "—"} · ${vp.vp_code ?? "VP"} · GPN ${vp.gpn ?? m.gpn ?? "—"} · ${m.material.code ?? "?"} · požadavek řezně ${formatQty(m.required_qty_total_mm ?? m.required_qty)} mm / použitelné ${formatQty(usableReservedQty(m))} mm${usableStock ? ` (${usableStock})` : ""} / sklad raw ${formatQty(m.raw_available_qty_mm ?? m.available)}`,
+      cutPlan ? `Řezný plán nákupu: ${cutPlan}` : null,
+      m.raw_shortage_mm != null ? `Raw shortage: ${formatQty(m.raw_shortage_mm)} mm` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
     const mid = m.material_library_item_id;
     const cur = byMid.get(mid);
     if (cur) {
       cur.base += base;
       cur.traces.push(trace);
+      if (m.purchase_cut_plan?.length) cur.purchase_cut_plan.push(...m.purchase_cut_plan);
     } else {
       byMid.set(mid, {
         base,
@@ -200,6 +272,7 @@ function buildPurchaseDraftForVp(vp: VpRequirementRow): PurchaseDraftLine[] {
         code: m.material.code,
         name: m.material.name,
         unit: m.material.unit,
+        purchase_cut_plan: m.purchase_cut_plan ? [...m.purchase_cut_plan] : [],
       });
     }
   }
@@ -208,15 +281,16 @@ function buildPurchaseDraftForVp(vp: VpRequirementRow): PurchaseDraftLine[] {
     code: v.code,
     name: v.name,
     unit: v.unit,
-    qty: Math.round(v.base * PURCHASE_BUFFER * 1000) / 1000,
+    qty: Math.round(v.base * 1000) / 1000,
     traceability_note: v.traces.join("\n"),
+    purchase_cut_plan: v.purchase_cut_plan,
   }));
 }
 
 export default function MaterialRequirementsPage({
   onOpenProductionOrderInWorkspaceTab,
   onOpenCustomerOrderInWorkspaceTab,
-  onOpenMaterialPurchaseOrderInWorkspaceTab,
+  onOpenSupplierPurchaseOrderInWorkspaceTab,
 }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>("by_vp");
   const [rows, setRows] = useState<MaterialRequirementRow[]>([]);
@@ -242,7 +316,7 @@ export default function MaterialRequirementsPage({
   const [purchaseOpen, setPurchaseOpen] = useState(false);
   const [purchaseVp, setPurchaseVp] = useState<VpRequirementRow | null>(null);
   const [purchaseLines, setPurchaseLines] = useState<PurchaseDraftLine[]>([]);
-  const [suppliers, setSuppliers] = useState<CustomerOption[]>([]);
+  const [suppliers, setSuppliers] = useState<ApprovedSupplierOption[]>([]);
   const [supplierId, setSupplierId] = useState<number | "">("");
   const [purchaseBusy, setPurchaseBusy] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
@@ -284,9 +358,9 @@ export default function MaterialRequirementsPage({
   useEffect(() => {
     if (!purchaseOpen) return;
     let cancelled = false;
-    void listCustomersForPurchase()
+    void listApprovedSuppliersForRfqs()
       .then((c) => {
-        if (!cancelled) setSuppliers(c.filter((x) => x.is_active !== false));
+        if (!cancelled) setSuppliers(c.filter((x) => x.is_active !== false && x.is_approved !== false));
       })
       .catch(() => {
         if (!cancelled) setSuppliers([]);
@@ -491,24 +565,24 @@ export default function MaterialRequirementsPage({
     setPurchaseBusy(true);
     setPurchaseError(null);
     try {
-      const lines: MaterialPurchaseLinePayload[] = purchaseLines.map((l) => ({
-        material_library_item_id: l.material_library_item_id,
-        qty_ordered: l.qty,
-        traceability_note: l.traceability_note,
-      }));
-      const created = await postMaterialPurchaseOrder({
-        supplier_customer_id: Number(supplierId),
-        lines,
-        header_note: purchaseHeaderNote || null,
+      const created = await createSupplierPurchaseOrderFromMaterialRequirement({
+        supplier_id: Number(supplierId),
+        customer_order_id: purchaseVp.customer_order_id,
+        job_item_id: purchaseVp.job_item_id,
+        production_order_id: purchaseVp.production_order_id,
+        note: purchaseHeaderNote || null,
+        items: purchaseLines.map((l) => ({
+          material_library_item_id: l.material_library_item_id,
+          material_code: l.code,
+          qty: l.qty,
+          unit: l.unit || "mm",
+          note: l.traceability_note,
+        })),
       });
       setPurchaseOpen(false);
       setPurchaseVp(null);
-      const poId = created.material_purchase_order_id;
-      const title =
-        created.order_number && created.supplier_name
-          ? `${created.order_number} · ${created.supplier_name}`
-          : undefined;
-      onOpenMaterialPurchaseOrderInWorkspaceTab?.(poId, title);
+      const title = created.po_no && created.supplier_name ? `${created.po_no} · ${created.supplier_name}` : undefined;
+      onOpenSupplierPurchaseOrderInWorkspaceTab?.(created.id, title);
     } catch (e: unknown) {
       setPurchaseError(e instanceof Error ? e.message : "Uložení se nepodařilo.");
     } finally {
@@ -620,6 +694,7 @@ export default function MaterialRequirementsPage({
                 {filteredVp.map((vp) => {
                   const exp = expandedVp.has(vp.production_order_id);
                   const cov = vp.coverage === "covered";
+                  const released = Boolean(vp.is_material_released_to_production ?? vp.is_material_ready);
                   return (
                     <React.Fragment key={vp.production_order_id}>
                       <tr
@@ -694,11 +769,13 @@ export default function MaterialRequirementsPage({
                           </span>
                         </td>
                         <td style={UI.td}>
-                          {vp.is_material_released_to_production ?? vp.is_material_ready ? "Ano" : "Ne"}
+                          {released ? "Ano" : "Ne"}
                         </td>
                         <td style={UI.td}>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                            {cov ? (
+                            {released ? (
+                              <span style={{ fontWeight: 900, color: "#166534" }}>Vydáno</span>
+                            ) : cov ? (
                               <button type="button" style={UI.buttons.primary} onClick={() => openFirstIssueForVp(vp)}>
                                 Vydat
                               </button>
@@ -722,8 +799,8 @@ export default function MaterialRequirementsPage({
                                     "Materiál",
                                     "Rozměr",
                                     "Požadováno",
-                                    "Rezervováno",
-                                    "Skladem",
+                                    "Rez./sklad použ.",
+                                    "Skladem raw",
                                     "Chybí",
                                     "Stav TP",
                                     "Akce",
@@ -737,19 +814,34 @@ export default function MaterialRequirementsPage({
                               <tbody>
                                 {vp.materials.map((m) => {
                                   const pend = flatPendingFromVpLine(vp, m).filter((x) => x.rel.status !== "issued");
-                                  const lineCov =
-                                    Number(m.reserved_qty || 0) + 1e-9 >= Number(m.required_qty || 0) &&
-                                    Number(m.shortage || 0) < 1e-6;
+                                  const reqRefMm = Number(m.required_qty_total_mm ?? m.required_qty ?? 0);
+                                  const purchaseShortage = purchaseQtyForLine(m);
+                                  const usableReserved = usableReservedQty(m);
+                                  const lineCov = usableReserved + 1e-9 >= reqRefMm && purchaseShortage < 1e-6;
                                   return (
                                     <tr key={`${vp.production_order_id}-${m.material_library_item_id}`}>
                                       <td style={UI.td}>{m.material.code ?? "—"}</td>
                                       <td style={UI.td}>{m.material.name ?? "—"}</td>
                                       <td style={UI.td}>{m.material.dimension ?? "—"}</td>
-                                      <td style={UI.td}>{formatQty(m.required_qty)}</td>
-                                      <td style={UI.td}>{formatQty(m.reserved_qty)}</td>
-                                      <td style={UI.td}>{formatQty(m.available)}</td>
-                                      <td style={{ ...UI.td, fontWeight: 800, color: m.shortage > 0 ? "#b91c1c" : "#166534" }}>
-                                        {formatQty(m.shortage)}
+                                      <td style={UI.td} title={m.required_qty_total_mm != null ? `Řezný plán TP: ${formatQty(m.required_qty_total_mm)} mm · rezervace: ${formatQty(m.required_qty)}` : undefined}>
+                                        {formatQty(m.required_qty_total_mm ?? m.required_qty)}
+                                      </td>
+                                      <td style={UI.td} title={shortageTitle(m)}>
+                                        {formatQty(usableReserved)}
+                                      </td>
+                                      <td style={UI.td} title={m.raw_available_qty_mm != null ? `Raw sklad: ${formatQty(m.raw_available_qty_mm)} mm` : undefined}>
+                                        {formatQty(m.raw_available_qty_mm ?? m.available)}
+                                      </td>
+                                      <td
+                                        style={{ ...UI.td, fontWeight: 800, color: purchaseShortage > 0 ? "#b91c1c" : "#166534" }}
+                                        title={shortageTitle(m)}
+                                      >
+                                        <div>{formatQty(purchaseShortage)}</div>
+                                        {m.purchase_cut_plan?.length ? (
+                                          <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>
+                                            {formatCutPlan(m.purchase_cut_plan)}
+                                          </div>
+                                        ) : null}
                                       </td>
                                       <td style={UI.td}>{m.status ?? "—"}</td>
                                       <td style={UI.td}>
@@ -785,8 +877,8 @@ export default function MaterialRequirementsPage({
                   <th style={UI.th}>Kód materiálu</th>
                   <th style={UI.th}>Materiál</th>
                   <th style={UI.th}>Požadováno</th>
-                  <th style={UI.th}>Rezervováno / vydáno</th>
-                  <th style={UI.th}>Skladem</th>
+                  <th style={UI.th}>Rez./sklad použ. / vydáno</th>
+                  <th style={UI.th}>Skladem raw</th>
                   <th style={UI.th}>Chybí</th>
                   <th style={UI.th}>Zakázky / VP</th>
                   <th style={UI.th}>Stav</th>
@@ -795,12 +887,12 @@ export default function MaterialRequirementsPage({
               </thead>
               <tbody>
                 {filteredMaterial.map((row) => {
-                  const reserved = row.related_orders.reduce((acc, x) => acc + Number(x.reserved_qty || 0), 0);
+                  const reserved = usableReservedQty(row);
                   const issued = row.related_orders.reduce(
                     (acc, x) => acc + (x.status === "issued" ? Number(x.reserved_qty || 0) : 0),
                     0
                   );
-                  const shortage = Number(row.shortage || 0);
+                  const shortage = Number(row.purchase_required_qty_mm ?? row.shortage ?? 0);
                   const status =
                     shortage > 0 ? "Chybí materiál" : reserved < Number(row.required || 0) ? "Čeká rezervace" : "Pokryto";
                   const pendingRes = row.related_orders.filter((x) => x.status !== "issued");
@@ -812,12 +904,20 @@ export default function MaterialRequirementsPage({
                       <td style={UI.td}>{row.material.code ?? "—"}</td>
                       <td style={UI.td}>{row.material.name ?? "—"}</td>
                       <td style={UI.td}>{formatQty(row.required)}</td>
-                      <td style={UI.td}>
+                      <td style={UI.td} title={shortageTitle(row)}>
                         {formatQty(reserved)} / {formatQty(issued)}
                       </td>
-                      <td style={UI.td}>{formatQty(row.available)}</td>
-                      <td style={{ ...UI.td, fontWeight: 900, color: shortage > 0 ? "#b91c1c" : "#166534" }}>
-                        {formatQty(shortage)}
+                      <td style={UI.td} title={row.raw_available_qty_mm != null ? `Raw sklad: ${formatQty(row.raw_available_qty_mm)} mm` : undefined}>
+                        {formatQty(row.raw_available_qty_mm ?? row.available)}
+                      </td>
+                      <td
+                        style={{ ...UI.td, fontWeight: 900, color: shortage > 0 ? "#b91c1c" : "#166534" }}
+                        title={shortageTitle(row)}
+                      >
+                        <div>{formatQty(shortage)}</div>
+                        {row.purchase_cut_plan?.length ? (
+                          <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>{formatCutPlan(row.purchase_cut_plan)}</div>
+                        ) : null}
                       </td>
                       <td style={UI.td}>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -929,8 +1029,69 @@ export default function MaterialRequirementsPage({
               <div style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>Načítám návrh výdeje…</div>
             ) : null}
             {issuePreviewError ? (
-              <div style={{ fontSize: 13, color: issuePreviewPayload?.ok === false ? "#b91c1c" : "#b45309", fontWeight: 700 }}>
+              <div
+                style={{
+                  fontSize: 13,
+                  color:
+                    issuePreviewPayload?.allocation_suggestion && issuePreviewPayload?.ok === false
+                      ? "#c2410c"
+                      : issuePreviewPayload?.ok === false
+                        ? "#b91c1c"
+                        : "#b45309",
+                  fontWeight: 700,
+                }}
+              >
                 {issuePreviewError}
+              </div>
+            ) : null}
+            {!issuePreviewLoading &&
+            issuePreviewPayload &&
+            issuePreviewPayload.ok === false &&
+            issuePreviewPayload.allocation_suggestion ? (
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid #fed7aa",
+                  background: "#fffbeb",
+                  color: "#7c2d12",
+                  fontSize: 13,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                <div style={{ fontWeight: 900 }}>Nelze automaticky složit výdej podle FIFO · návrh rekalibrace</div>
+                {issuePreviewPayload.allocation_suggestion.reason ? (
+                  <div style={{ lineHeight: 1.45 }}>{issuePreviewPayload.allocation_suggestion.reason}</div>
+                ) : null}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 6 }}>
+                  <div>
+                    <span style={{ fontWeight: 800 }}>Co lze při optimálním párování řezů použít:</span>{" "}
+                    {formatCutBuckets(issuePreviewPayload.allocation_suggestion.usable_now ?? [])}
+                  </div>
+                  <div>
+                    <span style={{ fontWeight: 800 }}>Co z požadavku stále chybí:</span>{" "}
+                    {formatCutBuckets(issuePreviewPayload.allocation_suggestion.missing ?? [])}
+                  </div>
+                  {issuePreviewPayload.allocation_suggestion.totals_mm ? (
+                    <div style={{ color: "#9a3412", fontSize: 12 }}>
+                      Součet potřeby (řezy): {formatQty(issuePreviewPayload.allocation_suggestion.totals_mm.demand_mm ?? 0)} mm · na
+                      skladě dostupných délek:{" "}
+                      {formatQty(issuePreviewPayload.allocation_suggestion.totals_mm.available_stock_mm ?? 0)} mm
+                    </div>
+                  ) : null}
+                </div>
+                <div style={{ borderTop: "1px dashed #fcd34d", paddingTop: 8, lineHeight: 1.5 }}>
+                  <span style={{ fontWeight: 900 }}>Doporučení / nákup:</span>{" "}
+                  {issuePreviewPayload.allocation_suggestion.recommendation}
+                </div>
+                {issuePreviewPayload.allocation_suggestion.mixing_heat_lots_per_cut === false ? (
+                  <div style={{ fontSize: 12, color: "#9a3412" }}>
+                    Každý řez je z jedné tyče / zbytku (TP nedovolí skládání délek z více vár na jeden řez). Výdej automaticky mění
+                    pořadí FIFO jen po vašem potvrzení jinde — zde jen návrh.
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {!issuePreviewLoading && issuePreviewPayload?.ok ? (
@@ -1013,7 +1174,7 @@ export default function MaterialRequirementsPage({
       </SimpleModal>
 
       <SimpleModal
-        title="Objednat materiál (nákupní objednávka)"
+        title="Objednat materiál (SPO)"
         open={purchaseOpen}
         onClose={() => !purchaseBusy && setPurchaseOpen(false)}
         footer={
@@ -1034,8 +1195,8 @@ export default function MaterialRequirementsPage({
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 14 }}>
           <div style={{ color: "#64748b" }}>
-            Množství = součet neuspokojené poptávky na VP × {PURCHASE_BUFFER} (zaokrouhleno na 3 des.). Stopa poptávky je
-            uložena u každé řádky.
+            Množství se bere z nepokrytého požadavku materiálu; u řezaného materiálu je u položky uložen i řezný plán.
+            Vytvoří se standardní dodavatelská objednávka SPO s vazbou na zakázku / VP.
           </div>
           {purchaseVp ? (
             <div style={{ fontWeight: 800 }}>
@@ -1043,7 +1204,7 @@ export default function MaterialRequirementsPage({
             </div>
           ) : null}
           <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontWeight: 800 }}>Dodavatel (z adresáře zákazníků)</span>
+            <span style={{ fontWeight: 800 }}>Dodavatel</span>
             <select
               style={UI.inputs.base}
               value={supplierId === "" ? "" : String(supplierId)}
@@ -1052,7 +1213,7 @@ export default function MaterialRequirementsPage({
               <option value="">— vyberte —</option>
               {suppliers.map((s) => (
                 <option key={s.id} value={String(s.id)}>
-                  {s.name} ({s.code})
+                  {s.name} ({s.supplier_code})
                 </option>
               ))}
             </select>
@@ -1087,6 +1248,11 @@ export default function MaterialRequirementsPage({
                   />
                   {l.unit ? <span style={{ color: "#64748b" }}>{l.unit}</span> : null}
                 </div>
+                {l.purchase_cut_plan?.length ? (
+                  <div style={{ fontSize: 12, color: "#334155", marginTop: 6, fontWeight: 800 }}>
+                    Řezný plán nákupu: {formatCutPlan(l.purchase_cut_plan)}
+                  </div>
+                ) : null}
                 <div style={{ fontSize: 12, color: "#475569", marginTop: 6, whiteSpace: "pre-wrap" }}>{l.traceability_note}</div>
               </div>
             ))}

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import DetailPageHeader from "../components/DetailPageHeader";
+import { FormField, FormGrid, FormSection, HighlightBox, formControlStyle, formTextareaStyle } from "../components/FormLayout";
 import PageContainer from "../components/layout/PageContainer";
 import {
   erpDetailIdentLabel,
@@ -12,8 +13,10 @@ import {
 } from "../styles/ui";
 import { getMaterialLibraryItems, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import {
+  getCustomers,
   getOperationLibraryItems,
   getWorkplaceLibraryItems,
+  type CustomerListItem,
   type OperationLibraryItem,
   type WorkplaceLibraryItem,
 } from "../services/masterLibrariesApi";
@@ -73,6 +76,10 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   const [runMinPerPiece, setRunMinPerPiece] = useState("0");
   const [controlRequired, setControlRequired] = useState(false);
   const [outsourcing, setOutsourcing] = useState(false);
+  const [isCooperation, setIsCooperation] = useState(false);
+  const [cooperationCategory, setCooperationCategory] = useState("");
+  const [preferredSupplierId, setPreferredSupplierId] = useState<number | null>(null);
+  const [cooperationNote, setCooperationNote] = useState("");
   const [note, setNote] = useState("");
   const [templateId, setTemplateId] = useState<number | null>(item?.active_template_id ?? null);
   const [operations, setOperations] = useState<PortfolioTechnologyOperation[]>([]);
@@ -82,6 +89,7 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   const [reorderBusy, setReorderBusy] = useState(false);
   const [operationLibraryItems, setOperationLibraryItems] = useState<OperationLibraryItem[]>([]);
   const [workplaceLibraryItems, setWorkplaceLibraryItems] = useState<WorkplaceLibraryItem[]>([]);
+  const [supplierItems, setSupplierItems] = useState<CustomerListItem[]>([]);
   const [librariesLoading, setLibrariesLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [materials, setMaterials] = useState<PortfolioTechnologyMaterial[]>([]);
@@ -123,6 +131,10 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
   const activeWorkplaceLibrary = useMemo(
     () => workplaceLibraryItems.filter((w) => w.is_active),
     [workplaceLibraryItems]
+  );
+  const activeSuppliers = useMemo(
+    () => supplierItems.filter((s) => s.is_active),
+    [supplierItems]
   );
 
   const operationSelectValue = useMemo(() => {
@@ -247,11 +259,12 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     let cancelled = false;
     setLibrariesLoading(true);
     setLibraryError(null);
-    Promise.all([getOperationLibraryItems(), getWorkplaceLibraryItems()])
-      .then(([ops, wps]) => {
+    Promise.all([getOperationLibraryItems(), getWorkplaceLibraryItems(), getCustomers()])
+      .then(([ops, wps, suppliers]) => {
         if (!cancelled) {
           setOperationLibraryItems(ops);
           setWorkplaceLibraryItems(wps);
+          setSupplierItems(suppliers);
         }
       })
       .catch((e: unknown) => {
@@ -302,6 +315,10 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     setRunMinPerPiece("0");
     setControlRequired(false);
     setOutsourcing(false);
+    setIsCooperation(false);
+    setCooperationCategory("");
+    setPreferredSupplierId(null);
+    setCooperationNote("");
     setNote("");
     setShowAddOperationForm(false);
   }
@@ -353,7 +370,12 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
       setup_time_min: Number(setupMin) || 0,
       labor_time_per_piece_min: Number(runMinPerPiece) || 0,
       control_required: controlRequired,
-      outsourcing,
+      outsourcing: isCooperation || outsourcing,
+      is_cooperation: isCooperation,
+      default_cooperation_status: isCooperation ? "pending_send" : null,
+      cooperation_category: isCooperation ? cooperationCategory.trim() || null : null,
+      preferred_supplier_id: isCooperation ? preferredSupplierId : null,
+      cooperation_note: isCooperation ? cooperationNote.trim() || null : null,
       note: note.trim() || null,
     };
 
@@ -409,6 +431,10 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
     setRunMinPerPiece(String(op.labor_time_per_piece_min));
     setControlRequired(op.control_required);
     setOutsourcing(op.outsourcing);
+    setIsCooperation(!!op.is_cooperation || !!op.outsourcing);
+    setCooperationCategory(op.cooperation_category ?? "");
+    setPreferredSupplierId(op.preferred_supplier_id ?? null);
+    setCooperationNote(op.cooperation_note ?? "");
     setNote(op.note ?? "");
     setShowAddOperationForm(true);
   }
@@ -807,20 +833,20 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
             {techError ? <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 8 }}>{techError}</div> : null}
 
             {showAddOperationForm ? (
-              <div style={{ ...UI.card, padding: 12, marginBottom: 12 }}>
+              <div style={{ ...UI.card, padding: 16, marginBottom: 12, display: "grid", gap: 18 }}>
                 {librariesLoading ? (
                   <div style={{ ...UI.sectionSubtitle, marginBottom: 10 }}>Načítám knihovny…</div>
                 ) : null}
                 {libraryError ? (
                   <div style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 10 }}>{libraryError}</div>
                 ) : null}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-                  <div>
-                    <div style={UI.inputs.label}>Operace</div>
+                <FormSection title="Základní údaje">
+                  <FormGrid minColumnWidth={190} gap={18}>
+                  <FormField label="Operace">
                     <select
                       value={operationSelectValue}
                       onChange={(e) => onOperationSelectChange(e.target.value)}
-                      style={UI.inputs.base}
+                      style={formControlStyle}
                       disabled={librariesLoading}
                     >
                       <option value="">Vyberte operaci</option>
@@ -833,13 +859,12 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                         </option>
                       ))}
                     </select>
-                  </div>
-                  <div>
-                    <div style={UI.inputs.label}>Pracoviště</div>
+                  </FormField>
+                  <FormField label={`Pracoviště${isCooperation ? " (volitelné)" : ""}`}>
                     <select
                       value={workplaceSelectValue}
                       onChange={(e) => onWorkplaceSelectChange(e.target.value)}
-                      style={UI.inputs.base}
+                      style={formControlStyle}
                       disabled={librariesLoading}
                     >
                       <option value="">Vyberte pracoviště</option>
@@ -852,31 +877,79 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                         </option>
                       ))}
                     </select>
-                  </div>
-                  <div>
-                    <div style={UI.inputs.label}>Setup</div>
-                    <input value={setupMin} onChange={(e) => setSetupMin(e.target.value)} style={UI.inputs.base} />
-                  </div>
-                  <div>
-                    <div style={UI.inputs.label}>Čas / ks</div>
-                    <input value={runMinPerPiece} onChange={(e) => setRunMinPerPiece(e.target.value)} style={UI.inputs.base} />
-                  </div>
-                  <div style={{ display: "flex", gap: 16, alignItems: "center", paddingTop: 20 }}>
-                    <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <input type="checkbox" checked={controlRequired} onChange={(e) => setControlRequired(e.target.checked)} />
-                      Kontrola
-                    </label>
-                    <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <input type="checkbox" checked={outsourcing} onChange={(e) => setOutsourcing(e.target.checked)} />
-                      Kooperace
-                    </label>
-                  </div>
-                  <div style={{ gridColumn: "1 / -1" }}>
-                    <div style={UI.inputs.label}>Poznámka</div>
-                    <input value={note} onChange={(e) => setNote(e.target.value)} style={UI.inputs.base} />
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  </FormField>
+                  <FormField label="Setup">
+                    <input value={setupMin} onChange={(e) => setSetupMin(e.target.value)} style={formControlStyle} />
+                  </FormField>
+                  <FormField label="Čas / ks">
+                    <input value={runMinPerPiece} onChange={(e) => setRunMinPerPiece(e.target.value)} style={formControlStyle} />
+                  </FormField>
+                  <FormField label="Kontrola">
+                    <input
+                      aria-label="Kontrola"
+                      type="checkbox"
+                      checked={controlRequired}
+                      onChange={(e) => setControlRequired(e.target.checked)}
+                      style={{ width: 18, height: 18, marginTop: 9 }}
+                    />
+                  </FormField>
+                  <FormField label="Kooperace / externí operace">
+                    <input
+                      aria-label="Kooperace / externí operace"
+                      type="checkbox"
+                      checked={isCooperation}
+                      onChange={(e) => {
+                        setIsCooperation(e.target.checked);
+                        setOutsourcing(e.target.checked);
+                      }}
+                      style={{ width: 18, height: 18, marginTop: 9 }}
+                    />
+                  </FormField>
+                  </FormGrid>
+                </FormSection>
+                  {isCooperation ? (
+                  <HighlightBox title="Kooperace">
+                    <FormGrid minColumnWidth={220} gap={18}>
+                      <FormField label="Typ kooperace">
+                        <input
+                          value={cooperationCategory}
+                          onChange={(e) => setCooperationCategory(e.target.value)}
+                          style={formControlStyle}
+                          placeholder="např. kalení, povrchová úprava"
+                        />
+                      </FormField>
+                      <FormField label="Preferovaný dodavatel">
+                        <select
+                          value={preferredSupplierId == null ? "" : String(preferredSupplierId)}
+                          onChange={(e) => setPreferredSupplierId(e.target.value ? Number(e.target.value) : null)}
+                          style={formControlStyle}
+                          disabled={librariesLoading}
+                        >
+                          <option value="">Bez preferovaného dodavatele</option>
+                          {activeSuppliers.map((s) => (
+                            <option key={s.id} value={String(s.id)}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </FormField>
+                      <FormField label="Poznámka ke kooperaci" fullWidth>
+                        <textarea
+                          value={cooperationNote}
+                          onChange={(e) => setCooperationNote(e.target.value)}
+                          style={formTextareaStyle}
+                          placeholder="Instrukce pro externí operaci"
+                        />
+                      </FormField>
+                    </FormGrid>
+                  </HighlightBox>
+                  ) : null}
+                <FormSection title="Poznámky">
+                  <FormField label="Poznámka operace" fullWidth>
+                    <textarea value={note} onChange={(e) => setNote(e.target.value)} style={formTextareaStyle} />
+                  </FormField>
+                </FormSection>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-start" }}>
                   <button type="button" style={UI.buttons.primary} onClick={saveOperation}>
                     {isEditMode ? "Uložit změny" : "Uložit operaci"}
                   </button>
@@ -926,15 +999,39 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                     </tr>
                   </thead>
                   <tbody>
-                    {operations.map((op, index) => (
-                      <tr key={op.id}>
+                    {operations.map((op, index) => {
+                      const opIsCooperation = !!op.is_cooperation || !!op.outsourcing;
+                      return (
+                      <tr key={op.id} style={opIsCooperation ? { background: "#FFF7ED" } : undefined}>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", fontWeight: 800 }}>{op.operation_no}</td>
-                        <td style={{ ...UI.td, padding: "10px 10px" }}>{op.operation_name}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span>{op.operation_name}</span>
+                            {opIsCooperation ? (
+                              <span
+                                style={{
+                                  ...UI.statusBadgeBase,
+                                  color: "#9A3412",
+                                  background: "#FFEDD5",
+                                  borderColor: "#FDBA74",
+                                  boxShadow: "none",
+                                }}
+                              >
+                                Kooperace
+                              </span>
+                            ) : null}
+                          </div>
+                          {opIsCooperation && op.cooperation_category ? (
+                            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, color: "#9A3412" }}>
+                              {op.cooperation_category}
+                            </div>
+                          ) : null}
+                        </td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.machine_code || "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.setup_time_min}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.labor_time_per_piece_min}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.control_required ? "ANO" : "NE"}</td>
-                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{op.outsourcing ? "ANO" : "NE"}</td>
+                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{opIsCooperation ? "ANO" : "NE"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px" }}>{op.note || "—"}</td>
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <button
@@ -975,7 +1072,8 @@ export default function PortfolioItemDetailPage({ item, onBack, backLabel }: Pro
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

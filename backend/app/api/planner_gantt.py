@@ -140,6 +140,47 @@ def _build_next_workplace_code_map(db: Session, rows: list) -> dict[int, str | N
     return next_map
 
 
+def _build_cooperation_block_map(db: Session, rows: list) -> dict[int, dict]:
+    """operation_id -> pending cooperation predecessor that blocks this VP step."""
+    woos = {r["work_order_no"] for r in rows if r.get("work_order_no")}
+    if not woos:
+        return {}
+    q = text(
+        """
+        SELECT
+            po.id AS operation_id,
+            po.work_order_no AS woo,
+            po.operation_no AS op_no,
+            po.operation_name AS operation_name,
+            COALESCE(po.is_cooperation, 0) AS is_cooperation,
+            po.cooperation_status AS cooperation_status
+        FROM planning_operations po
+        WHERE po.work_order_no IN :woos
+        ORDER BY po.work_order_no, po.operation_no ASC, po.id ASC
+        """
+    ).bindparams(bindparam("woos", expanding=True))
+    all_rows = db.execute(q, {"woos": list(woos)}).mappings().all()
+    by_woo: dict[str, list] = defaultdict(list)
+    for r in all_rows:
+        by_woo[r["woo"]].append(r)
+    out: dict[int, dict] = {}
+    for lst in by_woo.values():
+        blocker = None
+        for r in sorted(lst, key=lambda x: (int(x["op_no"] or 0), int(x["operation_id"]))):
+            oid = int(r["operation_id"])
+            if blocker is not None:
+                out[oid] = blocker
+            if bool(r["is_cooperation"]):
+                status = str(r["cooperation_status"] or "pending_send").strip().lower()
+                blocker = None if status == "received" else {
+                    "operationId": oid,
+                    "operationNo": int(r["op_no"] or 0),
+                    "operationName": r["operation_name"],
+                    "cooperationStatus": status,
+                }
+    return out
+
+
 def _batch_load_schedule_segments(db: Session, op_ids: set[int]) -> dict[int, list]:
     if not op_ids:
         return {}
@@ -229,7 +270,16 @@ def map_operation_row(row, schedule_segments: list[dict] | None = None):
         "expeditionDate": row["expedition_date"],
         "queuePosition": row["queue_position"],
         "materialReady": bool(row["material_ready"]) if row["material_ready"] is not None else False,
+        "isCooperation": bool(row.get("is_cooperation")) if row.get("is_cooperation") is not None else False,
+        "cooperationStatus": row.get("cooperation_status"),
+        "cooperationSupplierPurchaseOrderId": row.get("cooperation_supplier_purchase_order_id"),
+        "cooperationSentAt": to_iso_or_none(row.get("cooperation_sent_at")),
+        "cooperationReceivedAt": to_iso_or_none(row.get("cooperation_received_at")),
     }
+    blocker = row.get("cooperation_blocker")
+    if blocker:
+        out["blockedByCooperation"] = True
+        out["cooperationBlocker"] = blocker
     if wid is not None:
         out["workplaceId"] = int(wid)
     mc = row.get("machine_code")
@@ -298,6 +348,11 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
             COALESCE(ms.queue_position, po.queue_position) AS queue_position,
             po.status AS status,
             po.material_ready AS material_ready,
+            COALESCE(po.is_cooperation, 0) AS is_cooperation,
+            po.cooperation_status AS cooperation_status,
+            po.cooperation_supplier_purchase_order_id AS cooperation_supplier_purchase_order_id,
+            po.cooperation_sent_at AS cooperation_sent_at,
+            po.cooperation_received_at AS cooperation_received_at,
             vp.id AS production_order_id
         FROM planning_operations po
         JOIN machines m ON m.id = po.machine_id
@@ -308,6 +363,7 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
         WHERE
             wp.is_active
             AND (wp.is_plannable IS NULL OR wp.is_plannable)
+            AND COALESCE(po.is_cooperation, 0) = 0
             AND po.material_ready IS 1
             AND COALESCE(ms.planned_start, po.planned_start) IS NOT NULL
             AND COALESCE(ms.planned_end, po.planned_end) IS NOT NULL
@@ -346,6 +402,11 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
             po.queue_position AS queue_position,
             po.status AS status,
             po.material_ready AS material_ready,
+            COALESCE(po.is_cooperation, 0) AS is_cooperation,
+            po.cooperation_status AS cooperation_status,
+            po.cooperation_supplier_purchase_order_id AS cooperation_supplier_purchase_order_id,
+            po.cooperation_sent_at AS cooperation_sent_at,
+            po.cooperation_received_at AS cooperation_received_at,
             vp.id AS production_order_id
         FROM planning_operations po
         JOIN machines m ON m.id = po.machine_id
@@ -383,7 +444,9 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
     all_op_ids = {int(r["operation_id"]) for r in scheduled_rows} | {int(r["operation_id"]) for r in unscheduled_rows}
     seg_by_op = _batch_load_schedule_segments(db, all_op_ids)
 
-    next_map = _build_next_workplace_code_map(db, list(scheduled_rows) + list(unscheduled_rows))
+    gantt_rows = list(scheduled_rows) + list(unscheduled_rows)
+    next_map = _build_next_workplace_code_map(db, gantt_rows)
+    cooperation_block_map = _build_cooperation_block_map(db, gantt_rows)
 
     machine_map: dict[int, dict] = {}
 
@@ -406,6 +469,7 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
     for row in scheduled_rows:
         r = dict(row)
         r["next_workplace_code"] = next_map.get(int(row["operation_id"]))
+        r["cooperation_blocker"] = cooperation_block_map.get(int(row["operation_id"]))
         wp_id = int(r["workplace_id"])
         if wp_id not in machine_map:
             mid = r["machine_id"]
@@ -433,6 +497,7 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
     for row in unscheduled_rows:
         r = dict(row)
         r["next_workplace_code"] = next_map.get(int(row["operation_id"]))
+        r["cooperation_blocker"] = cooperation_block_map.get(int(row["operation_id"]))
         unscheduled_items.append(map_operation_row(r, []))
 
     sched_wp = {int(r["workplace_id"]) for r in scheduled_rows}

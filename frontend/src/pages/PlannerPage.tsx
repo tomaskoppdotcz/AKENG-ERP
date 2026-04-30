@@ -19,6 +19,7 @@ import {
 } from "../services/plannerApi";
 import {
   plannerGanttBarColor,
+  plannerGanttItemColor,
   plannerGanttStatusLabel,
 } from "../utils/plannerGanttStatus";
 import { PlannerGanttDayColumn } from "../components/PlannerGanttDayColumn";
@@ -128,7 +129,7 @@ function OverlayBar({ item }: { item: PlannerGanttItem }) {
         minHeight: LANE_HEIGHT + 8,
         borderRadius: 6,
         padding: "6px 10px",
-        background: plannerGanttBarColor(item.status),
+        background: plannerGanttItemColor(item),
         color: "#fff",
         overflow: "hidden",
         boxSizing: "border-box",
@@ -1104,7 +1105,7 @@ export default function PlannerPage({
                                 padding: "4px 8px",
                                 borderRadius: 999,
                                 color: "#fff",
-                                background: plannerGanttBarColor(item.status),
+                                background: plannerGanttItemColor(item),
                                 fontSize: 12,
                                 fontWeight: 800,
                               }}
