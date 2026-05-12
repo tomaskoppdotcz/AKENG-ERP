@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import { akengFetch } from "../services/akengFetch";
 
@@ -201,6 +202,7 @@ function ProductBadge({ text }: { text: string }) {
 export default function PortfolioGpnTpPage() {
   const [templates, setTemplates] = useState<TemplateListRow[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
+  const [hoverListRowId, setHoverListRowId] = useState<number | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateDetail | null>(null);
   const [workplaces, setWorkplaces] = useState<WorkplaceRow[]>([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -751,14 +753,19 @@ export default function PortfolioGpnTpPage() {
                       </td>
                     </tr>
                   ) : (
-                    filteredTemplates.map((row) => (
+                    filteredTemplates.map((row) => {
+                      const rowHot = selectedTemplateId === row.id || hoverListRowId === row.id;
+                      return (
                       <tr
                         key={row.id}
                         onClick={() => setSelectedTemplateId(row.id)}
+                        onMouseEnter={() => setHoverListRowId(row.id)}
+                        onMouseLeave={() => setHoverListRowId((id) => (id === row.id ? null : id))}
                         style={{
                           borderTop: "1px solid #eef2f7",
                           cursor: "pointer",
-                          background: selectedTemplateId === row.id ? "#e0f2fe" : "#fff",
+                          background: rowHot ? "#e0f2fe" : "#fff",
+                          transition: "background 120ms ease",
                         }}
                       >
                         <td
@@ -777,7 +784,8 @@ export default function PortfolioGpnTpPage() {
                         <td>{row.product_group ? <ProductBadge text={row.product_group} /> : "-"}</td>
                         <td>{row.operations_count}</td>
                       </tr>
-                    ))
+                    );
+                    })
                   )}
                 </tbody>
               </table>
@@ -1019,9 +1027,10 @@ export default function PortfolioGpnTpPage() {
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "120px 1.2fr 1fr 120px",
+                        gridTemplateColumns: "120px 1.2fr 1fr auto",
                         gap: 12,
                         marginBottom: 12,
+                        alignItems: "end",
                       }}
                     >
                       <div>
@@ -1066,23 +1075,22 @@ export default function PortfolioGpnTpPage() {
                         </select>
                       </div>
 
-                      <div style={{ display: "flex", alignItems: "end" }}>
-                        <button
-                          onClick={() => removeEditOperationRow(index)}
+                      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center" }}>
+                        <TableRowActionsMenu
+                          compact
+                          align="end"
+                          triggerLabel={`Akce operace ${op.operation_no}`}
                           disabled={editTemplate.operations.length === 1}
-                          style={{
-                            width: "100%",
-                            border: "1px solid #dc2626",
-                            background: "#fff",
-                            color: "#dc2626",
-                            borderRadius: 10,
-                            cursor: "pointer",
-                            fontWeight: 700,
-                            padding: "11px 12px",
-                          }}
-                        >
-                          Smazat
-                        </button>
+                          actions={[
+                            {
+                              key: "delete",
+                              label: "Smazat operaci",
+                              danger: true,
+                              disabled: editTemplate.operations.length === 1,
+                              onClick: () => removeEditOperationRow(index),
+                            },
+                          ]}
+                        />
                       </div>
                     </div>
 
@@ -1224,9 +1232,10 @@ export default function PortfolioGpnTpPage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "120px 1.2fr 1fr 120px",
+                    gridTemplateColumns: "120px 1.2fr 1fr auto",
                     gap: 12,
                     marginBottom: 12,
+                    alignItems: "end",
                   }}
                 >
                   <div>
@@ -1272,23 +1281,22 @@ export default function PortfolioGpnTpPage() {
                     </select>
                   </div>
 
-                  <div style={{ display: "flex", alignItems: "end" }}>
-                    <button
-                      onClick={() => removeOperationRow(index)}
+                  <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center" }}>
+                    <TableRowActionsMenu
+                      compact
+                      align="end"
+                      triggerLabel={`Akce operace ${op.operation_no}`}
                       disabled={newTemplate.operations.length === 1}
-                      style={{
-                        width: "100%",
-                        border: "1px solid #dc2626",
-                        background: "#fff",
-                        color: "#dc2626",
-                        borderRadius: 10,
-                        cursor: "pointer",
-                        fontWeight: 700,
-                        padding: "11px 12px",
-                      }}
-                    >
-                      Smazat
-                    </button>
+                      actions={[
+                        {
+                          key: "delete",
+                          label: "Smazat operaci",
+                          danger: true,
+                          disabled: newTemplate.operations.length === 1,
+                          onClick: () => removeOperationRow(index),
+                        },
+                      ]}
+                    />
                   </div>
                 </div>
 

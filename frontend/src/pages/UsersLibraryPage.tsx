@@ -25,6 +25,7 @@ import {
 } from "../services/usersApi";
 import { adminSetUserPassword } from "../services/authApi";
 import { UI } from "../styles/ui";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 
 function norm(s: string) {
   return s.trim().toLowerCase();
@@ -471,25 +472,17 @@ export default function UsersLibraryPage() {
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
                     {u.is_active ? "ANO" : "NE"}
                   </td>
-                  <td
-                    style={{
-                      ...UI.td,
-                      padding: "10px 10px",
-                      whiteSpace: "nowrap",
-                      display: "flex",
-                      gap: 6,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <button type="button" style={UI.buttons.secondary} onClick={() => openEdit(u)}>
-                      Upravit
-                    </button>
-                    <button type="button" style={UI.buttons.secondary} onClick={() => openPasswordDialog(u)}>
-                      Heslo
-                    </button>
-                    <button type="button" style={UI.buttons.secondary} onClick={() => handleDelete(u.id)}>
-                      Smazat
-                    </button>
+                  <td style={{ ...UI.td, padding: "10px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
+                    <TableRowActionsMenu
+                      compact
+                      align="end"
+                      triggerLabel={`Akce — ${u.username}`}
+                      actions={[
+                        { key: "edit", label: "Upravit", onClick: () => openEdit(u) },
+                        { key: "password", label: "Heslo", onClick: () => openPasswordDialog(u) },
+                        { key: "delete", label: "Smazat", danger: true, onClick: () => handleDelete(u.id) },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))}

@@ -19,6 +19,7 @@ import {
   formatProductionOrderOverviewOperationalStatus,
   isProductionOrderOverviewCompleted,
 } from "../utils/productionOrderOverviewStatus";
+import TableRowActionsMenu, { type TableRowActionItem } from "../components/table/TableRowActionsMenu";
 import TableLayoutModal from "../components/overview/TableLayoutModal";
 import ErpPagination from "../components/overview/ErpPagination";
 import { useClientPagination } from "../hooks/useClientPagination";
@@ -144,6 +145,7 @@ const PRODUCTION_ORDERS_TABLE_DEFAULTS: readonly TableColumnDef[] = [
   { key: "customer_order_no", label: "Objednávka", defaultWidth: 120 },
   { key: "line_no", label: "Řádek", defaultWidth: 80 },
   { key: "due", label: "Termín", defaultWidth: 110 },
+  { key: "actions", label: "Akce", defaultWidth: 52 },
 ] as const;
 
 const PROD_COL_LABELS: Record<string, string> = Object.fromEntries(PRODUCTION_ORDERS_TABLE_DEFAULTS.map((c) => [c.key, c.label]));
@@ -155,7 +157,9 @@ type ProdCellCtx = Pick<
   | "onOpenPortfolioItemId"
   | "onOpenCustomerOrderCard"
   | "onPreviewPortfolioById"
->;
+> & {
+  setActionsMenuRowId: (id: number | null) => void;
+};
 
 function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx: ProdCellCtx): React.ReactNode {
   switch (key) {
@@ -175,19 +179,6 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
             }}
           >
             {row.vp_code}
-          </button>
-          <button
-            type="button"
-            className="erp-row-lift"
-            style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "4px 10px", fontSize: 12 }}
-            onClick={(e) => {
-              e.stopPropagation();
-              void openProductionOrderPdfInNewTab(row.id).catch((err) =>
-                window.alert(err instanceof Error ? err.message : String(err)),
-              );
-            }}
-          >
-            Tisk VP
           </button>
           {String(row.workflow_status ?? "").trim().toLowerCase() === "cancelled" ? (
             <span
@@ -225,7 +216,7 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
                   ctx.onOpenPortfolioItemId!(row.portfolio_item_id);
                   return;
                 }
-                const g = row.gpn.trim();
+                const g = String(row.gpn ?? "").trim();
                 if (!g) return;
                 const variants = await listPortfolioItemsByGpn(g);
                 if (variants.length === 1) {
@@ -242,16 +233,6 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
           ) : (
             row.gpn ?? "—"
           )}
-          {row.portfolio_item_id != null && ctx.onPreviewPortfolioById ? (
-            <button
-              type="button"
-              className="erp-row-lift"
-              style={{ ...UI.buttons.secondary, marginLeft: 8, padding: "4px 10px", fontSize: 12 }}
-              onClick={() => ctx.onPreviewPortfolioById!(row.portfolio_item_id!)}
-            >
-              Náhled
-            </button>
-          ) : null}
         </div>
       );
     case "description":
@@ -283,16 +264,6 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
         <div onClick={(e) => e.stopPropagation()}>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
             <span style={{ fontWeight: 800 }}>{row.zakazka ?? "—"}</span>
-            {row.customer_order_id != null && ctx.onOpenCustomerOrderCard ? (
-              <button
-                type="button"
-                className="erp-row-lift"
-                style={{ ...UI.buttons.secondary, padding: "4px 10px", fontSize: 12 }}
-                onClick={() => ctx.onOpenCustomerOrderCard!(row.customer_order_id!)}
-              >
-                Náhled
-              </button>
-            ) : null}
           </div>
         </div>
       );
@@ -302,6 +273,42 @@ function renderProductionCell(key: string, row: ProductionOrderOverviewRow, ctx:
       return row.line_no ?? "—";
     case "due":
       return row.due_date ?? "—";
+    case "actions": {
+      const items: TableRowActionItem[] = [
+        {
+          key: "print_vp",
+          label: "Tisk VP",
+          onClick: () => {
+            void openProductionOrderPdfInNewTab(row.id).catch((err) =>
+              window.alert(err instanceof Error ? err.message : String(err)),
+            );
+          },
+        },
+      ];
+      if (row.portfolio_item_id != null && ctx.onPreviewPortfolioById) {
+        items.push({
+          key: "preview_portfolio",
+          label: "Náhled portfolia",
+          onClick: () => ctx.onPreviewPortfolioById!(row.portfolio_item_id!),
+        });
+      }
+      if (row.customer_order_id != null && ctx.onOpenCustomerOrderCard) {
+        items.push({
+          key: "preview_order",
+          label: "Náhled zakázky",
+          onClick: () => ctx.onOpenCustomerOrderCard!(row.customer_order_id!),
+        });
+      }
+      return (
+        <TableRowActionsMenu
+          compact
+          align="end"
+          triggerLabel={`Akce — ${row.vp_code ?? row.id}`}
+          onOpenChange={(open) => ctx.setActionsMenuRowId(open ? row.id : null)}
+          actions={items}
+        />
+      );
+    }
     default:
       return "—";
   }
@@ -332,6 +339,8 @@ export default function ProductionOrdersPage({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [restockNotices, setRestockNotices] = useState<RestockWipReservationNotice[]>([]);
+  const [hoveredProdRowId, setHoveredProdRowId] = useState<number | null>(null);
+  const [prodActionsMenuRowId, setProdActionsMenuRowId] = useState<number | null>(null);
 
   const tb = usePersistedTableLayout("production_orders_table", PRODUCTION_ORDERS_TABLE_DEFAULTS);
 
@@ -443,7 +452,7 @@ export default function ProductionOrdersPage({
   // Klientská pagination nad již setříděným/filtrovaným polem.
   // Backend `/production-orders` podporuje server-side limit/offset/total, zde zatím
   // držíme plný dataset kvůli universal search + sortingu přes všechny řádky.
-  const paginationResetKey = `${workflowListFilter}|${overviewOrderType}|${activeQuickFilters.join(",")}|${searchQuery}|${tb.sort?.key ?? ""}|${tb.sort?.direction ?? ""}`;
+  const paginationResetKey = `${workflowListFilter}|${overviewOrderType}|${activeQuickFilters.join(",")}|${searchQuery}|${tb.sort?.columnKey ?? ""}|${tb.sort?.direction ?? ""}`;
   const {
     pagedRows: pagedDisplayRows,
     pageSize,
@@ -459,6 +468,7 @@ export default function ProductionOrdersPage({
     onOpenPortfolioItemId,
     onOpenCustomerOrderCard,
     onPreviewPortfolioById,
+    setActionsMenuRowId: setProdActionsMenuRowId,
   };
 
   const summaryTiles = useMemo(() => {
@@ -707,7 +717,9 @@ export default function ProductionOrdersPage({
                       </tr>
                     </thead>
                     <tbody>
-                      {pagedDisplayRows.map((row) => (
+                      {pagedDisplayRows.map((row) => {
+                        const rowHot = hoveredProdRowId === row.id || prodActionsMenuRowId === row.id;
+                        return (
                         <tr
                           key={row.id}
                           onClick={() => {
@@ -717,7 +729,14 @@ export default function ProductionOrdersPage({
                               onOpenDetail(row.id);
                             }
                           }}
-                          style={{ background: UI.colors.card }}
+                          onMouseEnter={() => setHoveredProdRowId(row.id)}
+                          onMouseLeave={() => setHoveredProdRowId((id) => (id === row.id ? null : id))}
+                          style={{
+                            cursor: "pointer",
+                            background: rowHot ? "#EFF6FF" : UI.colors.card,
+                            boxShadow: rowHot ? `inset 3px 0 0 0 ${UI.colors.primary}` : "none",
+                            transition: "background 120ms ease, box-shadow 120ms ease",
+                          }}
                         >
                           {tb.visibleColumns.map((col) => (
                             <td
@@ -726,7 +745,11 @@ export default function ProductionOrdersPage({
                                 ...UI.td,
                                 padding: `${tb.cellPaddingPx}px`,
                                 whiteSpace: "nowrap",
-                                textAlign: NUMERIC_COLUMN_KEYS.has(col.key) ? "right" : "left",
+                                textAlign: NUMERIC_COLUMN_KEYS.has(col.key)
+                                  ? "right"
+                                  : col.key === "actions"
+                                    ? "right"
+                                    : "left",
                                 fontVariantNumeric: NUMERIC_COLUMN_KEYS.has(col.key)
                                   ? ("tabular-nums" as const)
                                   : undefined,
@@ -738,7 +761,8 @@ export default function ProductionOrdersPage({
                             </td>
                           ))}
                         </tr>
-                      ))}
+                      );
+                      })}
                       {displayRows.length === 0 ? (
                         <tr>
                           <td

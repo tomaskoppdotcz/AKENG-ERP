@@ -13,7 +13,12 @@ from app.api.orders import ensure_orders_sqlite_schema, router as orders_router
 from app.api.orders_overview import router as orders_overview_router
 from app.api.order_detail import router as order_detail_router
 from app.api.technology import ensure_technology_sqlite_schema, router as technology_router
-from app.api.planning import ensure_planning_shift_schema, router as planning_router
+from app.api.planning import (
+    ensure_operation_machine_alternatives_schema,
+    ensure_planning_runs_schema,
+    ensure_planning_shift_schema,
+    router as planning_router,
+)
 from app.api.planner_gantt import router as planner_gantt_router
 from app.api.capacity_dashboard import router as capacity_dashboard_router
 from app.api.auto_planner import router as auto_planner_router
@@ -129,6 +134,8 @@ def startup():
     Base.metadata.create_all(bind=engine)
     backfill_canonical_statuses(engine)
     ensure_planning_shift_schema()
+    ensure_operation_machine_alternatives_schema()
+    ensure_planning_runs_schema()
     ensure_master_libraries_sqlite_schema(engine)
     ensure_technology_sqlite_schema(engine)
     ensure_orders_sqlite_schema(engine)

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from app.models.base import Base
 
@@ -21,6 +23,7 @@ class PlanningOperation(Base):
 
     qty = Column(Integer, nullable=False, default=0)
 
+    # denormalized planning attribute for grouping
     input_diameter_mm = Column(Float, nullable=True)
 
     setup_time_min = Column(Float, nullable=False, default=0)
@@ -48,8 +51,17 @@ class PlanningOperation(Base):
     material_ready = Column(Boolean, nullable=False, default=True)
 
     status = Column(String(20), nullable=False, default="planned")
+    planning_status = Column(String(32), nullable=False, default="unscheduled")
     planning_mode = Column(String(20), nullable=True, default="auto")
-    is_locked = Column(Boolean, nullable=True, default=False)
+    # is_locked is logically NOT NULL, but SQLite schema may contain NULL from legacy data - always coerce via bool()
+    is_locked = Column(Boolean, nullable=False, default=False)
+    priority = Column(Integer, nullable=False, default=50)
+    material_code = Column(String(64), nullable=True)
+    material_name = Column(String(255), nullable=True)
+    part_group = Column(String(64), nullable=True)
+    blocking_reason = Column(String(255), nullable=True)
+    predecessor_op_id = Column(Integer, nullable=True)
+    last_planned_at = Column(DateTime, nullable=True)
 
     is_cooperation = Column(Boolean, nullable=False, default=False)
     cooperation_status = Column(String(30), nullable=True)
@@ -116,3 +128,36 @@ class PlanningScheduleSegment(Base):
     segment_start = Column(DateTime, nullable=False)
     segment_end = Column(DateTime, nullable=False)
     duration_min = Column(Integer, nullable=False)
+
+
+class PlanningRun(Base):
+    __tablename__ = "planning_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    triggered_by_user_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    triggered_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    trigger_reason = Column(String(64), nullable=False)
+    operations_affected = Column(Integer, nullable=True)
+    operations_locked_skipped = Column(Integer, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    status = Column(String(16), nullable=False, default="success")
+    error_message = Column(String(2000), nullable=True)
+    notes = Column(String(1000), nullable=True)
+
+
+class OperationMachineAlternative(Base):
+    __tablename__ = "operation_machine_alternatives"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Logical FK to portfolio_technology_template_operations.id (no physical constraint per project convention)
+    tp_operation_id = Column(Integer, nullable=False)
+    machine_id = Column(Integer, nullable=False)
+    is_primary = Column(Boolean, nullable=False, default=False)
+    setup_time_min = Column(Float, nullable=True)
+    cycle_time_min = Column(Float, nullable=True)
+    preference_order = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    notes = Column(String(500), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)

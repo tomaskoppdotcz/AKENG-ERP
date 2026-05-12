@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 import {
   createEmployeeSubgroup,
   getEmployeeSubgroups,
@@ -201,10 +202,13 @@ export default function EmployeeGroupLibraryPage() {
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.sort_order}</td>
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.name}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.is_active ? "ANO" : "NE"}</td>
-                  <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
-                    <button type="button" style={UI.buttons.secondary} onClick={() => openEdit(r)}>
-                      Upravit
-                    </button>
+                  <td style={{ ...UI.td, padding: "10px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
+                    <TableRowActionsMenu
+                      compact
+                      align="end"
+                      triggerLabel={`Akce — ${r.name}`}
+                      actions={[{ key: "edit", label: "Upravit", onClick: () => openEdit(r) }]}
+                    />
                   </td>
                 </tr>
               ))}

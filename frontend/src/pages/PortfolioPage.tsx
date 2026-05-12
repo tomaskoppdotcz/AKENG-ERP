@@ -20,6 +20,7 @@ import {
   type PortfolioItem,
 } from "../services/portfolioApi";
 import { buildSearchHaystack, matchesSearchQuery, normalizeSearchText } from "../overview/overviewSearch";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 
 type Props = {
   onBackToDashboard?: () => void;
@@ -81,7 +82,7 @@ const PORTFOLIO_TABLE_DEFAULTS: readonly TableColumnDef[] = [
   { key: "sale_price", label: "Prodejní cena / ks", defaultWidth: 140 },
   { key: "tp", label: "TP", defaultWidth: 80 },
   { key: "status", label: "Stav", defaultWidth: 110 },
-  { key: "actions", label: "Akce", defaultWidth: 220 },
+  { key: "actions", label: "Akce", defaultWidth: 56 },
 ] as const;
 
 const PORTFOLIO_COL_LABELS: Record<string, string> = Object.fromEntries(
@@ -131,6 +132,8 @@ export default function PortfolioPage({
   const [formLogisticMode, setFormLogisticMode] = useState("vyroba_zakaznik");
   const [formSalePrice, setFormSalePrice] = useState("");
   const [formActive, setFormActive] = useState(true);
+  const [hoveredPortfolioRowId, setHoveredPortfolioRowId] = useState<number | null>(null);
+  const [portfolioActionsMenuRowId, setPortfolioActionsMenuRowId] = useState<number | null>(null);
 
   const customerRows = Array.isArray(customers) ? customers : [];
 
@@ -547,35 +550,30 @@ export default function PortfolioPage({
       }
       case "actions":
         return (
-          <span
-            onClick={(e) => e.stopPropagation()}
-            style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}
-          >
-            <button
-              type="button"
-              className="erp-row-lift"
-              style={{ ...UI.buttons.secondary, padding: "4px 10px", fontSize: 12 }}
-              onClick={() => openEditForm(row)}
-            >
-              Upravit
-            </button>
-            <button
-              type="button"
-              className="erp-row-lift"
-              style={{ ...UI.buttons.secondary, padding: "4px 10px", fontSize: 12 }}
-              onClick={() => openCopyForm(row)}
-            >
-              Kopírovat
-            </button>
-            <button
-              type="button"
-              className="erp-row-lift"
-              style={{ ...UI.buttons.secondary, padding: "4px 10px", fontSize: 12 }}
-              onClick={() => handleDelete(row.id)}
-            >
-              Smazat
-            </button>
-          </span>
+          <TableRowActionsMenu
+            align="end"
+            compact
+            triggerLabel={`Akce — ${row.gpn ?? row.id}`}
+            onOpenChange={(open) => setPortfolioActionsMenuRowId(open ? row.id : null)}
+            actions={[
+              {
+                key: "edit",
+                label: "Upravit",
+                onClick: () => openEditForm(row),
+              },
+              {
+                key: "copy",
+                label: "Kopírovat",
+                onClick: () => openCopyForm(row),
+              },
+              {
+                key: "delete",
+                label: "Smazat",
+                danger: true,
+                onClick: () => void handleDelete(row.id),
+              },
+            ]}
+          />
         );
       default:
         return "—";
@@ -931,7 +929,8 @@ export default function PortfolioPage({
                               whiteSpace: "nowrap",
                               padding: `${tb.cellPaddingPx}px`,
                               width: col.width ?? undefined,
-                              textAlign: col.key === "sale_price" ? "right" : "left",
+                              textAlign:
+                                col.key === "sale_price" ? "right" : col.key === "actions" ? "right" : "left",
                             }}
                           >
                             {col.label}
@@ -940,7 +939,10 @@ export default function PortfolioPage({
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedRows.map((row) => (
+                      {sortedRows.map((row) => {
+                        const rowHot =
+                          hoveredPortfolioRowId === row.id || portfolioActionsMenuRowId === row.id;
+                        return (
                         <tr
                           key={row.id}
                           role="button"
@@ -952,7 +954,16 @@ export default function PortfolioPage({
                               openItem(row);
                             }
                           }}
-                          style={{ cursor: "pointer", background: UI.colors.card }}
+                          onMouseEnter={() => setHoveredPortfolioRowId(row.id)}
+                          onMouseLeave={() =>
+                            setHoveredPortfolioRowId((id) => (id === row.id ? null : id))
+                          }
+                          style={{
+                            cursor: "pointer",
+                            background: rowHot ? "#EFF6FF" : UI.colors.card,
+                            boxShadow: rowHot ? `inset 3px 0 0 0 ${UI.colors.primary}` : "none",
+                            transition: "background 120ms ease, box-shadow 120ms ease",
+                          }}
                         >
                           {tb.visibleColumns.map((col) => (
                             <td
@@ -961,7 +972,12 @@ export default function PortfolioPage({
                                 ...UI.td,
                                 padding: `${tb.cellPaddingPx}px`,
                                 whiteSpace: col.key === "name" ? "normal" : "nowrap",
-                                textAlign: col.key === "sale_price" ? "right" : "left",
+                                textAlign:
+                                  col.key === "sale_price"
+                                    ? "right"
+                                    : col.key === "actions"
+                                      ? "right"
+                                      : "left",
                                 fontVariantNumeric: col.key === "sale_price" ? ("tabular-nums" as const) : undefined,
                                 fontWeight: col.key === "gpn" ? 900 : undefined,
                                 color: UI.colors.textPrimary,
@@ -971,7 +987,8 @@ export default function PortfolioPage({
                             </td>
                           ))}
                         </tr>
-                      ))}
+                      );
+                      })}
                       {filteredRows.length === 0 ? (
                         <tr>
                           <td

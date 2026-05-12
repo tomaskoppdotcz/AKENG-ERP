@@ -48,6 +48,7 @@ def ensure_planning_shift_schema() -> None:
                 conn.execute(text("ALTER TABLE machine_calendar ADD COLUMN shift_start_minutes INTEGER"))
             if "planning_operations" in insp.get_table_names():
                 op_cols = {c["name"] for c in insp.get_columns("planning_operations")}
+                # FÁZE A: additive schema changes (idempotent)
                 for col, sql_type in (
                     ("is_cooperation", "BOOLEAN NOT NULL DEFAULT 0"),
                     ("cooperation_status", "VARCHAR(30)"),
@@ -57,9 +58,45 @@ def ensure_planning_shift_schema() -> None:
                     ("cooperation_sent_at", "DATETIME"),
                     ("cooperation_received_at", "DATETIME"),
                     ("cooperation_note", "TEXT"),
+                    ("planning_status", "VARCHAR(32) DEFAULT 'unscheduled'"),
+                    ("priority", "INTEGER DEFAULT 50"),
+                    ("material_code", "VARCHAR(64)"),
+                    ("material_name", "VARCHAR(255)"),
+                    ("part_group", "VARCHAR(64)"),
+                    ("blocking_reason", "VARCHAR(255)"),
+                    ("predecessor_op_id", "INTEGER"),
+                    ("last_planned_at", "DATETIME"),
                 ):
                     if col not in op_cols:
                         conn.execute(text(f"ALTER TABLE planning_operations ADD COLUMN {col} {sql_type}"))
+                # FÁZE B: data backfills / canonical defaults
+                conn.execute(
+                    text(
+                        """
+                        UPDATE planning_operations
+                        SET planning_status = 'unscheduled'
+                        WHERE planning_status IS NULL
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        UPDATE planning_operations
+                        SET priority = 50
+                        WHERE priority IS NULL
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        UPDATE planning_operations
+                        SET is_locked = 0
+                        WHERE is_locked IS NULL
+                        """
+                    )
+                )
                 conn.execute(
                     text(
                         """
@@ -70,9 +107,128 @@ def ensure_planning_shift_schema() -> None:
                         """
                     )
                 )
+                # FÁZE C: planner indexes
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_planning_operations_planning_status "
+                        "ON planning_operations (planning_status)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_planning_operations_priority "
+                        "ON planning_operations (priority)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_planning_operations_predecessor_op_id "
+                        "ON planning_operations (predecessor_op_id)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_planning_operations_material_code "
+                        "ON planning_operations (material_code)"
+                    )
+                )
     except Exception as e:
         logger.warning("[planning] ensure_planning_shift_schema skipped: %s", e)
     _ensure_machine_shift_template_workplace_column()
+
+
+def ensure_operation_machine_alternatives_schema() -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS operation_machine_alternatives (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        tp_operation_id INTEGER NOT NULL,
+                        machine_id INTEGER NOT NULL,
+                        is_primary BOOLEAN NOT NULL DEFAULT 0,
+                        setup_time_min FLOAT NULL,
+                        cycle_time_min FLOAT NULL,
+                        preference_order INTEGER NOT NULL DEFAULT 0,
+                        is_active BOOLEAN NOT NULL DEFAULT 1,
+                        notes VARCHAR(500) NULL,
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_operation_machine_alternatives_tp_operation_id "
+                    "ON operation_machine_alternatives (tp_operation_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_operation_machine_alternatives_machine_id "
+                    "ON operation_machine_alternatives (machine_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_operation_machine_alternatives_created_at "
+                    "ON operation_machine_alternatives (created_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_operation_machine_alternatives_tp_operation_machine "
+                    "ON operation_machine_alternatives (tp_operation_id, machine_id)"
+                )
+            )
+    except Exception as e:
+        logger.warning("[planning] ensure_operation_machine_alternatives_schema skipped: %s", e)
+
+
+def ensure_planning_runs_schema() -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS planning_runs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        triggered_by_user_id INTEGER NULL,
+                        created_at DATETIME NOT NULL,
+                        triggered_at DATETIME NOT NULL,
+                        trigger_reason VARCHAR(64) NOT NULL,
+                        operations_affected INTEGER NULL,
+                        operations_locked_skipped INTEGER NULL,
+                        duration_ms INTEGER NULL,
+                        status VARCHAR(16) NOT NULL DEFAULT 'success',
+                        error_message VARCHAR(2000) NULL,
+                        notes VARCHAR(1000) NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_planning_runs_triggered_at "
+                    "ON planning_runs (triggered_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_planning_runs_status "
+                    "ON planning_runs (status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_planning_runs_trigger_reason "
+                    "ON planning_runs (trigger_reason)"
+                )
+            )
+    except Exception as e:
+        logger.warning("[planning] ensure_planning_runs_schema skipped: %s", e)
 
 
 def _ensure_machine_shift_template_workplace_column() -> None:

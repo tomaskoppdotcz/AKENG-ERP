@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { FormField, FormGrid, FormSection, HighlightBox, formControlStyle, formTextareaStyle } from "../components/FormLayout";
 import { UI } from "../styles/ui";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 import {
   SUPPLIER_RFQ_CATEGORIES,
   SUPPLIER_RFQ_STATUSES,
@@ -554,6 +555,8 @@ export default function SupplierRfqsPage() {
   const [editHeader, setEditHeader] = useState<SupplierRfqPayload>(emptyHeader);
   const [itemForm, setItemForm] = useState<SupplierRfqItemPayload>(emptyItem);
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [hoverRfqRowId, setHoverRfqRowId] = useState<number | null>(null);
+  const [rfqListMenuOpenId, setRfqListMenuOpenId] = useState<number | null>(null);
   const [suppliers, setSuppliers] = useState<ApprovedSupplierOption[]>([]);
   const [linkOptions, setLinkOptions] = useState<SupplierRfqLinkOptions>(emptyLinkOptions);
   const [newOperationOptions, setNewOperationOptions] = useState<SupplierRfqOperationOption[]>([]);
@@ -981,15 +984,20 @@ export default function SupplierRfqsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {paginatedRows.map((row) => (
+                  {paginatedRows.map((row) => {
+                    const selected = row.id === selectedId;
+                    const rowHot = selected || hoverRfqRowId === row.id || rfqListMenuOpenId === row.id;
+                    return (
                     <tr
                       key={row.id}
                       style={{
-                        background: row.id === selectedId ? "#EFF6FF" : undefined,
-                        boxShadow: row.id === selectedId ? "inset 4px 0 0 #1D4ED8" : undefined,
+                        background: rowHot ? "#EFF6FF" : undefined,
+                        boxShadow: selected || rfqListMenuOpenId === row.id ? "inset 4px 0 0 #1D4ED8" : undefined,
                         cursor: "pointer",
                       }}
                       onClick={() => handleRowSelect(row)}
+                      onMouseEnter={() => setHoverRfqRowId(row.id)}
+                      onMouseLeave={() => setHoverRfqRowId((id) => (id === row.id ? null : id))}
                     >
                       <td style={{ ...UI.td, fontWeight: 900, color: "#1D4ED8", whiteSpace: "nowrap" }}>{row.rfq_no}</td>
                       <td style={{ ...UI.td, fontWeight: 800 }}>{row.title}</td>
@@ -999,21 +1007,27 @@ export default function SupplierRfqsPage() {
                       <td style={UI.td}>{formatLink(row)}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{formatDate(row.due_date)}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap", fontWeight: 800 }}>{formatMoney(row.total_offered_price)}</td>
-                      <td style={UI.td}>
-                        <button
-                          type="button"
-                          className="erp-table-link"
-                          style={{ ...UI.tableLinkButtonReset, color: "#1D4ED8" }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRowSelect(row);
+                      <td style={{ ...UI.td, textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                        <TableRowActionsMenu
+                          compact
+                          align="end"
+                          triggerLabel={`Akce — ${row.rfq_no}`}
+                          onOpenChange={(open) => {
+                            setRfqListMenuOpenId(open ? row.id : null);
+                            if (open && row.id !== selectedId) void loadDetail(row.id);
                           }}
-                        >
-                          Detail
-                        </button>
+                          actions={[
+                            {
+                              key: "detail",
+                              label: selected ? "Zavřít detail" : "Otevřít detail",
+                              onClick: () => handleRowSelect(row),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1157,24 +1171,28 @@ export default function SupplierRfqsPage() {
                               </td>
                               <td style={UI.td}>{formatMoney(item.target_price, item.currency)}</td>
                               <td style={UI.td}>{formatMoney(item.offered_price, item.currency)}</td>
-                              <td style={{ ...UI.td, whiteSpace: "nowrap" }}>
-                                <button
-                                  type="button"
-                                  style={{ ...UI.tableLinkButtonReset, color: "#1D4ED8", marginRight: 10 }}
-                                  onClick={() => {
-                                    setEditingItemId(item.id);
-                                    setItemForm(itemPayloadFromItem(item));
-                                  }}
-                                >
-                                  Upravit
-                                </button>
-                                <button
-                                  type="button"
-                                  style={{ ...UI.tableLinkButtonReset, color: "#B91C1C" }}
-                                  onClick={() => void handleDeleteItem(item.id)}
-                                >
-                                  Smazat
-                                </button>
+                              <td style={{ ...UI.td, textAlign: "right", whiteSpace: "nowrap" }}>
+                                <TableRowActionsMenu
+                                  compact
+                                  align="end"
+                                  triggerLabel={`Akce položky — ${item.item_name}`}
+                                  actions={[
+                                    {
+                                      key: "edit",
+                                      label: "Upravit",
+                                      onClick: () => {
+                                        setEditingItemId(item.id);
+                                        setItemForm(itemPayloadFromItem(item));
+                                      },
+                                    },
+                                    {
+                                      key: "delete",
+                                      label: "Smazat",
+                                      danger: true,
+                                      onClick: () => void handleDeleteItem(item.id),
+                                    },
+                                  ]}
+                                />
                               </td>
                             </tr>
                           ))

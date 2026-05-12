@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { FormField, FormGrid, FormSection, HighlightBox, formControlStyle, formTextareaStyle } from "../components/FormLayout";
 import { UI } from "../styles/ui";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 import {
   SUPPLIER_PURCHASE_ORDER_CATEGORIES,
   SUPPLIER_PURCHASE_ORDER_SOURCE_TYPES,
@@ -536,6 +537,8 @@ export default function SupplierPurchaseOrdersPage({ initialPurchaseOrderId = nu
   const [headerForm, setHeaderForm] = useState<SupplierPurchaseOrderPayload | null>(null);
   const [itemForm, setItemForm] = useState<SupplierPurchaseOrderItemPayload>(emptyItem);
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [hoverPoRowId, setHoverPoRowId] = useState<number | null>(null);
+  const [poListMenuOpenId, setPoListMenuOpenId] = useState<number | null>(null);
   const [receiveForms, setReceiveForms] = useState<Record<number, ReceiveItemFormState>>({});
   const [suppliers, setSuppliers] = useState<ApprovedSupplierOption[]>([]);
   const [linkOptions, setLinkOptions] = useState<SupplierRfqLinkOptions>(emptyLinkOptions);
@@ -1040,15 +1043,20 @@ export default function SupplierPurchaseOrdersPage({ initialPurchaseOrderId = nu
                   </tr>
                 </thead>
                 <tbody>
-                  {paginatedRows.map((row) => (
+                  {paginatedRows.map((row) => {
+                    const selected = row.id === selectedId;
+                    const rowHot = selected || hoverPoRowId === row.id || poListMenuOpenId === row.id;
+                    return (
                     <tr
                       key={row.id}
                       style={{
-                        background: row.id === selectedId ? "#EFF6FF" : undefined,
-                        boxShadow: row.id === selectedId ? "inset 4px 0 0 #1D4ED8" : undefined,
+                        background: rowHot ? "#EFF6FF" : undefined,
+                        boxShadow: selected || poListMenuOpenId === row.id ? "inset 4px 0 0 #1D4ED8" : undefined,
                         cursor: "pointer",
                       }}
                       onClick={() => handleRowSelect(row)}
+                      onMouseEnter={() => setHoverPoRowId(row.id)}
+                      onMouseLeave={() => setHoverPoRowId((id) => (id === row.id ? null : id))}
                     >
                       <td style={{ ...UI.td, fontWeight: 900, color: "#1D4ED8", whiteSpace: "nowrap" }}>{row.po_no}</td>
                       <td style={UI.td}>
@@ -1065,21 +1073,27 @@ export default function SupplierPurchaseOrdersPage({ initialPurchaseOrderId = nu
                       <td style={UI.td}>{formatLink(row)}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap" }}>{formatDate(row.expected_delivery_date)}</td>
                       <td style={{ ...UI.td, whiteSpace: "nowrap", fontWeight: 800 }}>{formatMoney(row.total_price, row.currency)}</td>
-                      <td style={UI.td}>
-                        <button
-                          type="button"
-                          className="erp-table-link"
-                          style={{ ...UI.tableLinkButtonReset, color: "#1D4ED8" }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRowSelect(row);
+                      <td style={{ ...UI.td, textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                        <TableRowActionsMenu
+                          compact
+                          align="end"
+                          triggerLabel={`Akce — ${row.po_no}`}
+                          onOpenChange={(open) => {
+                            setPoListMenuOpenId(open ? row.id : null);
+                            if (open && row.id !== selectedId) void loadDetail(row.id);
                           }}
-                        >
-                          Detail
-                        </button>
+                          actions={[
+                            {
+                              key: "detail",
+                              label: selected ? "Zavřít detail" : "Otevřít detail",
+                              onClick: () => handleRowSelect(row),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1295,24 +1309,28 @@ export default function SupplierPurchaseOrdersPage({ initialPurchaseOrderId = nu
                                       ) : null}
                                     </div>
                                   </td>
-                                  <td style={{ ...UI.td, whiteSpace: "nowrap" }}>
-                                    <button
-                                      type="button"
-                                      style={{ ...UI.tableLinkButtonReset, color: "#1D4ED8", marginRight: 10 }}
-                                      onClick={() => {
-                                        setEditingItemId(item.id);
-                                        setItemForm(itemPayloadFromItem(item));
-                                      }}
-                                    >
-                                      Upravit
-                                    </button>
-                                    <button
-                                      type="button"
-                                      style={{ ...UI.tableLinkButtonReset, color: "#B91C1C" }}
-                                      onClick={() => void handleDeleteItem(item.id)}
-                                    >
-                                      Smazat
-                                    </button>
+                                  <td style={{ ...UI.td, textAlign: "right", whiteSpace: "nowrap" }}>
+                                    <TableRowActionsMenu
+                                      compact
+                                      align="end"
+                                      triggerLabel={`Akce položky — ${item.item_name}`}
+                                      actions={[
+                                        {
+                                          key: "edit",
+                                          label: "Upravit",
+                                          onClick: () => {
+                                            setEditingItemId(item.id);
+                                            setItemForm(itemPayloadFromItem(item));
+                                          },
+                                        },
+                                        {
+                                          key: "delete",
+                                          label: "Smazat",
+                                          danger: true,
+                                          onClick: () => void handleDeleteItem(item.id),
+                                        },
+                                      ]}
+                                    />
                                   </td>
                                 </tr>
                                 <tr>

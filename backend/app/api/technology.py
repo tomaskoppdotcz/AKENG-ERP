@@ -22,17 +22,68 @@ def ensure_technology_sqlite_schema(engine_: Engine) -> None:
     if "technology_template_operations" not in insp.get_table_names():
         return
     cols = {c["name"] for c in insp.get_columns("technology_template_operations")}
-    if "workplace_library_item_id" in cols:
-        return
-    with engine_.begin() as conn:
+
+    # FÁZE A: additive schema changes (idempotent)
+    stmts: list[str] = []
+    if "workplace_library_item_id" not in cols:
         if url.startswith("sqlite"):
-            conn.execute(
-                text("ALTER TABLE technology_template_operations ADD COLUMN workplace_library_item_id INTEGER")
-            )
+            stmts.append("ALTER TABLE technology_template_operations ADD COLUMN workplace_library_item_id INTEGER")
         else:
-            conn.execute(
-                text("ALTER TABLE technology_template_operations ADD COLUMN workplace_library_item_id INTEGER NULL")
+            stmts.append("ALTER TABLE technology_template_operations ADD COLUMN workplace_library_item_id INTEGER NULL")
+    if "is_cooperation" not in cols:
+        stmts.append("ALTER TABLE technology_template_operations ADD COLUMN is_cooperation BOOLEAN NOT NULL DEFAULT 0")
+    if "default_cooperation_status" not in cols:
+        stmts.append("ALTER TABLE technology_template_operations ADD COLUMN default_cooperation_status VARCHAR(30)")
+    if "cooperation_category" not in cols:
+        stmts.append("ALTER TABLE technology_template_operations ADD COLUMN cooperation_category VARCHAR(80)")
+    if "preferred_supplier_id" not in cols:
+        stmts.append("ALTER TABLE technology_template_operations ADD COLUMN preferred_supplier_id INTEGER")
+    if "cooperation_note" not in cols:
+        stmts.append("ALTER TABLE technology_template_operations ADD COLUMN cooperation_note VARCHAR")
+
+    with engine_.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+        # FÁZE B: backfills
+        conn.execute(
+            text(
+                "UPDATE technology_template_operations "
+                "SET is_cooperation = 0 WHERE is_cooperation IS NULL"
             )
+        )
+        conn.execute(
+            text(
+                "UPDATE technology_template_operations "
+                "SET setup_time_min = 0 WHERE setup_time_min IS NULL"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE technology_template_operations "
+                "SET labor_time_per_piece_min = 0 WHERE labor_time_per_piece_min IS NULL"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE technology_template_operations "
+                "SET buffer_after_min = 20 WHERE buffer_after_min IS NULL"
+            )
+        )
+
+        # FÁZE C: indexes
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_technology_template_operations_workplace_library_item_id "
+                "ON technology_template_operations (workplace_library_item_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_technology_template_operations_preferred_supplier_id "
+                "ON technology_template_operations (preferred_supplier_id)"
+            )
+        )
 
 
 class TechnologyTemplateCreate(BaseModel):

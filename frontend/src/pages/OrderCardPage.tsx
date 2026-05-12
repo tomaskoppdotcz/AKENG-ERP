@@ -41,7 +41,7 @@ import TableLayoutModal from "../components/overview/TableLayoutModal";
 import { buildErpUrl } from "../utils/erpDeepLink";
 import { canPerformAction, hasPermission, readStoredErpRole } from "../auth/rbac";
 import { useCurrentUser } from "../auth/useCurrentUser";
-import InlineBanner from "../components/InlineBanner";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 import { interpretError, runWriteAction, type WriteFeedback } from "../utils/writeActionFeedback";
 import {
   formatFinancialCzk,
@@ -67,7 +67,7 @@ const ORDER_CARD_ITEMS_DEFAULTS: readonly TableColumnDef[] = [
   { key: "completion", label: "Hotovo", defaultWidth: 90 },
   { key: "labor", label: "Náklad práce", defaultWidth: 120 },
   { key: "performance", label: "Výkonnost", defaultWidth: 100 },
-  { key: "actions", label: "Akce", defaultWidth: 160 },
+  { key: "actions", label: "Akce", defaultWidth: 52 },
 ] as const;
 
 const ORDER_CARD_ITEMS_COL_LABELS: Record<string, string> = Object.fromEntries(
@@ -190,6 +190,7 @@ export default function OrderCardPage({
   const writeFeedbackAnchorRef = useRef<HTMLDivElement>(null);
 
   const [hoveredItemId, setHoveredItemId] = useState<number | null>(null);
+  const [orderLineActionsMenuId, setOrderLineActionsMenuId] = useState<number | null>(null);
   const [activeOrderSubtab, setActiveOrderSubtab] = useState<OrderSubtab>("Přehled");
   const [hoverOrderSubtab, setHoverOrderSubtab] = useState<OrderSubtab | null>(null);
   const [query, setQuery] = useState("");
@@ -1417,7 +1418,7 @@ export default function OrderCardPage({
                     <tbody>
                       {filteredItems.map((item, idx) => {
                         const rowBg = idx % 2 === 1 ? rowStripeBg : UI.colors.card;
-                        const isHover = hoveredItemId === item.job_item_id;
+                        const rowHot = hoveredItemId === item.job_item_id || orderLineActionsMenuId === item.job_item_id;
                         const numCell: React.CSSProperties = {
                           ...tableBodyCell,
                           whiteSpace: "nowrap",
@@ -1439,8 +1440,8 @@ export default function OrderCardPage({
                             onMouseLeave={() => setHoveredItemId((id) => (id === item.job_item_id ? null : id))}
                             style={{
                               cursor: "pointer",
-                              background: isHover ? "#EFF6FF" : rowBg,
-                              boxShadow: isHover
+                              background: rowHot ? "#EFF6FF" : rowBg,
+                              boxShadow: rowHot
                                 ? `inset 3px 0 0 0 ${UI.colors.primary}`
                                 : "none",
                               transition: "background 120ms ease, box-shadow 120ms ease",
@@ -1557,35 +1558,43 @@ export default function OrderCardPage({
                             <td style={numCell}>{formatLineLabor(item.direct_labor_cost)}</td>
                             <td style={numCell}>{formatFinancialPercent(item.performance_percent)}</td>
                             <td
-                              style={txtCell}
+                              style={{ ...txtCell, textAlign: "right" }}
                               onClick={(e) => e.stopPropagation()}
                             >
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                                <button
-                                  type="button"
-                                  style={UI.buttons.secondary}
-                                  disabled={
-                                    !orderWorkflowActive ||
-                                    !isBusinessWorkflowActive(item.workflow_status) ||
-                                    !canOrdersWrite
-                                  }
-                                  onClick={() => openItemEdit(item)}
-                                >
-                                  Upravit
-                                </button>
-                                <button
-                                  type="button"
-                                  style={dangerButton}
-                                  disabled={
-                                    !orderWorkflowActive ||
-                                    !isBusinessWorkflowActive(item.workflow_status) ||
-                                    !canOrdersStorno
-                                  }
-                                  onClick={() => handleStornoItem(item.job_item_id)}
-                                >
-                                  Zrušit
-                                </button>
-                              </div>
+                              <TableRowActionsMenu
+                                compact
+                                align="end"
+                                triggerLabel={`Akce řádku ${item.line_no}`}
+                                onOpenChange={(open) =>
+                                  setOrderLineActionsMenuId(open ? item.job_item_id : null)
+                                }
+                                disabled={
+                                  !orderWorkflowActive ||
+                                  !isBusinessWorkflowActive(item.workflow_status) ||
+                                  (!canOrdersWrite && !canOrdersStorno)
+                                }
+                                actions={[
+                                  {
+                                    key: "edit",
+                                    label: "Upravit",
+                                    disabled:
+                                      !orderWorkflowActive ||
+                                      !isBusinessWorkflowActive(item.workflow_status) ||
+                                      !canOrdersWrite,
+                                    onClick: () => openItemEdit(item),
+                                  },
+                                  {
+                                    key: "storno",
+                                    label: "Zrušit",
+                                    danger: true,
+                                    disabled:
+                                      !orderWorkflowActive ||
+                                      !isBusinessWorkflowActive(item.workflow_status) ||
+                                      !canOrdersStorno,
+                                    onClick: () => handleStornoItem(item.job_item_id),
+                                  },
+                                ]}
+                              />
                             </td>
                           </tr>
                         );

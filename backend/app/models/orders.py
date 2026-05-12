@@ -76,6 +76,12 @@ class ProductionOrder(Base):
     restock_redirected_from_internal = Column(Boolean, nullable=False, default=False)
     # sklad_zakaznik VP čekající na příjem zboží z rezervovaného restock WIP (plánování blokováno)
     blocked_until_reserved_stock_receipt = Column(Boolean, nullable=False, default=False)
+    priority = Column(Integer, nullable=False, default=50)
+    # Application-level enforced via PriorityLabel enum from app.services.planning.enums
+    priority_label = Column(String(16), nullable=True)
+    priority_set_by_user_id = Column(Integer, nullable=True)
+    priority_set_at = Column(DateTime, nullable=True)
+    priority_reason = Column(String(500), nullable=True)
 
     job_item = relationship("JobItem", back_populates="production_orders")
 

@@ -23,6 +23,7 @@ import type { TableColumnDef } from "../overview/tableLayoutMerge";
 import { sortRowsWithConfig } from "../overview/tableLayoutMerge";
 import { formatOverviewQtyWithUnit } from "../overview/overviewMetricsFormat";
 import { buildSearchHaystack, matchesSearchQuery } from "../overview/overviewSearch";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 
 type Props = {
   /** Klik na řádek — otevře detail v pracovní záložce. */
@@ -366,41 +367,32 @@ export default function ProductStockPage({ onOpenStockInWorkspaceTab }: Props) {
         return row.unit?.trim() ? row.unit : "—";
       case "actions":
         return (
-          <span onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              style={UI.buttons.primary}
-              onClick={(e) => {
-                e.stopPropagation();
-                setIssueRow(row);
-                setIssueQty(row.current_qty > 0 ? String(row.current_qty) : "1");
-                setIssueJobItemId("");
-                setIssueCustomerOrderId("");
-                setIssueError(null);
-              }}
-            >
-              Vydat výrobek
-            </button>
-            <button
-              type="button"
-              style={UI.buttons.secondary}
-              onClick={(e) => {
-                e.stopPropagation();
-                openEdit(row);
-              }}
-            >
-              Upravit
-            </button>
-            <button
-              type="button"
-              style={UI.buttons.secondary}
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleDelete(row);
-              }}
-            >
-              Smazat
-            </button>
+          <span onClick={(e) => e.stopPropagation()}>
+            <TableRowActionsMenu
+              compact
+              align="end"
+              triggerLabel="Akce skladové karty výrobku"
+              actions={[
+                {
+                  key: "issue",
+                  label: "Vydat výrobek",
+                  onClick: () => {
+                    setIssueRow(row);
+                    setIssueQty(row.current_qty > 0 ? String(row.current_qty) : "1");
+                    setIssueJobItemId("");
+                    setIssueCustomerOrderId("");
+                    setIssueError(null);
+                  },
+                },
+                { key: "edit", label: "Upravit", onClick: () => openEdit(row) },
+                {
+                  key: "delete",
+                  label: "Smazat",
+                  danger: true,
+                  onClick: () => void handleDelete(row),
+                },
+              ]}
+            />
           </span>
         );
       default:

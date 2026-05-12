@@ -3,6 +3,7 @@ import PageContainer from "../components/layout/PageContainer";
 import PageHeader from "../components/layout/PageHeader";
 import PageSection from "../components/layout/PageSection";
 import { erpKpiTileBackground, UI } from "../styles/ui";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 import { getMaterialGroups, getMaterialLibraryItems, type MaterialGroup, type MaterialLibraryItem } from "../services/materialLibraryApi";
 import { getStorageLocations, type StorageLocation } from "../services/storageLocationApi";
 import {
@@ -780,27 +781,27 @@ export default function MaterialStockPage({ onOpenStockInWorkspaceTab }: Props) 
                         <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>
                           {row.min_qty == null ? "—" : `${row.min_qty} mm`}
                         </td>
-                        <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6 }}>
-                          <button
-                            type="button"
-                            style={UI.buttons.secondary}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEdit(row);
-                            }}
-                          >
-                            Upravit
-                          </button>
-                          <button
-                            type="button"
-                            style={UI.buttons.secondary}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDelete(row);
-                            }}
-                          >
-                            Smazat
-                          </button>
+                        <td style={{ ...UI.td, padding: "10px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
+                          <span onClick={(e) => e.stopPropagation()}>
+                            <TableRowActionsMenu
+                              compact
+                              align="end"
+                              triggerLabel="Akce skladové karty"
+                              actions={[
+                                {
+                                  key: "edit",
+                                  label: "Upravit",
+                                  onClick: () => openEdit(row),
+                                },
+                                {
+                                  key: "delete",
+                                  label: "Smazat",
+                                  danger: true,
+                                  onClick: () => handleDelete(row),
+                                },
+                              ]}
+                            />
+                          </span>
                         </td>
                       </tr>
                   ))}

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { UI } from "../styles/ui";
+import TableRowActionsMenu from "../components/table/TableRowActionsMenu";
 import {
   createStorageLocation,
   deleteStorageLocation,
@@ -182,13 +183,16 @@ export default function StorageLocationPage() {
                   <td style={{ ...UI.td, padding: "10px 10px" }}>{r.name}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{typeLabel(r.location_type)}</td>
                   <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap" }}>{r.is_active ? "ANO" : "NE"}</td>
-                  <td style={{ ...UI.td, padding: "10px 10px", whiteSpace: "nowrap", display: "flex", gap: 6 }}>
-                    <button type="button" style={UI.buttons.secondary} onClick={() => openEdit(r)}>
-                      Upravit
-                    </button>
-                    <button type="button" style={UI.buttons.secondary} onClick={() => handleDelete(r.id)}>
-                      Smazat
-                    </button>
+                  <td style={{ ...UI.td, padding: "10px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
+                    <TableRowActionsMenu
+                      compact
+                      align="end"
+                      triggerLabel={`Akce — ${r.code}`}
+                      actions={[
+                        { key: "edit", label: "Upravit", onClick: () => openEdit(r) },
+                        { key: "delete", label: "Smazat", danger: true, onClick: () => handleDelete(r.id) },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))}

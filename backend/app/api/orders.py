@@ -272,9 +272,21 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
             po_stmts.append(
                 "ALTER TABLE production_orders ADD COLUMN blocked_until_reserved_stock_receipt BOOLEAN NOT NULL DEFAULT 0"
             )
+        if "priority" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN priority INTEGER DEFAULT 50")
+        if "priority_label" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN priority_label VARCHAR(16)")
+        if "priority_set_by_user_id" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN priority_set_by_user_id INTEGER")
+        if "priority_set_at" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN priority_set_at DATETIME")
+        if "priority_reason" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN priority_reason VARCHAR(500)")
         with engine.begin() as conn:
             for stmt in po_stmts:
                 conn.execute(text(stmt))
+            conn.execute(text("UPDATE production_orders SET priority = 50 WHERE priority IS NULL"))
+            conn.execute(text("UPDATE production_orders SET priority_label = 'normal' WHERE priority_label IS NULL"))
             conn.execute(text("DROP INDEX IF EXISTS uq_production_orders_item_source"))
             conn.execute(text("DROP INDEX IF EXISTS uq_production_orders_item_source_active"))
             conn.execute(
@@ -289,6 +301,12 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_production_orders_scan_code "
                     "ON production_orders (scan_code)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_production_orders_priority "
+                    "ON production_orders (priority)"
                 )
             )
             po_rows = conn.execute(text("SELECT id, scan_code FROM production_orders ORDER BY id ASC")).fetchall()
