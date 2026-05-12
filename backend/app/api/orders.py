@@ -282,11 +282,31 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
             po_stmts.append("ALTER TABLE production_orders ADD COLUMN priority_set_at DATETIME")
         if "priority_reason" not in po_cols:
             po_stmts.append("ALTER TABLE production_orders ADD COLUMN priority_reason VARCHAR(500)")
+        # FÁZE A (production_orders) – predicted completion / deadline risk sloupce
+        if "predicted_completion_at" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN predicted_completion_at DATETIME")
+        if "predicted_completion_uncertain" not in po_cols:
+            po_stmts.append(
+                "ALTER TABLE production_orders ADD COLUMN predicted_completion_uncertain BOOLEAN NOT NULL DEFAULT 0"
+            )
+        if "deadline_risk_level" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN deadline_risk_level VARCHAR(16)")
+        if "predicted_delay_days" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN predicted_delay_days INTEGER")
+        if "last_completion_calc_at" not in po_cols:
+            po_stmts.append("ALTER TABLE production_orders ADD COLUMN last_completion_calc_at DATETIME")
         with engine.begin() as conn:
             for stmt in po_stmts:
                 conn.execute(text(stmt))
             conn.execute(text("UPDATE production_orders SET priority = 50 WHERE priority IS NULL"))
             conn.execute(text("UPDATE production_orders SET priority_label = 'normal' WHERE priority_label IS NULL"))
+            # FÁZE B – backfill predicted_completion_uncertain (ostatní NULL doplní planner)
+            conn.execute(
+                text(
+                    "UPDATE production_orders SET predicted_completion_uncertain = 0 "
+                    "WHERE predicted_completion_uncertain IS NULL"
+                )
+            )
             conn.execute(text("DROP INDEX IF EXISTS uq_production_orders_item_source"))
             conn.execute(text("DROP INDEX IF EXISTS uq_production_orders_item_source_active"))
             conn.execute(
@@ -307,6 +327,19 @@ def ensure_orders_sqlite_schema(engine: Engine) -> None:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_production_orders_priority "
                     "ON production_orders (priority)"
+                )
+            )
+            # FÁZE C – indexy pro dotazy podle predikce / rizika termínu
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_production_orders_predicted_completion_at "
+                    "ON production_orders (predicted_completion_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_production_orders_deadline_risk_level "
+                    "ON production_orders (deadline_risk_level)"
                 )
             )
             po_rows = conn.execute(text("SELECT id, scan_code FROM production_orders ORDER BY id ASC")).fetchall()

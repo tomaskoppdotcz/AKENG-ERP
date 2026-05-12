@@ -31,3 +31,14 @@ class PlanningRunStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     PARTIAL = "partial"
+
+
+class DeadlineRiskLevel(str, Enum):
+    # Rezerva > 1 pracovní den před expedicí
+    OK = "ok"
+    # Rezerva 0-1 pracovní den
+    TIGHT = "tight"
+    # Výroba doběhne v expedičním bufferu (2 prac. dny před expedicí)
+    AT_RISK = "at_risk"
+    # Výroba doběhne po datu expedice
+    OVERDUE = "overdue"

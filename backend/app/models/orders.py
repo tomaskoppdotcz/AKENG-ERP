@@ -82,6 +82,16 @@ class ProductionOrder(Base):
     priority_set_by_user_id = Column(Integer, nullable=True)
     priority_set_at = Column(DateTime, nullable=True)
     priority_reason = Column(String(500), nullable=True)
+    # Predicted completion datetime computed by planner engine, max(planned_end) of all VP operations
+    predicted_completion_at = Column(DateTime, nullable=True)
+    # True if completion cannot be precisely predicted (e.g. pending cooperation without expected_return_date)
+    predicted_completion_uncertain = Column(Boolean, nullable=False, default=False)
+    # ok | tight | at_risk | overdue - computed from predicted_completion vs delivery_date - buffer
+    deadline_risk_level = Column(String(16), nullable=True)
+    # Negative = days of reserve before deadline, positive = days of delay. Working days, accounting for expedition buffer.
+    predicted_delay_days = Column(Integer, nullable=True)
+    # When predicted_completion was last computed by planner
+    last_completion_calc_at = Column(DateTime, nullable=True)
 
     job_item = relationship("JobItem", back_populates="production_orders")
 
