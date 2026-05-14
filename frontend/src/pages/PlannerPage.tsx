@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -576,6 +576,8 @@ export default function PlannerPage({
   const [selectedItem, setSelectedItem] = useState<PlannerGanttItem | null>(null);
   const chartScrollRef = useRef<HTMLDivElement>(null);
   const [dayColWidth, setDayColWidth] = useState(96);
+  /** Zneplatní výsledek staršího fetch (Strict Mode, změna rozsahu, rychlé obnovení). */
+  const ganttFetchSeq = useRef(0);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -588,27 +590,33 @@ export default function PlannerPage({
   const erpRole = useMemo(() => readStoredErpRole(), []);
   const canPlanningWrite = canPerformAction(erpRole, "planning.write");
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
+    const seq = ++ganttFetchSeq.current;
     try {
       setLoading(true);
       setError("");
       const result = await getPlannerGantt(fromDate, toDate);
+      if (seq !== ganttFetchSeq.current) return;
+      setError("");
       setData(result);
 
-      if (selectedItem) {
+      setSelectedItem((prev) => {
+        if (!prev) return null;
         const allItems = [
           ...result.machines.flatMap((m) => m.items),
           ...result.unscheduledItems,
         ];
-        const updatedSelected = allItems.find((x) => x.operationId === selectedItem.operationId) || null;
-        setSelectedItem(updatedSelected);
-      }
+        return allItems.find((x) => x.operationId === prev.operationId) || null;
+      });
     } catch (e: any) {
+      if (seq !== ganttFetchSeq.current) return;
       setError(e?.message || "Nepodarilo se nacist Planner Gantt.");
     } finally {
-      setLoading(false);
+      if (seq === ganttFetchSeq.current) {
+        setLoading(false);
+      }
     }
-  }
+  }, [fromDate, toDate]);
 
   async function rebuildPlan() {
     if (!canPlanningWrite) return;
@@ -626,7 +634,10 @@ export default function PlannerPage({
 
   useEffect(() => {
     void loadData();
-  }, [fromDate, toDate]);
+    return () => {
+      ganttFetchSeq.current += 1;
+    };
+  }, [loadData]);
 
   useLayoutEffect(() => {
     const el = chartScrollRef.current;
@@ -1136,7 +1147,9 @@ export default function PlannerPage({
 
                   {data && orderedGanttMachines.length === 0 ? (
                     <div style={{ padding: 14, color: ERP_COLORS.textSecondary, fontSize: 13 }}>
-                      Filtru neodpovídá žádné pracoviště.
+                      {machineFilter.trim()
+                        ? "Filtru neodpovídá žádné pracoviště."
+                        : "Žádné operace v plánovacím horizontu (žádné plánovatelné řádky nebo prázdný plán)."}
                     </div>
                   ) : null}
                 </div>
@@ -1156,7 +1169,7 @@ export default function PlannerPage({
                 Nenaplanovane operace
               </div>
 
-              {!data || data.unscheduledItems.length === 0 ? (
+              {!data || (data.unscheduledItems?.length ?? 0) === 0 ? (
                 <div style={{ color: ERP_COLORS.textSecondary, fontSize: 13 }}>Zadne nenaplanovane operace.</div>
               ) : (
                 <div style={{ overflowX: "auto", width: "100%" }}>

@@ -174,13 +174,30 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+function normalizePlannerGanttResponse(raw: unknown, fromDate: string, toDate: string): PlannerGanttResponse {
+  const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const days = Array.isArray(r.days) ? (r.days as string[]) : [];
+  const machines = Array.isArray(r.machines) ? (r.machines as PlannerGanttMachineGroup[]) : [];
+  const unscheduledItems = Array.isArray(r.unscheduledItems)
+    ? (r.unscheduledItems as PlannerGanttItem[])
+    : [];
+  return {
+    from: typeof r.from === "string" ? r.from : fromDate,
+    to: typeof r.to === "string" ? r.to : toDate,
+    days,
+    machines,
+    unscheduledItems,
+  };
+}
+
 export async function getPlannerGantt(fromDate: string, toDate: string): Promise<PlannerGanttResponse> {
   const params = new URLSearchParams({
     from_date: fromDate,
     to_date: toDate,
   });
 
-  return apiFetch<PlannerGanttResponse>(`${API_BASE}/planning/gantt?${params.toString()}`);
+  const raw = await apiFetch<unknown>(`${API_BASE}/planning/gantt?${params.toString()}`);
+  return normalizePlannerGanttResponse(raw, fromDate, toDate);
 }
 
 export type PlanningRebuildAllResponse = {
