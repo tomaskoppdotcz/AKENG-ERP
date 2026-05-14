@@ -471,7 +471,9 @@ def build_schedule(
     _rbac: None = Depends(require_action("planning.write")),
 ):
     service = PlanningEngineService(db)
-    service.rebuild_machine_schedule(payload.machine_id, date.fromisoformat(payload.from_date))
+    service.rebuild_machine_schedule(
+        payload.machine_id, date.fromisoformat(payload.from_date), trigger_reason="manual"
+    )
     return {"status": "ok", "machine_id": payload.machine_id}
 
 
@@ -481,7 +483,7 @@ def rebuild_all(
     _rbac: None = Depends(require_action("planning.write")),
 ):
     service = PlanningEngineService(db)
-    result = service.rebuild_all(date.today())
+    result = service.rebuild_all(date.today(), trigger_reason="manual")
     return {
         "status": "ok",
         "machines": result,
@@ -625,7 +627,7 @@ def move_operation(
     db.commit()
 
     service = PlanningEngineService(db)
-    service.rebuild_machine_schedule(payload.machine_id, date.today())
+    service.rebuild_machine_schedule(payload.machine_id, date.today(), trigger_reason="manual")
 
     return {"status": "ok", "planning_operation_id": payload.planning_operation_id}
 
@@ -658,7 +660,7 @@ def move_gantt_operation(
         reorder_ops_with_target(current_ops, op, target_queue_position)
         db.commit()
 
-        service.rebuild_machine_schedule(source_machine_id, date.today())
+        service.rebuild_machine_schedule(source_machine_id, date.today(), trigger_reason="manual")
         db.commit()
 
         return {
@@ -682,8 +684,8 @@ def move_gantt_operation(
 
     db.commit()
 
-    service.rebuild_machine_schedule(source_machine_id, date.today())
-    service.rebuild_machine_schedule(target_machine_id, date.today())
+    service.rebuild_machine_schedule(source_machine_id, date.today(), trigger_reason="manual")
+    service.rebuild_machine_schedule(target_machine_id, date.today(), trigger_reason="manual")
     db.commit()
 
     return {
@@ -730,7 +732,7 @@ def update_operation(
     db.commit()
 
     service = PlanningEngineService(db)
-    service.rebuild_machine_schedule(op.machine_id, date.today())
+    service.rebuild_machine_schedule(op.machine_id, date.today(), trigger_reason="manual")
     db.commit()
 
     return {
@@ -767,7 +769,7 @@ def build_demo_schedules(
     for code in machine_codes:
         machine = db.scalar(select(Machine).where(Machine.machine_code == code))
         if machine:
-            rows = service.rebuild_machine_schedule(machine.id, date.today())
+            rows = service.rebuild_machine_schedule(machine.id, date.today(), trigger_reason="manual")
             total += len(rows or [])
 
     return {"status": "ok", "scheduled_rows": total, "machines": machine_codes}

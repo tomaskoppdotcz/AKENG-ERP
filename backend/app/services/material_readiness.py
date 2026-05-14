@@ -193,7 +193,7 @@ def rebuild_machine_schedules_after_vps_became_material_ready(db: Session, pos: 
             related_machines.add(int(op.machine_id))
 
     svc = PlanningEngineService(db)
-    created = svc.rebuild_global_schedules(date.today())
+    created = svc.rebuild_global_schedules(date.today(), trigger_reason="material_received")
     machines_with_rows = sorted({int(s.machine_id) for s in created})
     logger.info(
         "[planning_bridge] rebuild_global_after_material_issue scheduled_rows=%s machines_with_rows=%s",
