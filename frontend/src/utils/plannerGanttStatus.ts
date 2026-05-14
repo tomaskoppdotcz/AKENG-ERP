@@ -1,4 +1,5 @@
 import type { PlannerGanttItem } from "../services/plannerApi";
+import { ERP_COLORS } from "../styles/ui";
 
 /** True when this op is waiting_release and an earlier op on the same VP is scheduling_late. */
 export function hasSchedulingLateEarlierOnVp(item: PlannerGanttItem, allItems: PlannerGanttItem[]): boolean {
@@ -13,22 +14,22 @@ export function hasSchedulingLateEarlierOnVp(item: PlannerGanttItem, allItems: P
   );
 }
 
-/** Bar / badge background color for Gantt and lists. */
+/** Bar / badge background color for Gantt and lists (ERP palette). */
 export function plannerGanttBarColor(status: string): string {
   const s = (status || "").toLowerCase();
-  if (s === "hotovo" || s === "done" || s === "finished") return "#10b981";
-  if (s === "bezi" || s === "running" || s === "in_progress") return "#3b82f6";
-  if (s === "blokovano" || s === "blocked") return "#ef4444";
-  if (s === "scheduling_late") return "#be123c";
-  if (s === "waiting_release") return "#6d28d9";
-  if (s === "ceka" || s === "ready") return "#94a3b8";
-  if (s === "naplanovano" || s === "planned") return "#f59e0b";
-  return "#f59e0b";
+  if (s === "hotovo" || s === "done" || s === "finished") return ERP_COLORS.okFg;
+  if (s === "bezi" || s === "running" || s === "in_progress") return ERP_COLORS.primary;
+  if (s === "blokovano" || s === "blocked") return ERP_COLORS.problemFg;
+  if (s === "scheduling_late") return ERP_COLORS.problemFg;
+  if (s === "waiting_release") return "#4F46E5";
+  if (s === "ceka" || s === "ready") return ERP_COLORS.textSecondary;
+  if (s === "naplanovano" || s === "planned") return ERP_COLORS.waitFg;
+  return ERP_COLORS.waitFg;
 }
 
 export function plannerGanttItemColor(item: PlannerGanttItem): string {
-  if (item.isCooperation) return "#ea580c";
-  if (item.blockedByCooperation) return "#dc2626";
+  if (item.isCooperation) return ERP_COLORS.waitFg;
+  if (item.blockedByCooperation) return ERP_COLORS.problemFg;
   return plannerGanttBarColor(item.status);
 }
 

@@ -50,6 +50,7 @@ const rowBase: React.CSSProperties = {
   overflowWrap: "anywhere" as const,
   hyphens: "auto" as const,
   maxWidth: "100%",
+  fontFamily: "Arial, Helvetica, sans-serif",
 };
 
 /**

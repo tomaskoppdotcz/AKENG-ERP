@@ -18,10 +18,15 @@ import {
   updatePlanningOperation,
 } from "../services/plannerApi";
 import {
+  hasSchedulingLateEarlierOnVp,
   plannerGanttBarColor,
   plannerGanttItemColor,
   plannerGanttStatusLabel,
 } from "../utils/plannerGanttStatus";
+import { ERP_COLORS, UI } from "../styles/ui";
+
+const FONT = "Arial, Helvetica, sans-serif";
+const ROW_HOVER = "#F1F5F9";
 import { PlannerGanttDayColumn } from "../components/PlannerGanttDayColumn";
 import {
   PlannerGanttOperationBlock,
@@ -120,6 +125,7 @@ function stackedRowMinHeightPx(maxStack: number, minBlockH: number): number {
 }
 
 function OverlayBar({ item }: { item: PlannerGanttItem }) {
+  const bar = plannerGanttItemColor(item);
   return (
     <div
       title={plannerGanttHoverDetails(item)}
@@ -127,16 +133,15 @@ function OverlayBar({ item }: { item: PlannerGanttItem }) {
         minWidth: 200,
         maxWidth: 320,
         minHeight: LANE_HEIGHT + 8,
-        borderRadius: 6,
+        borderRadius: 10,
         padding: "6px 10px",
-        background: plannerGanttItemColor(item),
+        background: `linear-gradient(180deg, ${bar} 0%, ${bar} 88%, rgba(15,23,42,0.18) 100%)`,
         color: "#fff",
         overflow: "hidden",
         boxSizing: "border-box",
-        boxShadow: item.materialReady
-          ? "0 8px 24px rgba(15,23,42,0.28)"
-          : "0 8px 24px rgba(15,23,42,0.28), inset 0 0 0 1px rgba(251,191,36,0.95)",
         border: "1px solid rgba(255,255,255,0.35)",
+        boxShadow: "0 4px 14px rgba(15, 23, 42, 0.12)",
+        fontFamily: FONT,
       }}
     >
       <PlannerGanttOperationBlock item={item} />
@@ -165,13 +170,16 @@ function EmptyMachineDrop({
       ref={setNodeRef}
       style={{
         padding: "6px 8px",
-        color: isOver ? "#1d4ed8" : "#94a3b8",
+        color: isOver ? ERP_COLORS.primary : ERP_COLORS.textSecondary,
         fontSize: 11,
+        fontWeight: 700,
         minHeight: LANE_HEIGHT + 8,
         width,
-        background: isOver ? "rgba(59,130,246,0.08)" : undefined,
-        outline: isOver ? "1px dashed #3b82f6" : "none",
+        background: isOver ? ERP_COLORS.primaryLight : undefined,
+        outline: isOver ? `1px dashed ${ERP_COLORS.primary}` : "none",
         outlineOffset: -2,
+        borderRadius: 8,
+        fontFamily: FONT,
       }}
     >
       Přetáhnout sem…
@@ -187,12 +195,13 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
         gridTemplateColumns: "110px 1fr",
         gap: 10,
         padding: "10px 0",
-        borderBottom: "1px solid #f1f5f9",
+        borderBottom: `1px solid ${ERP_COLORS.divider}`,
         fontSize: 14,
+        fontFamily: FONT,
       }}
     >
-      <div style={{ color: "#64748b", fontWeight: 700 }}>{label}</div>
-      <div style={{ color: "#0f172a", fontWeight: 600, wordBreak: "break-word" }}>{value}</div>
+      <div style={{ color: ERP_COLORS.textSecondary, fontWeight: 700 }}>{label}</div>
+      <div style={{ color: ERP_COLORS.textPrimary, fontWeight: 600, wordBreak: "break-word" }}>{value}</div>
     </div>
   );
 }
@@ -259,9 +268,10 @@ function OperationDetailPanel({
         right: 0,
         width: 380,
         height: "100vh",
-        background: "#fff",
-        borderLeft: "1px solid #dbe2ea",
-        boxShadow: "-8px 0 24px rgba(15,23,42,0.10)",
+        background: ERP_COLORS.card,
+        borderLeft: `1px solid ${ERP_COLORS.border}`,
+        boxShadow: "-8px 0 28px rgba(15, 23, 42, 0.08)",
+        fontFamily: FONT,
         zIndex: 1200,
         display: "flex",
         flexDirection: "column",
@@ -269,27 +279,29 @@ function OperationDetailPanel({
     >
       <div
         style={{
-          padding: 20,
-          borderBottom: "1px solid #e2e8f0",
+          padding: 18,
+          borderBottom: `1px solid ${ERP_COLORS.divider}`,
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           gap: 12,
+          background: ERP_COLORS.tableHeadBg,
         }}
       >
         <div>
-          <div style={{ fontSize: 20, fontWeight: 900, color: "#0f172a" }}>Detail operace</div>
-          <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: ERP_COLORS.textPrimary }}>Detail operace</div>
+          <div style={{ fontSize: 12, color: ERP_COLORS.textSecondary, marginTop: 4 }}>
             {item.operationName} | {item.machineName}
           </div>
         </div>
 
         <button
           onClick={onClose}
+          type="button"
           style={{
-            border: "1px solid #cbd5e1",
-            background: "#fff",
-            color: "#0f172a",
+            border: `1px solid ${ERP_COLORS.border}`,
+            background: ERP_COLORS.card,
+            color: ERP_COLORS.textPrimary,
             borderRadius: 10,
             padding: "8px 12px",
             fontWeight: 700,
@@ -300,7 +312,7 @@ function OperationDetailPanel({
         </button>
       </div>
 
-      <div style={{ padding: 20, overflowY: "auto" }}>
+      <div style={{ padding: 18, overflowY: "auto", flex: 1 }}>
         <div
           style={{
             display: "inline-block",
@@ -339,12 +351,12 @@ function OperationDetailPanel({
 
         {item.scheduleSegments && item.scheduleSegments.length > 0 ? (
           <div style={{ marginTop: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#334155", marginBottom: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: ERP_COLORS.textSecondary, marginBottom: 8 }}>
               Plánované segmenty
             </div>
             <div
               style={{
-                border: "1px solid #e2e8f0",
+                border: `1px solid ${ERP_COLORS.border}`,
                 borderRadius: 10,
                 overflow: "hidden",
                 fontSize: 13,
@@ -369,24 +381,24 @@ function OperationDetailPanel({
                       gridTemplateColumns: "1fr",
                       gap: 4,
                       padding: "10px 12px",
-                      borderBottom: "1px solid #f1f5f9",
-                      background: "#fafafa",
+                      borderBottom: `1px solid ${ERP_COLORS.divider}`,
+                      background: ERP_COLORS.neutralBg,
                     }}
                   >
-                    <div style={{ fontWeight: 800, color: "#0f172a" }}>
+                    <div style={{ fontWeight: 800, color: ERP_COLORS.textPrimary }}>
                       Segment {s.segmentIndex + 1}
                       {item.scheduleSegments!.length > 1 ? ` / ${item.scheduleSegments!.length}` : ""}
                     </div>
-                    <div style={{ color: "#475569" }}>
+                    <div style={{ color: ERP_COLORS.textSecondary }}>
                       <span style={{ fontWeight: 700 }}>{dateStr}</span>
                       {" · "}
                       {fromTo}
                     </div>
-                    <div style={{ color: "#64748b" }}>
+                    <div style={{ color: ERP_COLORS.textSecondary }}>
                       {item.machineName}
                       {s.machineId !== item.machineId ? ` (stroj #${s.machineId})` : ""}
                     </div>
-                    <div style={{ color: "#64748b", fontWeight: 600 }}>{s.durationMin} min</div>
+                    <div style={{ color: ERP_COLORS.textSecondary, fontWeight: 600 }}>{s.durationMin} min</div>
                   </div>
                 );
               })}
@@ -397,7 +409,7 @@ function OperationDetailPanel({
         <DetailRow
           label="Materiál"
           value={
-            <span style={{ color: item.materialReady ? "#15803d" : "#c2410c", fontWeight: 800 }}>
+            <span style={{ color: item.materialReady ? ERP_COLORS.okFg : ERP_COLORS.waitFg, fontWeight: 800 }}>
               {item.materialReady ? "Připraven" : "Čeká na materiál"}
             </span>
           }
@@ -409,9 +421,9 @@ function OperationDetailPanel({
               type="button"
               onClick={() => onOpenProductionOrder(item.productionOrderId!, item.workOrderNo ?? undefined)}
               style={{
-                border: "1px solid #2563eb",
-                background: "#eff6ff",
-                color: "#1e40af",
+                border: `1px solid ${ERP_COLORS.primary}`,
+                background: ERP_COLORS.primaryLight,
+                color: ERP_COLORS.primaryHover,
                 borderRadius: 10,
                 padding: "8px 12px",
                 fontWeight: 800,
@@ -427,9 +439,9 @@ function OperationDetailPanel({
               type="button"
               onClick={() => onOpenMaterialRequirements()}
               style={{
-                border: "1px solid #c2410c",
-                background: "#fff7ed",
-                color: "#9a3412",
+                border: `1px solid ${ERP_COLORS.waitFg}`,
+                background: ERP_COLORS.waitBg,
+                color: ERP_COLORS.textPrimary,
                 borderRadius: 10,
                 padding: "8px 12px",
                 fontWeight: 800,
@@ -444,18 +456,19 @@ function OperationDetailPanel({
 
         <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#334155", marginBottom: 6 }}>Status</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: ERP_COLORS.textSecondary, marginBottom: 6 }}>Status</div>
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
               disabled={!canPlanningWrite}
               style={{
                 width: "100%",
-                border: "1px solid #cbd5e1",
+                border: `1px solid ${ERP_COLORS.border}`,
                 borderRadius: 10,
                 padding: "10px 12px",
                 fontSize: 14,
-                background: "#fff",
+                background: ERP_COLORS.card,
+                color: ERP_COLORS.textPrimary,
               }}
             >
               <option value="ceka">Ceka</option>
@@ -477,7 +490,7 @@ function OperationDetailPanel({
               gap: 10,
               fontSize: 14,
               fontWeight: 700,
-              color: "#0f172a",
+              color: ERP_COLORS.textPrimary,
             }}
           >
             <input
@@ -496,7 +509,7 @@ function OperationDetailPanel({
               gap: 10,
               fontSize: 14,
               fontWeight: 700,
-              color: "#0f172a",
+              color: ERP_COLORS.textPrimary,
             }}
           >
             <input
@@ -509,16 +522,11 @@ function OperationDetailPanel({
           </label>
 
           <button
+            type="button"
             onClick={handleSave}
             disabled={saving || !canPlanningWrite}
             style={{
-              border: "1px solid #0f172a",
-              background: "#0f172a",
-              color: "#fff",
-              borderRadius: 10,
-              padding: "11px 14px",
-              fontWeight: 800,
-              cursor: "pointer",
+              ...UI.buttons.primary,
               opacity: saving ? 0.6 : 1,
             }}
           >
@@ -530,7 +538,7 @@ function OperationDetailPanel({
               style={{
                 fontSize: 13,
                 fontWeight: 700,
-                color: message === "Ulozeno." ? "#15803d" : "#b91c1c",
+                color: message === "Ulozeno." ? ERP_COLORS.okFg : ERP_COLORS.problemFg,
               }}
             >
               {message}
@@ -563,6 +571,7 @@ export default function PlannerPage({
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState("");
   const [machineFilter, setMachineFilter] = useState("");
+  const [hoverLaneKey, setHoverLaneKey] = useState<string | null>(null);
   const [activeDragItem, setActiveDragItem] = useState<PlannerGanttItem | null>(null);
   const [selectedItem, setSelectedItem] = useState<PlannerGanttItem | null>(null);
   const chartScrollRef = useRef<HTMLDivElement>(null);
@@ -651,6 +660,55 @@ export default function PlannerPage({
     return [...data.machines.flatMap((m) => m.items), ...data.unscheduledItems];
   }, [data]);
 
+  const plannerCockpitKpis = useMemo(() => {
+    if (!data) return null;
+    const scheduled = data.machines.flatMap((m) => m.items);
+    const uniqScheduled = new Map<number, PlannerGanttItem>();
+    for (const it of scheduled) uniqScheduled.set(it.operationId, it);
+    const scheduledUnique = [...uniqScheduled.values()];
+
+    const rows = Math.max(1, orderedGanttMachines.length);
+    const daysCount = Math.max(1, data.days.length);
+    const totalPlannedMin = scheduledUnique.reduce((acc, x) => acc + (Number(x.totalOperationTimeMin) || 0), 0);
+    const roughCapMin = rows * daysCount * 8 * 60;
+    const utilizationPct = Math.min(100, Math.round((totalPlannedMin / roughCapMin) * 100));
+
+    const uniqAll = new Map<number, PlannerGanttItem>();
+    for (const it of allPlannerItems) uniqAll.set(it.operationId, it);
+    const distinctAll = [...uniqAll.values()];
+    const statusLo = (s: string) => (s || "").toLowerCase();
+
+    let blockedOps = 0;
+    const delayedWoos = new Set<string>();
+    const riskWoos = new Set<string>();
+    let coopWaitingReturn = 0;
+
+    for (const x of distinctAll) {
+      const st = statusLo(x.status);
+      if (st === "blokovano" || st === "blocked" || x.blockedByCooperation) blockedOps += 1;
+      if (st === "scheduling_late") {
+        const woo = (x.workOrderNo || "").trim();
+        if (woo) delayedWoos.add(woo);
+      }
+      const woo = (x.workOrderNo || "").trim();
+      if (woo) {
+        if (st === "scheduling_late" || x.blockedByCooperation) riskWoos.add(woo);
+        if (st === "waiting_release" && hasSchedulingLateEarlierOnVp(x, allPlannerItems)) riskWoos.add(woo);
+      }
+      if (x.isCooperation && String(x.cooperationStatus ?? "").trim().toLowerCase() === "sent") {
+        coopWaitingReturn += 1;
+      }
+    }
+
+    return {
+      utilizationPct,
+      riskVpCount: riskWoos.size,
+      blockedOps,
+      delayedOrders: delayedWoos.size,
+      coopWaitingReturn,
+    };
+  }, [data, orderedGanttMachines, allPlannerItems]);
+
   async function handleDragEnd(event: DragEndEvent) {
     setActiveDragItem(null);
     if (!canPlanningWrite) return;
@@ -682,92 +740,89 @@ export default function PlannerPage({
     }
   }
 
+  const plannerFilterInput: React.CSSProperties = {
+    ...UI.inputs.base,
+    padding: "8px 10px",
+    fontSize: 13,
+  };
+
+  const ganttCardShell: React.CSSProperties = {
+    background: ERP_COLORS.card,
+    border: `1px solid ${ERP_COLORS.border}`,
+    borderRadius: 14,
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
+  };
+
+  const laneRowKey = (m: PlannerGanttMachineGroup) => String(m.workplaceId ?? m.machineId);
+
   return (
     <>
-      <PageContainer style={{ paddingTop: 10, paddingRight: selectedItem ? 404 : 0, minWidth: 0 }}>
+      <PageContainer
+        style={{
+          paddingTop: 8,
+          paddingRight: selectedItem ? 404 : 0,
+          minWidth: 0,
+          background: ERP_COLORS.pageBg,
+          color: ERP_COLORS.textPrimary,
+          fontFamily: FONT,
+        }}
+      >
         <PageHeader
-          title="Planner Gantt"
+          style={{
+            paddingBottom: 12,
+            borderBottom: `1px solid ${ERP_COLORS.border}`,
+            marginBottom: 4,
+          }}
+          title={
+            <div>
+              <div style={{ ...UI.statLabel, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Plánování
+              </div>
+              <div style={{ ...UI.pageTitle, marginTop: 4 }}>Planner Gantt</div>
+            </div>
+          }
           subtitle={
             <>
-              <div style={{ fontSize: 13, color: "#64748b", marginTop: 0 }}>
+              <div style={{ ...UI.sectionSubtitle, marginTop: 4 }}>
                 Výchozí rozsah 7 dní. Řádky pracovišť z knihovny (Planner); kiosk sdílí stejnou frontu podle pracoviště. Blok: op / WP → VP / GPN → další WP.
               </div>
-              <div style={{ fontSize: 11, color: "#334155", marginTop: 6, fontWeight: 700 }}>
+              <div style={{ fontSize: 11, color: ERP_COLORS.textSecondary, marginTop: 6, fontWeight: 800 }}>
                 DnD mezi řádky / frontu · detail = klik · tooltip = najetí myší.
               </div>
             </>
           }
           actions={
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Od</div>
-                <input
-                  type="date"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  style={{
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 12,
-                    padding: "10px 12px",
-                    fontSize: 14,
-                    background: "#fff",
-                  }}
-                />
+                <div style={{ fontSize: 11, fontWeight: 800, color: ERP_COLORS.textSecondary, marginBottom: 4 }}>Od</div>
+                <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={plannerFilterInput} />
               </div>
-
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Do</div>
-                <input
-                  type="date"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
-                  style={{
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 12,
-                    padding: "10px 12px",
-                    fontSize: 14,
-                    background: "#fff",
-                  }}
-                />
+                <div style={{ fontSize: 11, fontWeight: 800, color: ERP_COLORS.textSecondary, marginBottom: 4 }}>Do</div>
+                <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={plannerFilterInput} />
               </div>
-
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Filtr stroj</div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: ERP_COLORS.textSecondary, marginBottom: 4 }}>Filtr stroj</div>
                 <input
                   type="text"
                   value={machineFilter}
                   onChange={(e) => setMachineFilter(e.target.value)}
                   placeholder="napr. BETA, TC, PILA..."
-                  style={{
-                    width: 220,
-                    minWidth: 0,
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 12,
-                    padding: "10px 12px",
-                    fontSize: 14,
-                    background: "#fff",
-                  }}
+                  style={{ ...plannerFilterInput, width: 200, minWidth: 0 }}
                 />
               </div>
-
               <button
                 type="button"
                 onClick={() => void loadData()}
                 disabled={loading || moving || rebuilding}
                 style={{
-                  border: "1px solid #0f172a",
-                  background: "#0f172a",
-                  color: "#fff",
-                  borderRadius: 12,
-                  padding: "11px 16px",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                  opacity: loading || moving || rebuilding ? 0.6 : 1,
+                  ...UI.buttons.primary,
+                  padding: "9px 14px",
+                  opacity: loading || moving || rebuilding ? 0.55 : 1,
                 }}
               >
                 {loading ? "Nacitam..." : moving ? "Presouvam..." : "Obnovit data"}
               </button>
-
               {canPlanningWrite ? (
                 <button
                   type="button"
@@ -775,14 +830,15 @@ export default function PlannerPage({
                   disabled={rebuilding || loading || moving}
                   title="Globální přepočet rozvrhu (POST /planning/rebuild-all)"
                   style={{
-                    border: "1px solid #b45309",
-                    background: "#fffbeb",
-                    color: "#92400e",
-                    borderRadius: 12,
-                    padding: "11px 16px",
+                    borderRadius: 10,
+                    padding: "9px 14px",
                     fontWeight: 800,
+                    fontSize: 13,
                     cursor: "pointer",
-                    opacity: rebuilding || loading || moving ? 0.6 : 1,
+                    border: `1px solid ${ERP_COLORS.waitFg}`,
+                    background: ERP_COLORS.waitBg,
+                    color: ERP_COLORS.textPrimary,
+                    opacity: rebuilding || loading || moving ? 0.55 : 1,
                   }}
                 >
                   {rebuilding ? "Přepočítávám…" : "Přepočítat plán"}
@@ -792,26 +848,62 @@ export default function PlannerPage({
           }
         />
 
-        <PageSection gapTop={12}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", width: "100%" }}>
-            {[
-              ["Čeká (ready)", "#94a3b8"],
-              ["Čeká na uvolnění", "#6d28d9"],
-              ["Po termínu", "#be123c"],
-              ["Naplánováno", "#f59e0b"],
-              ["Běží", "#3b82f6"],
-              ["Hotovo", "#10b981"],
-              ["Blokováno", "#ef4444"],
-            ].map(([label, color]) => (
+        {plannerCockpitKpis ? (
+          <PageSection gapTop={10}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                gap: 10,
+              }}
+            >
+              {(
+                [
+                  ["Vytížení (orientační)", `${plannerCockpitKpis.utilizationPct}%`, "Řádky × dny × 8h vs. součet plánu"],
+                  ["Rizikové VP", String(plannerCockpitKpis.riskVpCount), "Termín / blok kooperací / čekání"],
+                  ["Blokované operace", String(plannerCockpitKpis.blockedOps), "Blokováno nebo blok kooperací"],
+                  ["Zpožděné zakázky", String(plannerCockpitKpis.delayedOrders), "Unikátní VP se scheduling_late"],
+                  ["Kooperace → návrat", String(plannerCockpitKpis.coopWaitingReturn), "Odesláno (sent), čeká na příjem"],
+                ] as const
+              ).map(([label, value, hint]) => (
+                <div key={label} style={{ ...UI.summaryTile, minHeight: 0, padding: "12px 14px" }}>
+                  <div style={UI.summaryTileLabel}>{label}</div>
+                  <div style={{ ...UI.summaryTileValue, marginTop: 6, fontSize: 22, letterSpacing: "-0.02em" }}>{value}</div>
+                  <div style={{ ...UI.summaryTileSubValue, marginTop: 4, lineHeight: 1.35 }}>{hint}</div>
+                </div>
+              ))}
+            </div>
+          </PageSection>
+        ) : null}
+
+        <PageSection gapTop={10}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", width: "100%" }}>
+            {(
+              [
+                ["Čeká (ready)", plannerGanttBarColor("ready")],
+                ["Čeká na uvolnění", plannerGanttBarColor("waiting_release")],
+                ["Po termínu", plannerGanttBarColor("scheduling_late")],
+                ["Naplánováno", plannerGanttBarColor("planned")],
+                ["Běží", plannerGanttBarColor("bezi")],
+                ["Hotovo", plannerGanttBarColor("hotovo")],
+                ["Blokováno", plannerGanttBarColor("blokovano")],
+                ["Kooperace", ERP_COLORS.waitFg],
+              ] as const
+            ).map(([label, color]) => (
               <div
                 key={label}
                 style={{
-                  padding: "6px 10px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "4px 10px",
                   borderRadius: 999,
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: "#fff",
+                  fontSize: 11,
+                  fontWeight: 900,
+                  letterSpacing: "0.04em",
+                  textTransform: "uppercase",
+                  border: `1px solid ${ERP_COLORS.border}`,
                   background: color,
+                  color: "#fff",
                 }}
               >
                 {label}
@@ -819,13 +911,15 @@ export default function PlannerPage({
             ))}
             <div
               style={{
-                padding: "6px 10px",
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "4px 10px",
                 borderRadius: 999,
-                fontSize: 12,
-                fontWeight: 700,
-                color: "#0f172a",
-                background: "#ffedd5",
-                border: "1px solid #fb923c",
+                fontSize: 11,
+                fontWeight: 800,
+                border: `1px solid ${ERP_COLORS.waitFg}`,
+                background: ERP_COLORS.waitBg,
+                color: ERP_COLORS.textPrimary,
               }}
             >
               Čeká na materiál = zlatý obrys bloku
@@ -835,14 +929,14 @@ export default function PlannerPage({
           {error ? (
             <div
               style={{
-                marginTop: 16,
-                padding: "12px 14px",
-                borderRadius: 12,
-                background: "#fef2f2",
-                color: "#b91c1c",
-                border: "1px solid #fecaca",
-                fontSize: 14,
-                fontWeight: 700,
+                marginTop: 12,
+                padding: "10px 12px",
+                borderRadius: 10,
+                background: ERP_COLORS.problemBg,
+                color: ERP_COLORS.problemFg,
+                border: `1px solid rgba(220, 38, 38, 0.35)`,
+                fontSize: 13,
+                fontWeight: 800,
               }}
             >
               {error}
@@ -850,7 +944,7 @@ export default function PlannerPage({
           ) : null}
         </PageSection>
 
-        <PageSection>
+        <PageSection gapTop={10}>
           <DndContext
             sensors={sensors}
             onDragStart={(event) => {
@@ -862,11 +956,8 @@ export default function PlannerPage({
           >
             <div
               style={{
-                background: "#fff",
-                border: "1px solid #dbe2ea",
-                borderRadius: 20,
+                ...ganttCardShell,
                 overflow: "hidden",
-                boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
                 width: "100%",
                 boxSizing: "border-box",
               }}
@@ -875,7 +966,7 @@ export default function PlannerPage({
                 ref={chartScrollRef}
                 style={{
                   overflow: "auto",
-                  maxHeight: "calc(100vh - 200px)",
+                  maxHeight: "calc(100vh - 280px)",
                   scrollbarGutter: "stable",
                 }}
               >
@@ -890,8 +981,8 @@ export default function PlannerPage({
                       top: 0,
                       zIndex: 20,
                       display: "flex",
-                      background: "#e8eef4",
-                      borderBottom: "1px solid #cbd5e1",
+                      background: ERP_COLORS.tableHeadBg,
+                      borderBottom: `1px solid ${ERP_COLORS.divider}`,
                       minHeight: HEADER_HEIGHT,
                     }}
                   >
@@ -901,15 +992,18 @@ export default function PlannerPage({
                         minWidth: LEFT_COL_WIDTH,
                         padding: "6px 8px",
                         fontWeight: 900,
-                        fontSize: 11,
-                        borderRight: "1px solid #cbd5e1",
-                        background: "#f1f5f9",
+                        fontSize: 10,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                        borderRight: `1px solid ${ERP_COLORS.divider}`,
+                        background: ERP_COLORS.tableHeadBg,
                         position: "sticky",
                         left: 0,
                         zIndex: 30,
                         display: "flex",
                         alignItems: "center",
                         boxSizing: "border-box",
+                        color: ERP_COLORS.tableHeadText,
                       }}
                     >
                       Pracoviště
@@ -924,13 +1018,15 @@ export default function PlannerPage({
                           padding: "6px 2px",
                           textAlign: "center",
                           fontWeight: 800,
-                          fontSize: 11,
-                          color: "#334155",
-                          borderRight: "1px solid #dbe2ea",
+                          fontSize: 10,
+                          letterSpacing: "0.04em",
+                          color: ERP_COLORS.textSecondary,
+                          borderRight: `1px solid ${ERP_COLORS.divider}`,
                           boxSizing: "border-box",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
+                          background: `repeating-linear-gradient(90deg, transparent, transparent 23px, ${ERP_COLORS.divider} 23px, ${ERP_COLORS.divider} 24px), ${ERP_COLORS.card}`,
                         }}
                       >
                         {new Date(`${day}T00:00:00`).toLocaleDateString("cs-CZ", {
@@ -943,7 +1039,7 @@ export default function PlannerPage({
                   </div>
 
                   {!data && !loading ? (
-                    <div style={{ padding: 16, color: "#64748b", fontSize: 13 }}>Zatím nejsou načtena data.</div>
+                    <div style={{ padding: 14, color: ERP_COLORS.textSecondary, fontSize: 13 }}>Zatím nejsou načtena data.</div>
                   ) : null}
 
                   {orderedGanttMachines.map((machine) => {
@@ -955,13 +1051,19 @@ export default function PlannerPage({
                     const minBlockH = LANE_HEIGHT - 2;
                     const rowBodyHeight = stackedRowMinHeightPx(maxStack, minBlockH);
                     const globalOrder = plannerGlobalMachineOrder(machine.items);
+                    const lk = laneRowKey(machine);
+                    const laneHover = hoverLaneKey === lk;
 
                     return (
                       <div
                         key={machine.workplaceId ?? machine.machineId}
+                        onMouseEnter={() => setHoverLaneKey(lk)}
+                        onMouseLeave={() => setHoverLaneKey(null)}
                         style={{
                           display: "flex",
-                          borderBottom: "1px solid #e2e8f0",
+                          borderBottom: `1px solid ${ERP_COLORS.divider}`,
+                          background: laneHover ? ERP_COLORS.primaryLight : ERP_COLORS.card,
+                          transition: "background 120ms ease",
                         }}
                       >
                         <div
@@ -969,8 +1071,8 @@ export default function PlannerPage({
                             width: LEFT_COL_WIDTH,
                             minWidth: LEFT_COL_WIDTH,
                             padding: "6px 8px",
-                            borderRight: "1px solid #e2e8f0",
-                            background: "#fff",
+                            borderRight: `1px solid ${ERP_COLORS.divider}`,
+                            background: ERP_COLORS.tableHeadBg,
                             position: "sticky",
                             left: 0,
                             zIndex: 15,
@@ -978,10 +1080,10 @@ export default function PlannerPage({
                             alignSelf: "stretch",
                           }}
                         >
-                          <div style={{ fontWeight: 800, color: "#0f172a", fontSize: 12, lineHeight: 1.25 }}>
+                          <div style={{ fontWeight: 800, color: ERP_COLORS.textPrimary, fontSize: 12, lineHeight: 1.25 }}>
                             {machine.machineName}
                           </div>
-                          <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, fontWeight: 600 }}>
+                          <div style={{ fontSize: 10, color: ERP_COLORS.textSecondary, marginTop: 2, fontWeight: 600 }}>
                             {(machine.workplaceCode || "").toUpperCase() || "—"} · {machine.items.length} op.
                             {expandedForCells.length !== machine.items.length
                               ? ` · ${expandedForCells.length} bloků`
@@ -1014,6 +1116,7 @@ export default function PlannerPage({
                                 activeDragItemKey={
                                   activeDragItem ? ganttCellItemKey(activeDragItem) : null
                                 }
+                                selectedOperationId={selectedItem?.operationId ?? null}
                                 onSelect={(cellItem) => {
                                   const canonical = allPlannerItems.find(
                                     (x) => x.operationId === cellItem.operationId
@@ -1032,7 +1135,9 @@ export default function PlannerPage({
                   })}
 
                   {data && orderedGanttMachines.length === 0 ? (
-                    <div style={{ padding: 16, color: "#64748b", fontSize: 13 }}>Filtru neodpovídá žádné pracoviště.</div>
+                    <div style={{ padding: 14, color: ERP_COLORS.textSecondary, fontSize: 13 }}>
+                      Filtru neodpovídá žádné pracoviště.
+                    </div>
                   ) : null}
                 </div>
               </div>
@@ -1040,35 +1145,36 @@ export default function PlannerPage({
 
             <div
               style={{
-                background: "#fff",
-                border: "1px solid #dbe2ea",
-                borderRadius: 20,
-                padding: 20,
-                boxShadow: "0 1px 2px rgba(15,23,42,0.05)",
+                marginTop: 12,
+                ...ganttCardShell,
+                padding: 14,
                 width: "100%",
                 boxSizing: "border-box",
               }}
             >
-              <div style={{ fontSize: 22, fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>
+              <div style={{ fontSize: 16, fontWeight: 900, color: ERP_COLORS.textPrimary, marginBottom: 10 }}>
                 Nenaplanovane operace
               </div>
 
               {!data || data.unscheduledItems.length === 0 ? (
-                <div style={{ color: "#64748b", fontSize: 14 }}>Zadne nenaplanovane operace.</div>
+                <div style={{ color: ERP_COLORS.textSecondary, fontSize: 13 }}>Zadne nenaplanovane operace.</div>
               ) : (
                 <div style={{ overflowX: "auto", width: "100%" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: "100%" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: "100%" }}>
                     <thead>
-                      <tr style={{ background: "#f8fafc" }}>
+                      <tr style={{ background: ERP_COLORS.tableHeadBg }}>
                         {["VP", "GPN", "Operace", "Stroj", "Materiál", "Qty", "Fronta", "Status"].map((h) => (
                           <th
                             key={h}
                             style={{
                               textAlign: "left",
-                              padding: "10px 12px",
-                              borderBottom: "1px solid #e2e8f0",
-                              color: "#334155",
+                              padding: "8px 10px",
+                              borderBottom: `1px solid ${ERP_COLORS.divider}`,
+                              color: ERP_COLORS.tableHeadText,
                               fontWeight: 800,
+                              fontSize: 11,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.06em",
                             }}
                           >
                             {h}
@@ -1081,24 +1187,44 @@ export default function PlannerPage({
                         <tr
                           key={item.operationId}
                           onClick={() => setSelectedItem(item)}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = ROW_HOVER;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = item.materialReady
+                              ? "transparent"
+                              : "rgba(245, 158, 11, 0.06)";
+                          }}
                           style={{
                             cursor: "pointer",
-                            background: item.materialReady ? undefined : "#fff7ed",
-                            boxShadow: item.materialReady ? undefined : "inset 3px 0 0 #ea580c",
+                            background: item.materialReady ? "transparent" : "rgba(245, 158, 11, 0.06)",
+                            boxShadow: item.materialReady ? undefined : `inset 3px 0 0 ${ERP_COLORS.waitFg}`,
                           }}
                         >
-                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.workOrderNo ?? "-"}</td>
-                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.gpn ?? "-"}</td>
-                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.operationName}</td>
-                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.machineName}</td>
-                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>
-                            <span style={{ color: item.materialReady ? "#15803d" : "#c2410c" }}>
+                          <td style={{ padding: "8px 10px", borderBottom: `1px solid ${ERP_COLORS.divider}`, color: ERP_COLORS.textPrimary }}>
+                            {item.workOrderNo ?? "-"}
+                          </td>
+                          <td style={{ padding: "8px 10px", borderBottom: `1px solid ${ERP_COLORS.divider}`, color: ERP_COLORS.textPrimary }}>
+                            {item.gpn ?? "-"}
+                          </td>
+                          <td style={{ padding: "8px 10px", borderBottom: `1px solid ${ERP_COLORS.divider}`, color: ERP_COLORS.textPrimary }}>
+                            {item.operationName}
+                          </td>
+                          <td style={{ padding: "8px 10px", borderBottom: `1px solid ${ERP_COLORS.divider}`, color: ERP_COLORS.textPrimary }}>
+                            {item.machineName}
+                          </td>
+                          <td style={{ padding: "8px 10px", borderBottom: `1px solid ${ERP_COLORS.divider}`, fontWeight: 800 }}>
+                            <span style={{ color: item.materialReady ? ERP_COLORS.okFg : ERP_COLORS.waitFg }}>
                               {item.materialReady ? "Připraven" : "Čeká"}
                             </span>
                           </td>
-                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.qty}</td>
-                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>{item.queuePosition ?? "-"}</td>
-                          <td style={{ padding: "10px 12px", borderBottom: "1px solid #f1f5f9" }}>
+                          <td style={{ padding: "8px 10px", borderBottom: `1px solid ${ERP_COLORS.divider}`, color: ERP_COLORS.textPrimary }}>
+                            {item.qty}
+                          </td>
+                          <td style={{ padding: "8px 10px", borderBottom: `1px solid ${ERP_COLORS.divider}`, color: ERP_COLORS.textPrimary }}>
+                            {item.queuePosition ?? "-"}
+                          </td>
+                          <td style={{ padding: "8px 10px", borderBottom: `1px solid ${ERP_COLORS.divider}` }}>
                             <span
                               style={{
                                 display: "inline-block",
@@ -1106,7 +1232,7 @@ export default function PlannerPage({
                                 borderRadius: 999,
                                 color: "#fff",
                                 background: plannerGanttItemColor(item),
-                                fontSize: 12,
+                                fontSize: 11,
                                 fontWeight: 800,
                               }}
                             >

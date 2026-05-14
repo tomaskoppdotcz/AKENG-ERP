@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import PageContainer from "../components/layout/PageContainer";
 import PageHeader from "../components/layout/PageHeader";
 import PageSection from "../components/layout/PageSection";
-import { UI } from "../styles/ui";
 import { akengFetch } from "../services/akengFetch";
+import { ERP_COLORS, UI } from "../styles/ui";
 
 type Machine = {
   id: number;
@@ -43,6 +43,8 @@ type MachineCalendarDay = {
 };
 
 const API_BASE = "http://127.0.0.1:8001";
+
+const ROW_HOVER = "#F1F5F9";
 
 export default function MachinePlanningPage() {
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -153,274 +155,445 @@ export default function MachinePlanningPage() {
     return Math.max(0, Math.round((e - s) / 60000));
   }
 
+  const machineKpis = useMemo(() => {
+    const totalShift = 480;
+    const plannedMin = scheduledOps.reduce((a, o) => a + durationMinutes(o.planned_start, o.planned_end), 0);
+    const utilizationPct = Math.min(100, Math.round((plannedMin / Math.max(1, totalShift)) * 100));
+    const st = (x: string) => (x || "").toLowerCase();
+    const blockedOps = operations.filter((o) => st(o.status) === "blocked" || st(o.status) === "blokovano").length;
+    const delayedOrders = operations.filter((o) => st(o.status) === "scheduling_late" || st(o.status).includes("late")).length;
+    const riskItems = operations.filter((o) => {
+      const s = st(o.status);
+      return s === "blocked" || s === "blokovano" || s === "waiting_release" || s === "scheduling_late" || s.includes("late");
+    }).length;
+    return { utilizationPct, riskVp: riskItems, blockedOps, delayedOrders, coopReturn: 0 };
+  }, [operations, scheduledOps]);
+
+  function statusPillStyle(status: string) {
+    const s = (status || "").toLowerCase();
+    if (s === "running" || s === "bezi") return ERP_COLORS.primary;
+    if (s === "blocked" || s === "blokovano") return ERP_COLORS.problemFg;
+    if (s === "finished" || s === "hotovo") return ERP_COLORS.okFg;
+    if (s === "waiting_release") return "#4F46E5";
+    if (s === "scheduling_late" || s.includes("late")) return ERP_COLORS.problemFg;
+    if (s === "ready" || s === "ceka") return ERP_COLORS.textSecondary;
+    return ERP_COLORS.waitFg;
+  }
+
+  const tableHead: React.CSSProperties = {
+    textAlign: "left" as const,
+    padding: "8px 10px",
+    borderBottom: `2px solid ${ERP_COLORS.divider}`,
+    color: ERP_COLORS.tableHeadText,
+    fontWeight: 800,
+    fontSize: 11,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.06em",
+  };
+
+  const tableCell: React.CSSProperties = {
+    padding: "8px 10px",
+    borderBottom: `1px solid ${ERP_COLORS.divider}`,
+    color: ERP_COLORS.textPrimary,
+    fontSize: 13,
+  };
+
+  const ghostBtn: React.CSSProperties = {
+    marginRight: 6,
+    padding: "4px 8px",
+    borderRadius: 8,
+    border: `1px solid ${ERP_COLORS.border}`,
+    background: ERP_COLORS.card,
+    color: ERP_COLORS.textPrimary,
+    cursor: "pointer",
+    fontWeight: 800,
+  };
+
+  const hourGridBg = `repeating-linear-gradient(90deg, transparent, transparent 12.5%, ${ERP_COLORS.divider} 12.5%, ${ERP_COLORS.divider} 25%)`;
+
+  const panelCard: React.CSSProperties = {
+    ...UI.card,
+    borderRadius: 14,
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
+  };
+
   return (
-    <PageContainer style={{ paddingTop: 10 }}>
+    <PageContainer
+      style={{
+        paddingTop: 8,
+        background: UI.colors.pageBg,
+        color: ERP_COLORS.textPrimary,
+        fontFamily: "Arial, Helvetica, sans-serif",
+        minHeight: "100%",
+      }}
+    >
       <PageHeader
-        title="Neplánované operace"
-        subtitle="Plánování fronty stroje a neplánovaných operací"
+        style={{ borderBottom: `1px solid ${ERP_COLORS.border}`, paddingBottom: 12, marginBottom: 8 }}
+        title={
+          <div>
+            <div style={{ ...UI.statLabel, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Plánování stroje
+            </div>
+            <div style={{ ...UI.pageTitle, marginTop: 4 }}>Neplánované operace</div>
+          </div>
+        }
+        subtitle={
+          <span style={UI.sectionSubtitle}>Plánování fronty stroje a neplánovaných operací</span>
+        }
         actions={
           <button
             type="button"
             onClick={() => void rebuildSchedule()}
-            style={UI.buttons.secondary}
             disabled={!selectedMachineId}
+            style={{
+              ...UI.buttons.primary,
+              padding: "9px 14px",
+              opacity: !selectedMachineId ? 0.45 : 1,
+            }}
           >
             Přepočítat plán
           </button>
         }
       />
 
-      <PageSection>
+      <PageSection gapTop={10}>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(220px, 280px) minmax(0, 1fr) minmax(220px, 320px)",
-            gap: 16,
+            gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+            gap: 10,
+            marginBottom: 12,
+          }}
+        >
+          {(
+            [
+              ["Vytížení (směna)", `${machineKpis.utilizationPct}%`, "480 min okno"],
+              ["Rizikové položky", String(machineKpis.riskVp), "Blok / čekání / termín"],
+              ["Blokované operace", String(machineKpis.blockedOps), ""],
+              ["Zpožděné (stav)", String(machineKpis.delayedOrders), "scheduling_late"],
+              ["Kooperace → návrat", String(machineKpis.coopReturn), "—"],
+            ] as const
+          ).map(([label, value, hint]) => (
+            <div key={label} style={{ ...UI.summaryTile, minHeight: 0, padding: "10px 12px" }}>
+              <div style={{ ...UI.summaryTileLabel, fontSize: 10 }}>{label}</div>
+              <div style={{ ...UI.summaryTileValue, marginTop: 4, fontSize: 20 }}>{value}</div>
+              {hint ? (
+                <div style={{ ...UI.summaryTileSubValue, marginTop: 2, fontSize: 10 }}>{hint}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(200px, 260px) minmax(0, 1fr) minmax(200px, 300px)",
+            gap: 12,
             width: "100%",
             minWidth: 0,
-            fontFamily: "Arial, Helvetica, sans-serif",
           }}
         >
-        <aside
-          style={{
-            background: "#fff",
-            padding: 16,
-            border: "1px solid #dbe2ea",
-            borderRadius: 12,
-            minWidth: 0,
-          }}
-        >
-          <h2 style={{ ...UI.sectionTitle, marginTop: 0 }}>Stroje</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {machines.map((machine) => (
-              <button
-                key={machine.id}
-                onClick={() => setSelectedMachineId(machine.id)}
-                style={{
-                  textAlign: "left",
-                  padding: 12,
-                  borderRadius: 10,
-                  border:
-                    selectedMachineId === machine.id
-                      ? "2px solid #111"
-                      : "1px solid #ddd",
-                  background: selectedMachineId === machine.id ? "#f1f5f9" : "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                <div style={{ fontWeight: 700 }}>{machine.name}</div>
-                <div style={{ fontSize: 12, color: "#666" }}>{machine.machine_code}</div>
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        <main
-          style={{
-            background: "#fff",
-            padding: 16,
-            border: "1px solid #dbe2ea",
-            borderRadius: 12,
-            minWidth: 0,
-          }}
-        >
-          <div style={{ marginBottom: 16 }}>
-            <div style={UI.sectionTitle}>
-              {selectedMachine ? `Plánování: ${selectedMachine.name}` : "Vyberte stroj"}
+          <aside style={{ ...panelCard, padding: 14, minWidth: 0 }}>
+            <h2 style={{ ...UI.statLabel, marginTop: 0, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Stroje
+            </h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+              {machines.map((machine) => (
+                <button
+                  key={machine.id}
+                  type="button"
+                  onClick={() => setSelectedMachineId(machine.id)}
+                  style={{
+                    textAlign: "left",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border:
+                      selectedMachineId === machine.id
+                        ? `2px solid ${ERP_COLORS.primary}`
+                        : `1px solid ${ERP_COLORS.border}`,
+                    background: selectedMachineId === machine.id ? ERP_COLORS.primaryLight : ERP_COLORS.card,
+                    cursor: "pointer",
+                    color: ERP_COLORS.textPrimary,
+                  }}
+                >
+                  <div style={{ fontWeight: 800 }}>{machine.name}</div>
+                  <div style={{ fontSize: 12, color: ERP_COLORS.textSecondary }}>{machine.machine_code}</div>
+                </button>
+              ))}
             </div>
-            <div style={UI.sectionSubtitle}>Fronta naplánovaných a čekajících operací</div>
-          </div>
+          </aside>
 
-          {loading ? (
-            <div>Načítání...</div>
-          ) : (
-            <>
-              <h3>Fronta stroje</h3>
-              <table style={{ ...UI.table, width: "100%" }} cellPadding={6}>
-                <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    <th>#</th>
-                    <th>GPN</th>
-                    <th>Operace</th>
-                    <th>Ø</th>
-                    <th>Qty</th>
-                    <th>Setup</th>
-                    <th>Labor</th>
-                    <th>Celkem</th>
-                    <th>Expedice</th>
-                    <th>Start</th>
-                    <th>Konec</th>
-                    <th>Stav</th>
-                    <th>Akce</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scheduledOps.map((row) => (
-                    <tr key={row.id} style={{ borderTop: "1px solid #eee" }}>
-                      <td>{row.queue_position}</td>
-                      <td>
-                        <b>{row.gpn}</b>
-                      </td>
-                      <td>
-                        {row.operation_no} / {row.operation_name}
-                      </td>
-                      <td>{row.input_diameter_mm ?? "-"}</td>
-                      <td>{row.qty}</td>
-                      <td>{row.setup_time_min}</td>
-                      <td>{row.total_labor_time_min}</td>
-                      <td>{row.total_operation_time_min}</td>
-                      <td>{row.expedition_date}</td>
-                      <td>{row.planned_start ?? "-"}</td>
-                      <td>{row.planned_end ?? "-"}</td>
-                      <td>{row.status}</td>
-                      <td>
-                        <button onClick={() => moveOperation(row.id, "up")}>↑</button>
-                        <button onClick={() => moveOperation(row.id, "down")}>↓</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <main style={{ ...panelCard, padding: 14, minWidth: 0 }}>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 15, fontWeight: 900, color: ERP_COLORS.textPrimary }}>
+                {selectedMachine ? `Plánování: ${selectedMachine.name}` : "Vyberte stroj"}
+              </div>
+              <div style={{ ...UI.sectionSubtitle, marginTop: 4 }}>Fronta naplánovaných a čekajících operací</div>
+            </div>
 
-              <h3 style={{ marginTop: 24 }}>Timeline směny</h3>
-
-              <div
-                style={{
-                  border: "1px solid #ddd",
-                  borderRadius: 12,
-                  padding: 12,
-                  marginBottom: 24,
-                  background: "#fafafa",
-                }}
-              >
-                {scheduledOps.map((row) => {
-                  const left = toMinutesFromShiftStart(row.planned_start);
-                  const width = durationMinutes(row.planned_start, row.planned_end);
-                  const totalShift = 480;
-
-                  return (
-                    <div
-                      key={`timeline-${row.id}`}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "120px 1fr",
-                        gap: 8,
-                        alignItems: "center",
-                        marginBottom: 10,
-                      }}
-                    >
-                      <div style={{ fontSize: 12 }}>
-                        <b>{row.gpn}</b>
-                        <br />
-                        <span style={{ color: "#666" }}>{row.operation_name}</span>
-                      </div>
-
-                      <div
-                        style={{
-                          position: "relative",
-                          height: 28,
-                          background: "#fff",
-                          border: "1px solid #ddd",
-                          borderRadius: 8,
-                          overflow: "hidden",
-                        }}
-                      >
-                        <div
-                          style={{
-                            position: "absolute",
-                            left: `${(left / totalShift) * 100}%`,
-                            width: `${(width / totalShift) * 100}%`,
-                            top: 0,
-                            bottom: 0,
-                            background: "#cbd5e1",
-                            border: "1px solid #94a3b8",
-                            borderRadius: 6,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: 12,
-                            fontWeight: 700,
-                            whiteSpace: "nowrap",
+            {loading ? (
+              <div style={{ color: ERP_COLORS.textSecondary }}>Načítání...</div>
+            ) : (
+              <>
+                <h3 style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 900, color: ERP_COLORS.textPrimary }}>
+                  Fronta stroje
+                </h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+                    <thead>
+                      <tr style={{ background: ERP_COLORS.tableHeadBg }}>
+                        <th style={tableHead}>#</th>
+                        <th style={tableHead}>GPN</th>
+                        <th style={tableHead}>Operace</th>
+                        <th style={tableHead}>Ø</th>
+                        <th style={tableHead}>Qty</th>
+                        <th style={tableHead}>Setup</th>
+                        <th style={tableHead}>Labor</th>
+                        <th style={tableHead}>Celkem</th>
+                        <th style={tableHead}>Expedice</th>
+                        <th style={tableHead}>Start</th>
+                        <th style={tableHead}>Konec</th>
+                        <th style={tableHead}>Stav</th>
+                        <th style={tableHead}>Akce</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scheduledOps.map((row) => (
+                        <tr
+                          key={row.id}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = ROW_HOVER;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = "transparent";
                           }}
                         >
-                          {row.planned_start?.slice(11, 16)}–{row.planned_end?.slice(11, 16)}
+                          <td style={tableCell}>{row.queue_position}</td>
+                          <td style={{ ...tableCell, fontWeight: 800 }}>{row.gpn}</td>
+                          <td style={tableCell}>
+                            {row.operation_no} / {row.operation_name}
+                          </td>
+                          <td style={tableCell}>{row.input_diameter_mm ?? "-"}</td>
+                          <td style={tableCell}>{row.qty}</td>
+                          <td style={tableCell}>{row.setup_time_min}</td>
+                          <td style={tableCell}>{row.total_labor_time_min}</td>
+                          <td style={tableCell}>{row.total_operation_time_min}</td>
+                          <td style={tableCell}>{row.expedition_date}</td>
+                          <td style={tableCell}>{row.planned_start ?? "-"}</td>
+                          <td style={tableCell}>{row.planned_end ?? "-"}</td>
+                          <td style={tableCell}>
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "3px 8px",
+                                borderRadius: 999,
+                                background: statusPillStyle(row.status),
+                                color: "#fff",
+                                fontSize: 11,
+                                fontWeight: 800,
+                              }}
+                            >
+                              {row.status}
+                            </span>
+                          </td>
+                          <td style={tableCell}>
+                            <button type="button" onClick={() => moveOperation(row.id, "up")} style={ghostBtn}>
+                              ↑
+                            </button>
+                            <button type="button" onClick={() => moveOperation(row.id, "down")} style={ghostBtn}>
+                              ↓
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <h3 style={{ margin: "18px 0 8px", fontSize: 12, fontWeight: 900, color: ERP_COLORS.textPrimary }}>
+                  Timeline směny
+                </h3>
+
+                <div
+                  style={{
+                    border: `1px solid ${ERP_COLORS.border}`,
+                    borderRadius: 12,
+                    padding: 12,
+                    marginBottom: 18,
+                    background: ERP_COLORS.neutralBg,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "120px 1fr",
+                      gap: 8,
+                      marginBottom: 8,
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      color: ERP_COLORS.textSecondary,
+                    }}
+                  >
+                    <div>Operace</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)" }}>
+                      {["06", "07", "08", "09", "10", "11", "12", "13"].map((h) => (
+                        <div key={h} style={{ textAlign: "center" }}>
+                          {h}:00
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {scheduledOps.map((row) => {
+                    const left = toMinutesFromShiftStart(row.planned_start);
+                    const width = durationMinutes(row.planned_start, row.planned_end);
+                    const totalShift = 480;
+                    const pill = statusPillStyle(row.status);
+
+                    return (
+                      <div
+                        key={`timeline-${row.id}`}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "120px 1fr",
+                          gap: 8,
+                          alignItems: "center",
+                          marginBottom: 10,
+                        }}
+                      >
+                        <div style={{ fontSize: 12 }}>
+                          <strong>{row.gpn}</strong>
+                          <br />
+                          <span style={{ color: ERP_COLORS.textSecondary }}>{row.operation_name}</span>
+                        </div>
+
+                        <div
+                          style={{
+                            position: "relative",
+                            height: 30,
+                            background: `${hourGridBg}, ${ERP_COLORS.card}`,
+                            border: `1px solid ${ERP_COLORS.border}`,
+                            borderRadius: 8,
+                            overflow: "hidden",
+                          }}
+                        >
+                          <div
+                            style={{
+                              position: "absolute",
+                              left: `${(left / totalShift) * 100}%`,
+                              width: `${Math.max((width / totalShift) * 100, 2)}%`,
+                              top: 0,
+                              bottom: 0,
+                              background: pill,
+                              border: `1px solid rgba(15,23,42,0.12)`,
+                              borderRadius: 6,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: 11,
+                              fontWeight: 800,
+                              color: "#fff",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {row.planned_start?.slice(11, 16)}–{row.planned_end?.slice(11, 16)}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <h3 style={{ ...UI.sectionTitle, fontSize: 16 }}>Neplánované operace</h3>
-              <table style={{ ...UI.table, width: "100%" }} cellPadding={6}>
-                <thead>
-                  <tr style={{ background: "#f8fafc" }}>
-                    <th>GPN</th>
-                    <th>Operace</th>
-                    <th>Ø</th>
-                    <th>Qty</th>
-                    <th>Expedice</th>
-                    <th>Stav</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {waitingOps.map((row) => (
-                    <tr key={row.id} style={{ borderTop: "1px solid #eee" }}>
-                      <td>
-                        <b>{row.gpn}</b>
-                      </td>
-                      <td>
-                        {row.operation_no} / {row.operation_name}
-                      </td>
-                      <td>{row.input_diameter_mm ?? "-"}</td>
-                      <td>{row.qty}</td>
-                      <td>{row.expedition_date}</td>
-                      <td>{row.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
-        </main>
-
-        <aside
-          style={{
-            background: "#fff",
-            padding: 16,
-            border: "1px solid #dbe2ea",
-            borderRadius: 12,
-            minWidth: 0,
-          }}
-        >
-          <h2 style={{ ...UI.sectionTitle, marginTop: 0 }}>Kapacita stroje</h2>
-          {calendar.slice(0, 10).map((day) => {
-            const free =
-              day.available_minutes -
-              day.planned_minutes -
-              day.maintenance_minutes -
-              day.reserved_minutes;
-
-            return (
-              <div
-                key={day.id}
-                style={{
-                  border: "1px solid #ddd",
-                  borderRadius: 10,
-                  padding: 10,
-                  marginBottom: 10,
-                }}
-              >
-                <div>
-                  <b>{day.calendar_date}</b>
+                    );
+                  })}
                 </div>
-                <div>Kapacita: {day.available_minutes} min</div>
-                <div>Naplánováno: {day.planned_minutes} min</div>
-                <div>Volno: {free} min</div>
-              </div>
-            );
-          })}
-        </aside>
+
+                <h3 style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 900, color: ERP_COLORS.textPrimary }}>
+                  Neplánované operace
+                </h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
+                    <thead>
+                      <tr style={{ background: ERP_COLORS.tableHeadBg }}>
+                        <th style={tableHead}>GPN</th>
+                        <th style={tableHead}>Operace</th>
+                        <th style={tableHead}>Ø</th>
+                        <th style={tableHead}>Qty</th>
+                        <th style={tableHead}>Expedice</th>
+                        <th style={tableHead}>Stav</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {waitingOps.map((row) => (
+                        <tr
+                          key={row.id}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = ROW_HOVER;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = "transparent";
+                          }}
+                        >
+                          <td style={{ ...tableCell, fontWeight: 800 }}>{row.gpn}</td>
+                          <td style={tableCell}>
+                            {row.operation_no} / {row.operation_name}
+                          </td>
+                          <td style={tableCell}>{row.input_diameter_mm ?? "-"}</td>
+                          <td style={tableCell}>{row.qty}</td>
+                          <td style={tableCell}>{row.expedition_date}</td>
+                          <td style={tableCell}>
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "3px 8px",
+                                borderRadius: 999,
+                                background: statusPillStyle(row.status),
+                                color: "#fff",
+                                fontSize: 11,
+                                fontWeight: 800,
+                              }}
+                            >
+                              {row.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </main>
+
+          <aside style={{ ...panelCard, padding: 14, minWidth: 0 }}>
+            <h2 style={{ ...UI.statLabel, marginTop: 0, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Kapacita stroje
+            </h2>
+            {calendar.slice(0, 10).map((day) => {
+              const free =
+                day.available_minutes -
+                day.planned_minutes -
+                day.maintenance_minutes -
+                day.reserved_minutes;
+
+              return (
+                <div
+                  key={day.id}
+                  style={{
+                    border: `1px solid ${ERP_COLORS.border}`,
+                    borderRadius: 10,
+                    padding: 10,
+                    marginBottom: 8,
+                    background: ERP_COLORS.card,
+                    fontSize: 13,
+                    color: ERP_COLORS.textPrimary,
+                  }}
+                >
+                  <div style={{ fontWeight: 800 }}>{day.calendar_date}</div>
+                  <div style={{ color: ERP_COLORS.textSecondary, marginTop: 4 }}>Kapacita: {day.available_minutes} min</div>
+                  <div style={{ color: ERP_COLORS.textSecondary }}>Naplánováno: {day.planned_minutes} min</div>
+                  <div style={{ color: ERP_COLORS.primary, fontWeight: 700, marginTop: 4 }}>Volno: {free} min</div>
+                </div>
+              );
+            })}
+          </aside>
         </div>
       </PageSection>
     </PageContainer>

@@ -1,6 +1,7 @@
 import React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import type { PlannerGanttItem } from "../services/plannerApi";
+import { ERP_COLORS } from "../styles/ui";
 import { plannerGanttItemColor } from "../utils/plannerGanttStatus";
 import { PlannerGanttStackedBar } from "./PlannerGanttStackedBar";
 import { ganttCellItemKey } from "./plannerGanttDayUtils";
@@ -35,8 +36,8 @@ function ColumnDropSpacer({
         height: 5,
         flexShrink: 0,
         borderRadius: 2,
-        background: isOver ? "rgba(59,130,246,0.28)" : "transparent",
-        boxShadow: isOver ? "inset 0 -2px 0 #3b82f6" : "none",
+        background: isOver ? ERP_COLORS.primaryLight : "transparent",
+        boxShadow: isOver ? `inset 0 -2px 0 ${ERP_COLORS.primary}` : "none",
         transition: "background 100ms ease",
       }}
     />
@@ -55,6 +56,7 @@ export type PlannerGanttDayColumnProps = {
   stackGapPx: number;
   cellPadPx: number;
   minBlockHeight: number;
+  selectedOperationId?: number | null;
 };
 
 /** Jedna denní buňka — operace pod sebou, kompaktní mezery. */
@@ -70,6 +72,7 @@ export function PlannerGanttDayColumn({
   stackGapPx,
   cellPadPx,
   minBlockHeight,
+  selectedOperationId = null,
 }: PlannerGanttDayColumnProps) {
   const gIndex = (opId: number) => globalOrder.findIndex((x) => x.operationId === opId);
 
@@ -80,13 +83,13 @@ export function PlannerGanttDayColumn({
         minWidth: dayColWidth,
         minHeight: rowMinHeight,
         boxSizing: "border-box",
-        borderRight: "1px solid rgba(148,163,184,0.35)",
+        borderRight: `1px solid ${ERP_COLORS.divider}`,
         padding: cellPadPx,
         display: "flex",
         flexDirection: "column",
         gap: stackGapPx,
         alignItems: "stretch",
-        background: "rgba(248,250,252,0.65)",
+        background: `linear-gradient(180deg, ${ERP_COLORS.tableHeadBg} 0%, ${ERP_COLORS.neutralBg} 100%), repeating-linear-gradient(90deg, transparent, transparent 11px, ${ERP_COLORS.divider} 11px, ${ERP_COLORS.divider} 12px)`,
       }}
     >
       {items.length === 0 ? (
@@ -118,6 +121,7 @@ export function PlannerGanttDayColumn({
               <PlannerGanttStackedBar
                 item={item}
                 isDragging={activeDragItemKey === ganttCellItemKey(item)}
+                isSelected={selectedOperationId != null && item.operationId === selectedOperationId}
                 onSelect={onSelect}
                 barColor={plannerGanttItemColor(item)}
                 minBlockHeight={minBlockHeight}

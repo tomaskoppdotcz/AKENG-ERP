@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { akengFetch } from "../services/akengFetch";
+import { ERP_COLORS, UI } from "../styles/ui";
 
 const API_BASE = "http://127.0.0.1:8001";
 
@@ -41,22 +42,24 @@ type MachineCalendarDay = {
   is_machine_available: boolean;
 };
 
+const ROW_HOVER = "#F1F5F9";
+
 function getStatusStyle(status: string) {
   switch ((status || "").toLowerCase()) {
     case "running":
-      return { bg: "#dcfce7", border: "#16a34a", pill: "#16a34a" };
+      return { bg: ERP_COLORS.okBg, border: ERP_COLORS.okFg, pill: ERP_COLORS.okFg };
     case "ready":
-      return { bg: "#dbeafe", border: "#2563eb", pill: "#2563eb" };
+      return { bg: ERP_COLORS.runningBg, border: ERP_COLORS.primary, pill: ERP_COLORS.primary };
     case "finished":
-      return { bg: "#ecfccb", border: "#65a30d", pill: "#65a30d" };
+      return { bg: ERP_COLORS.okBg, border: ERP_COLORS.okFg, pill: ERP_COLORS.okFg };
     case "blocked":
-      return { bg: "#fee2e2", border: "#dc2626", pill: "#dc2626" };
+      return { bg: ERP_COLORS.problemBg, border: ERP_COLORS.problemFg, pill: ERP_COLORS.problemFg };
     case "paused":
-      return { bg: "#fef3c7", border: "#d97706", pill: "#d97706" };
+      return { bg: ERP_COLORS.waitBg, border: ERP_COLORS.waitFg, pill: ERP_COLORS.waitFg };
     case "waiting_release":
-      return { bg: "#eef2ff", border: "#6366f1", pill: "#6366f1" };
+      return { bg: "rgba(79, 70, 229, 0.1)", border: "#4F46E5", pill: "#4F46E5" };
     default:
-      return { bg: "#f1f5f9", border: "#94a3b8", pill: "#94a3b8" };
+      return { bg: ERP_COLORS.neutralBg, border: ERP_COLORS.border, pill: ERP_COLORS.textSecondary };
   }
 }
 
@@ -159,172 +162,279 @@ export default function PlannerBoardPage() {
     return Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000));
   }
 
+  const boardKpis = useMemo(() => {
+    const totalShift = 480;
+    const plannedMin = scheduledOps.reduce((acc, o) => acc + durationMinutes(o.planned_start, o.planned_end), 0);
+    const utilizationPct = Math.min(100, Math.round((plannedMin / Math.max(1, totalShift)) * 100));
+    const woo = (o: PlanningOperation) => (o.work_order_no || "").trim();
+    const risk = new Set<string>();
+    const delayed = new Set<string>();
+    let blockedOps = 0;
+    for (const o of operations) {
+      const st = (o.status || "").toLowerCase();
+      const w = woo(o);
+      if (st === "blocked") blockedOps += 1;
+      if (w && (st === "blocked" || st === "waiting_release")) risk.add(w);
+      if (w && (st === "scheduling_late" || st.includes("late"))) delayed.add(w);
+    }
+    const coopReturn = operations.filter((o) => (o.status || "").toLowerCase() === "sent").length;
+    return { utilizationPct, riskVp: risk.size, blockedOps, delayedOrders: delayed.size, coopReturn };
+  }, [operations, scheduledOps]);
+
   function formatVp(row: PlanningOperation) {
     return row.work_order_no || "-";
   }
 
-  const activeOps = operations.length;
-  const plannedOps = scheduledOps.length;
-  const waitingCount = waitingOps.length;
-  const blocked = operations.filter((o) => o.status === "blocked").length;
+  const ghostBtn: React.CSSProperties = {
+    marginRight: 6,
+    padding: "4px 8px",
+    borderRadius: 8,
+    border: `1px solid ${ERP_COLORS.border}`,
+    background: ERP_COLORS.card,
+    color: ERP_COLORS.textPrimary,
+    cursor: "pointer",
+    fontWeight: 800,
+  };
+
+  const tableHead: React.CSSProperties = {
+    textAlign: "left" as const,
+    padding: "8px 10px",
+    borderBottom: `2px solid ${ERP_COLORS.divider}`,
+    color: ERP_COLORS.tableHeadText,
+    fontWeight: 800,
+    fontSize: 11,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.06em",
+  };
+
+  const tableCell: React.CSSProperties = {
+    padding: "8px 10px",
+    borderBottom: `1px solid ${ERP_COLORS.divider}`,
+    color: ERP_COLORS.textPrimary,
+    fontSize: 13,
+  };
+
+  const hourGridBg = `repeating-linear-gradient(90deg, transparent, transparent 12.5%, ${ERP_COLORS.divider} 12.5%, ${ERP_COLORS.divider} 25%)`;
+
+  const panelCard: React.CSSProperties = {
+    ...UI.card,
+    borderRadius: 14,
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
+  };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f8fafc", padding: 16, fontFamily: "Arial, sans-serif" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
-        <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 14, padding: 14 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>Aktivní stroje</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{machines.length}</div>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: UI.colors.pageBg,
+        padding: 14,
+        fontFamily: "Arial, Helvetica, sans-serif",
+        color: ERP_COLORS.textPrimary,
+      }}
+    >
+      <div
+        style={{
+          ...panelCard,
+          padding: "14px 16px",
+          marginBottom: 12,
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <div style={{ ...UI.statLabel, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Planner Board
+          </div>
+          <h1 style={{ ...UI.pageTitle, margin: "6px 0 0" }}>
+            {selectedMachine ? selectedMachine.name : "Planner Board"}
+          </h1>
+          <div style={{ ...UI.sectionSubtitle, marginTop: 4 }}>
+            Stroje: {machines.length} · operace: {operations.length} · ve frontě: {scheduledOps.length} · čeká:{" "}
+            {waitingOps.length}
+          </div>
         </div>
-        <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 14, padding: 14 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>Operace celkem</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{activeOps}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 14, padding: 14 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>Ve frontě stroje</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{plannedOps}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 14, padding: 14 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>Čekající / blokované</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{waitingCount} / {blocked}</div>
-        </div>
+        <button type="button" onClick={rebuildSchedule} style={{ ...UI.buttons.primary, padding: "9px 14px" }}>
+          Přepočítat plán
+        </button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr 320px", gap: 16 }}>
-        <aside style={{ background: "#fff", padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
-          <h2 style={{ marginTop: 0 }}>Stroje</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+          gap: 10,
+          marginBottom: 12,
+        }}
+      >
+        {(
+          [
+            ["Vytížení (směna)", `${boardKpis.utilizationPct}%`, "vs. 480 min"],
+            ["Rizikové VP", String(boardKpis.riskVp), "Blok / čeká uvolnění"],
+            ["Blokované operace", String(boardKpis.blockedOps), "status blocked"],
+            ["Zpožděné zakázky", String(boardKpis.delayedOrders), "scheduling_late"],
+            ["Kooperace → návrat", String(boardKpis.coopReturn), "status sent"],
+          ] as const
+        ).map(([label, value, hint]) => (
+          <div key={label} style={{ ...UI.summaryTile, minHeight: 0 }}>
+            <div style={UI.summaryTileLabel}>{label}</div>
+            <div style={{ ...UI.summaryTileValue, marginTop: 6, fontSize: 22 }}>{value}</div>
+            <div style={{ ...UI.summaryTileSubValue, marginTop: 4 }}>{hint}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 280px) minmax(0, 1fr) minmax(240px, 320px)", gap: 12 }}>
+        <aside style={{ ...panelCard, padding: 14 }}>
+          <h2 style={{ ...UI.statLabel, marginTop: 0, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Stroje
+          </h2>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
             {machines.map((machine) => (
               <button
                 key={machine.id}
+                type="button"
                 onClick={() => setSelectedMachineId(machine.id)}
                 style={{
                   textAlign: "left",
-                  padding: 12,
+                  padding: "10px 12px",
                   borderRadius: 10,
-                  border: selectedMachineId === machine.id ? "2px solid #111" : "1px solid #ddd",
-                  background: selectedMachineId === machine.id ? "#f1f5f9" : "#fff",
+                  border:
+                    selectedMachineId === machine.id
+                      ? `2px solid ${ERP_COLORS.primary}`
+                      : `1px solid ${ERP_COLORS.border}`,
+                  background: selectedMachineId === machine.id ? ERP_COLORS.primaryLight : ERP_COLORS.card,
                   cursor: "pointer",
+                  color: ERP_COLORS.textPrimary,
                 }}
               >
-                <div style={{ fontWeight: 700 }}>{machine.name}</div>
-                <div style={{ fontSize: 12, color: "#666" }}>{machine.machine_code}</div>
+                <div style={{ fontWeight: 800 }}>{machine.name}</div>
+                <div style={{ fontSize: 12, color: ERP_COLORS.textSecondary }}>{machine.machine_code}</div>
               </button>
             ))}
           </div>
         </aside>
 
-        <main style={{ background: "#fff", padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <div>
-              <h1 style={{ margin: 0 }}>
-                {selectedMachine ? `Planner Board: ${selectedMachine.name}` : "Planner Board"}
-              </h1>
-              <div style={{ color: "#666", fontSize: 14 }}>Dispečerský pohled na frontu a timeline stroje</div>
-            </div>
-
-            <button
-              onClick={rebuildSchedule}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: "1px solid #111",
-                background: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              Přepočítat plán
-            </button>
-          </div>
-
+        <main style={{ ...panelCard, padding: 14, minWidth: 0 }}>
           {loading ? (
-            <div>Načítání...</div>
+            <div style={{ color: ERP_COLORS.textSecondary }}>Načítání...</div>
           ) : (
             <>
-              <h3>Fronta stroje</h3>
-              <table width="100%" cellPadding={6} style={{ borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th style={{ color: "#f97316" }}>VP</th>
-                    <th>GPN</th>
-                    <th>Operace</th>
-                    <th>Ø</th>
-                    <th>Qty</th>
-                    <th>Setup</th>
-                    <th>Labor</th>
-                    <th>Celkem</th>
-                    <th>Expedice</th>
-                    <th>Start</th>
-                    <th>Konec</th>
-                    <th>Stav</th>
-                    <th>Akce</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scheduledOps.map((row) => {
-                    const statusStyle = getStatusStyle(row.status);
-                    return (
-                      <tr key={row.id} style={{ borderTop: "1px solid #eee", background: statusStyle.bg }}>
-                        <td>{row.queue_position}</td>
-                        <td style={{ color: "#f97316", fontWeight: 800 }}>{formatVp(row)}</td>
-                        <td><b>{row.gpn}</b></td>
-                        <td>{row.operation_no} / {row.operation_name}</td>
-                        <td>{row.input_diameter_mm ?? "-"}</td>
-                        <td>{row.qty}</td>
-                        <td>{row.setup_time_min}</td>
-                        <td>{row.total_labor_time_min}</td>
-                        <td>{row.total_operation_time_min}</td>
-                        <td>{row.expedition_date}</td>
-                        <td>{row.planned_start ? row.planned_start.slice(11, 16) : "-"}</td>
-                        <td>{row.planned_end ? row.planned_end.slice(11, 16) : "-"}</td>
-                        <td>
-                          <span
-                            style={{
-                              display: "inline-block",
-                              padding: "4px 8px",
-                              borderRadius: 999,
-                              background: statusStyle.pill,
-                              color: "#fff",
-                              fontSize: 12,
-                              fontWeight: 700,
-                            }}
-                          >
-                            {row.status}
-                          </span>
-                        </td>
-                        <td>
-                          <button onClick={() => moveOperation(row.id, "up")}>↑</button>
-                          <button onClick={() => moveOperation(row.id, "down")}>↓</button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <h3 style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 900, color: ERP_COLORS.textPrimary }}>
+                Fronta stroje
+              </h3>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+                  <thead>
+                    <tr style={{ background: ERP_COLORS.tableHeadBg }}>
+                      <th style={tableHead}>#</th>
+                      <th style={{ ...tableHead, color: ERP_COLORS.primary }}>VP</th>
+                      <th style={tableHead}>GPN</th>
+                      <th style={tableHead}>Operace</th>
+                      <th style={tableHead}>Ø</th>
+                      <th style={tableHead}>Qty</th>
+                      <th style={tableHead}>Setup</th>
+                      <th style={tableHead}>Labor</th>
+                      <th style={tableHead}>Celkem</th>
+                      <th style={tableHead}>Expedice</th>
+                      <th style={tableHead}>Start</th>
+                      <th style={tableHead}>Konec</th>
+                      <th style={tableHead}>Stav</th>
+                      <th style={tableHead}>Akce</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scheduledOps.map((row) => {
+                      const statusStyle = getStatusStyle(row.status);
+                      return (
+                        <tr
+                          key={row.id}
+                          style={{ background: statusStyle.bg }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = ROW_HOVER;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = statusStyle.bg;
+                          }}
+                        >
+                          <td style={tableCell}>{row.queue_position}</td>
+                          <td style={{ ...tableCell, color: ERP_COLORS.primary, fontWeight: 800 }}>{formatVp(row)}</td>
+                          <td style={{ ...tableCell, fontWeight: 800 }}>{row.gpn}</td>
+                          <td style={tableCell}>
+                            {row.operation_no} / {row.operation_name}
+                          </td>
+                          <td style={tableCell}>{row.input_diameter_mm ?? "-"}</td>
+                          <td style={tableCell}>{row.qty}</td>
+                          <td style={tableCell}>{row.setup_time_min}</td>
+                          <td style={tableCell}>{row.total_labor_time_min}</td>
+                          <td style={tableCell}>{row.total_operation_time_min}</td>
+                          <td style={tableCell}>{row.expedition_date}</td>
+                          <td style={tableCell}>{row.planned_start ? row.planned_start.slice(11, 16) : "-"}</td>
+                          <td style={tableCell}>{row.planned_end ? row.planned_end.slice(11, 16) : "-"}</td>
+                          <td style={tableCell}>
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "4px 8px",
+                                borderRadius: 999,
+                                background: statusStyle.pill,
+                                color: "#fff",
+                                fontSize: 11,
+                                fontWeight: 800,
+                              }}
+                            >
+                              {row.status}
+                            </span>
+                          </td>
+                          <td style={tableCell}>
+                            <button type="button" onClick={() => moveOperation(row.id, "up")} style={ghostBtn}>
+                              ↑
+                            </button>
+                            <button type="button" onClick={() => moveOperation(row.id, "down")} style={ghostBtn}>
+                              ↓
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-              <h3 style={{ marginTop: 24 }}>Timeline směny</h3>
-              <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 24, background: "#fafafa" }}>
+              <h3 style={{ margin: "20px 0 10px", fontSize: 13, fontWeight: 900, color: ERP_COLORS.textPrimary }}>
+                Timeline směny
+              </h3>
+              <div
+                style={{
+                  border: `1px solid ${ERP_COLORS.border}`,
+                  borderRadius: 12,
+                  padding: 12,
+                  marginBottom: 20,
+                  background: ERP_COLORS.neutralBg,
+                }}
+              >
                 <div
                   style={{
                     display: "grid",
                     gridTemplateColumns: "220px 1fr",
                     gap: 8,
                     marginBottom: 10,
-                    fontSize: 12,
-                    color: "#666",
-                    fontWeight: 700,
+                    fontSize: 10,
+                    fontWeight: 800,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: ERP_COLORS.textSecondary,
                   }}
                 >
                   <div>Operace</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)" }}>
-                    <div>06:00</div>
-                    <div>07:00</div>
-                    <div>08:00</div>
-                    <div>09:00</div>
-                    <div>10:00</div>
-                    <div>11:00</div>
-                    <div>12:00</div>
-                    <div>13:00</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 2 }}>
+                    {["06", "07", "08", "09", "10", "11", "12", "13"].map((h) => (
+                      <div key={h} style={{ textAlign: "center" }}>
+                        {h}:00
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -346,19 +456,20 @@ export default function PlannerBoardPage() {
                       }}
                     >
                       <div style={{ fontSize: 12 }}>
-                        <div style={{ color: "#f97316", fontWeight: 800 }}>{formatVp(row)}</div>
-                        <b>{row.gpn}</b>
+                        <div style={{ color: ERP_COLORS.primary, fontWeight: 800 }}>{formatVp(row)}</div>
+                        <strong>{row.gpn}</strong>
                         <br />
-                        <span style={{ color: "#666" }}>{row.operation_no} / {row.operation_name}</span>
+                        <span style={{ color: ERP_COLORS.textSecondary }}>
+                          {row.operation_no} / {row.operation_name}
+                        </span>
                       </div>
 
                       <div
                         style={{
                           position: "relative",
-                          height: 28,
-                          background:
-                            "linear-gradient(to right, #fff 0%, #fff 12.5%, #f8fafc 12.5%, #f8fafc 25%, #fff 25%, #fff 37.5%, #f8fafc 37.5%, #f8fafc 50%, #fff 50%, #fff 62.5%, #f8fafc 62.5%, #f8fafc 75%, #fff 75%, #fff 87.5%, #f8fafc 87.5%, #f8fafc 100%)",
-                          border: "1px solid #ddd",
+                          height: 30,
+                          background: `${hourGridBg}, ${ERP_COLORS.card}`,
+                          border: `1px solid ${ERP_COLORS.border}`,
                           borderRadius: 8,
                           overflow: "hidden",
                         }}
@@ -367,18 +478,18 @@ export default function PlannerBoardPage() {
                           style={{
                             position: "absolute",
                             left: `${(left / totalShift) * 100}%`,
-                            width: `${Math.max((width / totalShift) * 100, 4)}%`,
+                            width: `${Math.max((width / totalShift) * 100, 3)}%`,
                             top: 0,
                             bottom: 0,
                             background: statusStyle.pill,
-                            border: `1px solid ${statusStyle.border}`,
+                            border: `1px solid rgba(15,23,42,0.12)`,
                             color: "#fff",
                             borderRadius: 6,
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            fontSize: 12,
-                            fontWeight: 700,
+                            fontSize: 11,
+                            fontWeight: 800,
                             whiteSpace: "nowrap",
                           }}
                         >
@@ -392,56 +503,64 @@ export default function PlannerBoardPage() {
                 })}
               </div>
 
-              <h3>Neplánované operace</h3>
-              <table width="100%" cellPadding={6} style={{ borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ color: "#f97316" }}>VP</th>
-                    <th>GPN</th>
-                    <th>Operace</th>
-                    <th>Ø</th>
-                    <th>Qty</th>
-                    <th>Expedice</th>
-                    <th>Stav</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {waitingOps.map((row) => {
-                    const statusStyle = getStatusStyle(row.status);
-                    return (
-                      <tr key={row.id} style={{ borderTop: "1px solid #eee", background: statusStyle.bg }}>
-                        <td style={{ color: "#f97316", fontWeight: 800 }}>{formatVp(row)}</td>
-                        <td><b>{row.gpn}</b></td>
-                        <td>{row.operation_no} / {row.operation_name}</td>
-                        <td>{row.input_diameter_mm ?? "-"}</td>
-                        <td>{row.qty}</td>
-                        <td>{row.expedition_date}</td>
-                        <td>
-                          <span
-                            style={{
-                              display: "inline-block",
-                              padding: "4px 8px",
-                              borderRadius: 999,
-                              background: statusStyle.pill,
-                              color: "#fff",
-                              fontSize: 12,
-                              fontWeight: 700,
-                            }}
-                          >
-                            {row.status}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <h3 style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 900, color: ERP_COLORS.textPrimary }}>
+                Neplánované operace
+              </h3>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+                  <thead>
+                    <tr style={{ background: ERP_COLORS.tableHeadBg }}>
+                      <th style={{ ...tableHead, color: ERP_COLORS.primary }}>VP</th>
+                      <th style={tableHead}>GPN</th>
+                      <th style={tableHead}>Operace</th>
+                      <th style={tableHead}>Ø</th>
+                      <th style={tableHead}>Qty</th>
+                      <th style={tableHead}>Expedice</th>
+                      <th style={tableHead}>Stav</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {waitingOps.map((row) => {
+                      const statusStyle = getStatusStyle(row.status);
+                      return (
+                        <tr key={row.id} style={{ background: statusStyle.bg }}>
+                          <td style={{ ...tableCell, color: ERP_COLORS.primary, fontWeight: 800 }}>{formatVp(row)}</td>
+                          <td style={{ ...tableCell, fontWeight: 800 }}>{row.gpn}</td>
+                          <td style={tableCell}>
+                            {row.operation_no} / {row.operation_name}
+                          </td>
+                          <td style={tableCell}>{row.input_diameter_mm ?? "-"}</td>
+                          <td style={tableCell}>{row.qty}</td>
+                          <td style={tableCell}>{row.expedition_date}</td>
+                          <td style={tableCell}>
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "4px 8px",
+                                borderRadius: 999,
+                                background: statusStyle.pill,
+                                color: "#fff",
+                                fontSize: 11,
+                                fontWeight: 800,
+                              }}
+                            >
+                              {row.status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
         </main>
 
-        <aside style={{ background: "#fff", padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
-          <h2 style={{ marginTop: 0 }}>Kapacita stroje</h2>
+        <aside style={{ ...panelCard, padding: 14 }}>
+          <h2 style={{ ...UI.statLabel, marginTop: 0, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Kapacita stroje
+          </h2>
           {calendar.slice(0, 10).map((day) => {
             const free =
               day.available_minutes -
@@ -453,16 +572,19 @@ export default function PlannerBoardPage() {
               <div
                 key={day.id}
                 style={{
-                  border: "1px solid #ddd",
+                  border: `1px solid ${ERP_COLORS.border}`,
                   borderRadius: 10,
                   padding: 10,
-                  marginBottom: 10,
+                  marginBottom: 8,
+                  background: ERP_COLORS.card,
+                  fontSize: 13,
+                  color: ERP_COLORS.textPrimary,
                 }}
               >
-                <div><b>{day.calendar_date}</b></div>
-                <div>Kapacita: {day.available_minutes} min</div>
-                <div>Naplánováno: {day.planned_minutes} min</div>
-                <div>Volno: {free} min</div>
+                <div style={{ fontWeight: 800 }}>{day.calendar_date}</div>
+                <div style={{ color: ERP_COLORS.textSecondary, marginTop: 4 }}>Kapacita: {day.available_minutes} min</div>
+                <div style={{ color: ERP_COLORS.textSecondary }}>Naplánováno: {day.planned_minutes} min</div>
+                <div style={{ color: ERP_COLORS.primary, fontWeight: 700, marginTop: 4 }}>Volno: {free} min</div>
               </div>
             );
           })}
