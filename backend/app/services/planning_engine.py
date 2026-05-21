@@ -1,8 +1,8 @@
 import logging
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from time import perf_counter
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -925,13 +925,13 @@ class PlanningEngineService:
             po.deadline_risk_level = "ok"
 
     def rebuild_global_schedules(self, from_date: date, *, trigger_reason: str = "other") -> list[MachineSchedule]:
-        t0 = time.perf_counter()
+        t0 = perf_counter()
         triggered_at = datetime.utcnow()
         reason = (trigger_reason or "other")[:64]
         warnings: list[str] = []
         try:
             created = self._rebuild_global_schedules_body(from_date, warnings)
-            duration_ms = int((time.perf_counter() - t0) * 1000)
+            duration_ms = int((perf_counter() - t0) * 1000)
             st = "partial" if warnings else "success"
             self.db.add(
                 PlanningRun(
@@ -952,7 +952,7 @@ class PlanningEngineService:
             return created
         except Exception as e:
             self.db.rollback()
-            duration_ms = int((time.perf_counter() - t0) * 1000)
+            duration_ms = int((perf_counter() - t0) * 1000)
             try:
                 self.db.add(
                     PlanningRun(
@@ -1015,8 +1015,11 @@ class PlanningEngineService:
                 )
             )
         else:
-            self.db.execute(delete(MachineSchedule))
-            self.db.execute(delete(PlanningScheduleSegment))
+            # F2: empty protect_ids would delete all schedules — treat as no-op
+            logger.warning(
+                "F2 safety guard: protect_ids is empty in _rebuild_global_schedules_body — "
+                "skipping delete of MachineSchedule/PlanningScheduleSegment to avoid wiping the whole table."
+            )
         self.db.flush()
         self._realign_machine_calendar_planned_minutes_from_schedules()
 
@@ -1084,6 +1087,10 @@ class PlanningEngineService:
                 continue
             if not self._schedulable_status(op.status):
                 continue
+            # F2: material_ready is a hard blocker; locked+scheduled ops are exempt
+            if not bool(getattr(op, "material_ready", False)):
+                if not (bool(getattr(op, "is_locked", False)) and op.planned_start is not None):
+                    continue
             pending.add(int(op.id))
 
         stall_guard = 0
@@ -1258,6 +1265,400 @@ class PlanningEngineService:
         )
         return created
 
+    def _rebuild_single_machine_body(
+        self, target_machine_id: int, from_date: date, warnings: list[str]
+    ) -> list[MachineSchedule]:
+        """F4: per-machine rebuild — scoped delete/clear/realign; global VP context for predecessors."""
+        target_mid = int(target_machine_id)
+        shift_floor = self._combine_shift_start(from_date)
+        wc_floor_from = self._earliest_wall_clock_floor_for_calendar_day(from_date)
+        floor = max(shift_floor, wc_floor_from) if wc_floor_from is not None else shift_floor
+
+        # F4: Step 1 — load ops and VP context (same as global)
+        all_ops = self.db.scalars(
+            select(PlanningOperation).where(PlanningOperation.machine_id.isnot(None))
+        ).all()
+        op_by_id: dict[int, PlanningOperation] = {int(o.id): o for o in all_ops}
+
+        by_woo: dict[str, list[PlanningOperation]] = defaultdict(list)
+        for op in all_ops:
+            w = (op.work_order_no or "").strip()
+            if w:
+                by_woo[w].append(op)
+
+        woo_keys = [w for w in by_woo.keys() if w]
+        po_by_vp: dict[str, ProductionOrder] = {}
+        if woo_keys:
+            for row in self.db.scalars(
+                select(ProductionOrder).where(ProductionOrder.vp_code.in_(woo_keys))
+            ).all():
+                k = (row.vp_code or "").strip()
+                if k:
+                    po_by_vp[k] = row
+
+        pred_maps: dict[str, dict[int, PlanningOperation | None]] = {
+            woo: self._build_predecessor_map_for_vp(lst) for woo, lst in by_woo.items()
+        }
+
+        protect_ids = [int(o.id) for o in all_ops if _planner_op_protected_from_replan(o)]
+        protect_ids_set = set(protect_ids)
+        locked_skip = int(
+            sum(
+                1
+                for o in all_ops
+                if o.machine_id is not None
+                and int(o.machine_id) == target_mid
+                and bool(getattr(o, "is_locked", False))
+            )
+        )
+
+        target_op_ids = {
+            int(o.id) for o in all_ops if o.machine_id is not None and int(o.machine_id) == target_mid
+        }
+        if not target_op_ids:
+            logger.warning("F4: no operations on target machine_id=%s, skipping rebuild", target_mid)
+            return []
+
+        target_unprotected_ids = [oid for oid in target_op_ids if oid not in protect_ids_set]
+
+        # F4: scoped delete — only target machine's non-protected ops
+        if target_unprotected_ids:
+            self.db.execute(
+                delete(MachineSchedule).where(
+                    MachineSchedule.planning_operation_id.in_(target_unprotected_ids)
+                )
+            )
+            self.db.execute(
+                delete(PlanningScheduleSegment).where(
+                    PlanningScheduleSegment.planning_operation_id.in_(target_unprotected_ids)
+                )
+            )
+        else:
+            logger.warning(
+                "F4: target machine_id=%s has only protected ops; skipping delete", target_mid
+            )
+        self.db.flush()
+
+        # F4: scoped realign — only target machine's calendar
+        self.db.execute(
+            update(MachineCalendar)
+            .where(MachineCalendar.machine_id == target_mid)
+            .values(planned_minutes=0)
+        )
+        sched_rows = self.db.scalars(
+            select(MachineSchedule).where(MachineSchedule.machine_id == target_mid)
+        ).all()
+        totals: dict[date, int] = defaultdict(int)
+        for s in sched_rows:
+            ps = s.planned_start
+            if ps is None:
+                continue
+            d = ps.date() if isinstance(ps, datetime) else ps
+            if not isinstance(d, date):
+                continue
+            tm = int(round(float(s.total_time_min or 0)))
+            if tm <= 0:
+                tm = 1
+            totals[d] += tm
+        for cal_date, minutes in totals.items():
+            row = self.db.scalar(
+                select(MachineCalendar)
+                .where(MachineCalendar.machine_id == target_mid)
+                .where(MachineCalendar.calendar_date == cal_date)
+            )
+            if row is None:
+                row = MachineCalendar(
+                    machine_id=target_mid,
+                    calendar_date=cal_date,
+                    available_minutes=450,
+                    planned_minutes=0,
+                    maintenance_minutes=0,
+                    reserved_minutes=0,
+                    is_working_day=True,
+                    is_machine_available=True,
+                    note=None,
+                )
+                self.db.add(row)
+            row.planned_minutes = int(minutes)
+        self.db.flush()
+
+        # F4: clear plan fields only on target machine
+        for op in all_ops:
+            if op.machine_id is None or int(op.machine_id) != target_mid:
+                continue
+            if _planner_op_protected_from_replan(op):
+                continue
+            if _chain_terminal_completed(op.status):
+                continue
+            st = (op.status or "").strip().lower()
+            op.planned_start = None
+            op.planned_end = None
+            op.queue_position = None
+            op.latest_start = None
+            if st == "planned":
+                op.status = "ready"
+        self.db.flush()
+
+        # F4: horizon only for target machine
+        ensure_machine_calendar_horizon_for_planning(
+            self.db, from_date=from_date, machine_ids={target_mid}
+        )
+
+        # F4: seed op_end_times from ALL machines (target only includes protected/terminal)
+        op_end_times: dict[int, datetime] = {}
+        for op in all_ops:
+            oid = int(op.id)
+            actual_end = self._normalize_runtime_dt(op.actual_end)
+            if actual_end is not None:
+                op_end_times[oid] = actual_end
+                continue
+            planned_end = self._normalize_runtime_dt(op.planned_end)
+            if planned_end is None:
+                continue
+            op_mid = int(op.machine_id) if op.machine_id is not None else None
+            if op_mid != target_mid:
+                op_end_times[oid] = planned_end
+            elif _planner_op_protected_from_replan(op) or _chain_terminal_completed(op.status):
+                op_end_times[oid] = planned_end
+
+        machine_next: dict[int, datetime] = defaultdict(lambda: floor)
+        for op in all_ops:
+            if not _planner_op_protected_from_replan(op) or op.machine_id is None:
+                continue
+            end = self._normalize_runtime_dt(op.actual_end or op.planned_end)
+            if end is None:
+                continue
+            mid = int(op.machine_id)
+            machine_next[mid] = max(machine_next[mid], end)
+
+        vp_next: dict[str, datetime] = {}
+        for woo, lst in by_woo.items():
+            r = self._vp_resume_after_completed_ops(sorted(lst, key=lambda o: (o.operation_no or 9999, o.id)))
+            if r is not None:
+                vp_next[woo] = max(vp_next.get(woo, floor), r)
+
+        # F4: qp_floor scoped to target machine
+        qp_floor: dict[int, int] = defaultdict(int)
+        for row in self.db.scalars(
+            select(MachineSchedule).where(MachineSchedule.machine_id == target_mid)
+        ).all():
+            qp_floor[int(row.machine_id)] = max(qp_floor[int(row.machine_id)], int(row.queue_position or 0))
+
+        state: dict = {"__qp_floor__": dict(qp_floor)}
+        created: list[MachineSchedule] = []
+        buf = self._vp_chain_buffer()
+        scheduling_late_count = 0
+
+        pending: set[int] = set()
+        for op in all_ops:
+            if not op.machine_id:
+                continue
+            if int(op.machine_id) != target_mid:
+                continue
+            if bool(getattr(op, "is_cooperation", False)):
+                continue
+            if _planner_op_protected_from_replan(op):
+                continue
+            if _chain_terminal_completed(op.status):
+                continue
+            if not self._schedulable_status(op.status):
+                continue
+            # F2: material_ready is a hard blocker; locked+scheduled ops are exempt
+            if not bool(getattr(op, "material_ready", False)):
+                if not (bool(getattr(op, "is_locked", False)) and op.planned_start is not None):
+                    continue
+            # F4: pending is scoped to target machine only
+            pending.add(int(op.id))
+
+        stall_guard = 0
+        # F4: scheduling loop (same body as global)
+        while pending:
+            stall_guard += 1
+            if stall_guard > 50000:
+                warnings.append("planner_stall_guard")
+                break
+            candidates: list[int] = []
+            for oid in pending:
+                op = op_by_id[oid]
+                woo = (op.work_order_no or "").strip()
+                pred_map = pred_maps.get(woo, {})
+                if not self._predecessor_ready_for_schedule(op, pred_map, op_end_times):
+                    continue
+                candidates.append(oid)
+            if not candidates:
+                break
+            candidates.sort(key=lambda i: self._machine_op_sort_key(op_by_id[i]))
+            oid = candidates[0]
+            op = op_by_id[oid]
+            woo = (op.work_order_no or "").strip()
+            pred_map = pred_maps.get(woo, {})
+            pred = pred_map.get(int(op.id))
+            ordered = sorted(by_woo.get(woo, []), key=lambda o: (int(o.operation_no or 0), int(o.id)))
+            m_deadline = self._manufacturing_deadline_dt(ordered)
+            exp_latest = self._expedition_latest_end_dt(ordered)
+
+            pred_floor_t = self._pred_end_for_chain(pred, op_end_times, floor, buf)
+            chain_base = vp_next.get(woo, floor)
+            if pred is None:
+                pred_floor = chain_base
+            else:
+                if pred_floor_t is None:
+                    warnings.append(f"missing_pred_floor_op_{oid}")
+                    pending.discard(oid)
+                    continue
+                pred_floor = pred_floor_t
+            earliest_pred = max(floor, pred_floor)
+            mid = int(op.machine_id)
+            earliest = max(earliest_pred, machine_next[mid])
+
+            total_time = self._operation_duration_min(op)
+            latest_end = exp_latest if self._operation_in_reserve_logistics_window(op) else m_deadline
+
+            placement = self._place_one_operation(
+                machine_id=mid,
+                from_date=from_date,
+                earliest_start=earliest,
+                total_time=total_time,
+                state=state,
+                latest_end=latest_end,
+            )
+            if placement is None:
+                op.planned_start = None
+                op.planned_end = None
+                op.queue_position = None
+                op.latest_start = None
+                op.status = SCHEDULING_LATE_STATUS
+                scheduling_late_count += 1
+                warnings.append(f"scheduling_late_op_{oid}")
+                pending.discard(oid)
+                cur_no = int(op.operation_no or 0)
+                for o2 in ordered:
+                    if int(o2.operation_no or 0) > cur_no:
+                        pending.discard(int(o2.id))
+                continue
+
+            planned_start, planned_end, seg_rows = placement
+            st_m = self._machine_state(mid, from_date, state)
+            st_m["queue_position"] += 1
+            qp = st_m["queue_position"]
+
+            op.queue_position = qp
+            op.planned_start = planned_start
+            op.planned_end = planned_end
+            op.status = "planned"
+            if self._operation_in_reserve_logistics_window(op):
+                tail = self._remaining_reserve_tail_minutes(ordered, op)
+                op.latest_start = exp_latest - timedelta(minutes=tail)
+            else:
+                tail = self._remaining_manufacturing_tail_minutes(ordered, op)
+                op.latest_start = m_deadline - timedelta(minutes=tail)
+
+            sched = MachineSchedule(
+                machine_id=mid,
+                planning_operation_id=op.id,
+                queue_position=qp,
+                planned_start=planned_start,
+                planned_end=planned_end,
+                setup_time_min=float(op.setup_time_min or 0),
+                labor_time_total_min=float(op.total_labor_time_min or 0),
+                total_time_min=float(total_time),
+                status="planned",
+            )
+            self.db.add(sched)
+            created.append(sched)
+            for si, (ss, se, dm) in enumerate(seg_rows):
+                self.db.add(
+                    PlanningScheduleSegment(
+                        planning_operation_id=int(op.id),
+                        machine_id=int(mid),
+                        segment_index=int(si),
+                        segment_start=ss,
+                        segment_end=se,
+                        duration_min=int(dm),
+                    )
+                )
+
+            machine_next[mid] = planned_end
+            op_end_times[int(op.id)] = planned_end
+            pending.discard(oid)
+
+        touched_woo = {
+            (op.work_order_no or "").strip()
+            for op in all_ops
+            if op.machine_id is not None
+            and int(op.machine_id) == target_mid
+            and (op.work_order_no or "").strip()
+        }
+
+        # F4: post-pass scoped to touched VPs / target machine
+        for woo in touched_woo:
+            lst = by_woo.get(woo, [])
+            ordered = sorted(lst, key=lambda o: (int(o.operation_no or 0), int(o.id)))
+            pred_map = pred_maps.get(woo, {})
+            for op in ordered:
+                if bool(getattr(op, "is_cooperation", False)):
+                    op.planned_start = None
+                    op.planned_end = None
+                    op.queue_position = None
+                    op.latest_start = None
+
+        deadline_violations = 0
+        for woo in touched_woo:
+            lst = by_woo.get(woo, [])
+            ordered = sorted(lst, key=lambda o: (int(o.operation_no or 0), int(o.id)))
+            m_deadline_u = self._manufacturing_deadline_dt(ordered)
+            for o in ordered:
+                if o.planned_end is None:
+                    continue
+                if self._operation_in_reserve_logistics_window(o):
+                    if o.planned_end > self._expedition_latest_end_dt(ordered):
+                        deadline_violations += 1
+                        break
+                elif o.planned_end > m_deadline_u:
+                    deadline_violations += 1
+                    break
+        if deadline_violations:
+            warnings.append(f"deadline_violations_{deadline_violations}")
+
+        for w in sorted(touched_woo):
+            normalize_planning_queue_statuses_for_vp_code(self.db, w)
+
+        for op in all_ops:
+            if op.machine_id is None or int(op.machine_id) != target_mid:
+                continue
+            woo = (op.work_order_no or "").strip()
+            pred_map = pred_maps.get(woo, {})
+            self._apply_planning_status_and_blocking(op, pred_by_id=pred_map)
+
+        for woo in touched_woo:
+            po = po_by_vp.get(woo)
+            if po is None:
+                continue
+            lst = by_woo.get(woo, [])
+            if lst:
+                self._refresh_production_order_forecast_fields(po, lst)
+
+        touched = len([o for o in all_ops if o.machine_id is not None and int(o.machine_id) == target_mid])
+        self._last_run_operations_affected = touched
+        self._last_run_operations_locked_skipped = locked_skip
+
+        self.db.flush()
+
+        logger.info(
+            "[planning_engine] rebuild_single_machine machine_id=%s scheduled_rows=%s scheduling_late=%s deadline_violations=%s",
+            target_mid,
+            len(created),
+            scheduling_late_count,
+            deadline_violations,
+        )
+        print(
+            "[PLANNER_DIAG] rebuild_single_machine DONE "
+            f"machine_id={target_mid} scheduled_rows={len(created)} scheduling_late={scheduling_late_count} "
+            f"deadline_violations={deadline_violations} protected_ops_on_machine={len(target_op_ids & protect_ids_set)}",
+            flush=True,
+        )
+        return created
+
     def _get_ready_ops(self, machine_id: int):
         """
         Legacy výběr „řady na stroji“ — pro diagnostiku; skutečný zápis rozvrhu dělá rebuild_global_schedules.
@@ -1386,15 +1787,63 @@ class PlanningEngineService:
 
     def rebuild_machine_schedule(self, machine_id: int, from_date: date, *, trigger_reason: str = "other"):
         """Přegeneruje celý rozvrh a vrátí řádky machine_schedule pro zadaný stroj (kompatibilní API)."""
-        created_all = self.rebuild_global_schedules(from_date, trigger_reason=trigger_reason)
-        mine = [s for s in created_all if int(s.machine_id) == int(machine_id)]
-        print(
-            "[PLANNER_DIAG] rebuild_machine_schedule "
-            f"machine_id={machine_id} picked_count={len(mine)} "
-            f"scheduled_rows_on_machine={len(mine)} global_scheduled_rows={len(created_all)}",
-            flush=True,
-        )
-        return mine
+        t0 = perf_counter()
+        triggered_at = datetime.utcnow()
+        reason = (trigger_reason or "other")[:64]
+        warnings: list[str] = []
+        target_mid = int(machine_id)
+        try:
+            # F4: real per-machine rebuild (was: full global)
+            created = self._rebuild_single_machine_body(target_mid, from_date, warnings)
+            duration_ms = int((perf_counter() - t0) * 1000)
+            st = "partial" if warnings else "success"
+            notes_parts = [f"F4 single_machine={target_mid}"]
+            if warnings:
+                notes_parts.append("; ".join(warnings))
+            self.db.add(
+                PlanningRun(
+                    triggered_by_user_id=None,
+                    created_at=triggered_at,
+                    triggered_at=triggered_at,
+                    trigger_reason=reason,
+                    operations_affected=getattr(self, "_last_run_operations_affected", None),
+                    operations_locked_skipped=getattr(self, "_last_run_operations_locked_skipped", None),
+                    duration_ms=duration_ms,
+                    status=st,
+                    error_message=None,
+                    notes=("; ".join(notes_parts))[:1000],
+                )
+            )
+            self.db.flush()
+            self.db.commit()
+            print(
+                "[PLANNER_DIAG] rebuild_machine_schedule "
+                f"machine_id={target_mid} scheduled_rows_on_machine={len(created)}",
+                flush=True,
+            )
+            return created
+        except Exception as e:
+            self.db.rollback()
+            duration_ms = int((perf_counter() - t0) * 1000)
+            try:
+                self.db.add(
+                    PlanningRun(
+                        triggered_by_user_id=None,
+                        created_at=triggered_at,
+                        triggered_at=triggered_at,
+                        trigger_reason=reason,
+                        operations_affected=None,
+                        operations_locked_skipped=None,
+                        duration_ms=duration_ms,
+                        status="failed",
+                        error_message=str(e)[:2000],
+                        notes=f"F4 single_machine={target_mid}"[:1000],
+                    )
+                )
+                self.db.commit()
+            except Exception:
+                logger.exception("[planning_engine] planning_runs failed log")
+            raise
 
     def rebuild_all(self, from_date: date, *, trigger_reason: str = "other"):
         created_all = self.rebuild_global_schedules(from_date, trigger_reason=trigger_reason)

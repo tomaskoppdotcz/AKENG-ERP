@@ -275,6 +275,10 @@ def map_operation_row(row, schedule_segments: list[dict] | None = None):
         "cooperationSupplierPurchaseOrderId": row.get("cooperation_supplier_purchase_order_id"),
         "cooperationSentAt": to_iso_or_none(row.get("cooperation_sent_at")),
         "cooperationReceivedAt": to_iso_or_none(row.get("cooperation_received_at")),
+        # F2: expose lock/blocking state to frontend detail panel
+        "isLocked": bool(row.get("is_locked")) if row.get("is_locked") is not None else False,
+        "planningStatus": row.get("planning_status"),
+        "blockingReason": row.get("blocking_reason"),
     }
     blocker = row.get("cooperation_blocker")
     if blocker:
@@ -353,6 +357,9 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
             po.cooperation_supplier_purchase_order_id AS cooperation_supplier_purchase_order_id,
             po.cooperation_sent_at AS cooperation_sent_at,
             po.cooperation_received_at AS cooperation_received_at,
+            po.is_locked AS is_locked,
+            po.planning_status AS planning_status,
+            po.blocking_reason AS blocking_reason,
             vp.id AS production_order_id
         FROM planning_operations po
         JOIN machines m ON m.id = po.machine_id
@@ -407,6 +414,9 @@ def get_planner_gantt(from_date: str, to_date: str, db: Session = Depends(get_db
             po.cooperation_supplier_purchase_order_id AS cooperation_supplier_purchase_order_id,
             po.cooperation_sent_at AS cooperation_sent_at,
             po.cooperation_received_at AS cooperation_received_at,
+            po.is_locked AS is_locked,
+            po.planning_status AS planning_status,
+            po.blocking_reason AS blocking_reason,
             vp.id AS production_order_id
         FROM planning_operations po
         JOIN machines m ON m.id = po.machine_id

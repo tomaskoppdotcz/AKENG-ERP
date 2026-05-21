@@ -93,16 +93,17 @@ def apply_shift_templates_to_calendar_window(
     workplace_maps: dict[int, dict[int, MachineShiftTemplate]] = {}
     wids = {int(m.workplace_library_item_id) for m in machines.values() if m.workplace_library_item_id is not None}
     for wid in wids:
-        lst = dedupe_shift_templates_for_workplace(db, wid)
+        # F-cal-3b: include inactive templates so weekends with is_active=False mark non-working days
+        lst = dedupe_shift_templates_for_workplace(db, wid, active_only=False)
         workplace_maps[wid] = {int(t.weekday): t for t in lst}
 
     orphan_mids = [mid for mid in mids if not machines.get(mid) or machines[mid].workplace_library_item_id is None]
     orphan_by_machine: dict[int, dict[int, MachineShiftTemplate]] = {}
     if orphan_mids:
+        # F-cal-3b: include inactive templates so weekend rows reach the orphan map
         tpl_rows = db.scalars(
             select(MachineShiftTemplate).where(
                 MachineShiftTemplate.machine_id.in_(orphan_mids),
-                MachineShiftTemplate.is_active.is_(True),
             )
         ).all()
         for t in tpl_rows:
@@ -122,9 +123,15 @@ def apply_shift_templates_to_calendar_window(
             else:
                 tpl = orphan_by_machine.get(mid, {}).get(wd)
             if tpl is not None:
-                avail = _minutes_to_duration(int(tpl.start_minutes), int(tpl.end_minutes))
-                shift_start = int(tpl.start_minutes)
-                is_working = avail > 0
+                # F-cal-3b: explicit handling of inactive templates — they mean "closed", not "use defaults"
+                if not bool(tpl.is_active):
+                    avail = 0
+                    shift_start = int(tpl.start_minutes)
+                    is_working = False
+                else:
+                    avail = _minutes_to_duration(int(tpl.start_minutes), int(tpl.end_minutes))
+                    shift_start = int(tpl.start_minutes)
+                    is_working = avail > 0
             else:
                 avail = default_avail
                 shift_start = DEFAULT_SHIFT_START_MINUTES

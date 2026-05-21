@@ -281,12 +281,14 @@ class MoveOperationRequest(BaseModel):
     machine_id: int
     planning_operation_id: int
     direction: str
+    from_date: str | None = None
 
 
 class MoveGanttOperationRequest(BaseModel):
     planning_operation_id: int
     target_machine_id: int
     target_queue_position: int | None = None
+    from_date: str | None = None
 
 
 class UpdatePlanningOperationRequest(BaseModel):
@@ -297,6 +299,7 @@ class UpdatePlanningOperationRequest(BaseModel):
     is_cooperation: bool | None = None
     cooperation_status: str | None = None
     cooperation_note: str | None = None
+    from_date: str | None = None
 
 
 class MachineShiftTemplateUpsert(BaseModel):
@@ -627,7 +630,9 @@ def move_operation(
     db.commit()
 
     service = PlanningEngineService(db)
-    service.rebuild_machine_schedule(payload.machine_id, date.today(), trigger_reason="manual")
+    rebuild_from = date.fromisoformat(payload.from_date) if payload.from_date else date.today()
+    # F3: use UI from_date when provided, fallback to today
+    service.rebuild_machine_schedule(payload.machine_id, rebuild_from, trigger_reason="manual")
 
     return {"status": "ok", "planning_operation_id": payload.planning_operation_id}
 
@@ -646,6 +651,9 @@ def move_gantt_operation(
     if not target_machine:
         raise HTTPException(status_code=404, detail="Target machine not found")
 
+    # F3: manual move auto-locks the operation so rebuild respects it
+    op.is_locked = True
+
     source_machine_id = op.machine_id
     target_machine_id = payload.target_machine_id
     target_queue_position = payload.target_queue_position
@@ -653,6 +661,7 @@ def move_gantt_operation(
     if target_queue_position is not None and target_queue_position < 1:
         target_queue_position = 1
 
+    rebuild_from = date.fromisoformat(payload.from_date) if payload.from_date else date.today()
     service = PlanningEngineService(db)
 
     if source_machine_id == target_machine_id:
@@ -660,7 +669,8 @@ def move_gantt_operation(
         reorder_ops_with_target(current_ops, op, target_queue_position)
         db.commit()
 
-        service.rebuild_machine_schedule(source_machine_id, date.today(), trigger_reason="manual")
+        # F3: use UI from_date when provided, fallback to today
+        service.rebuild_machine_schedule(source_machine_id, rebuild_from, trigger_reason="manual")
         db.commit()
 
         return {
@@ -684,8 +694,9 @@ def move_gantt_operation(
 
     db.commit()
 
-    service.rebuild_machine_schedule(source_machine_id, date.today(), trigger_reason="manual")
-    service.rebuild_machine_schedule(target_machine_id, date.today(), trigger_reason="manual")
+    # F3: use UI from_date when provided, fallback to today
+    service.rebuild_machine_schedule(source_machine_id, rebuild_from, trigger_reason="manual")
+    service.rebuild_machine_schedule(target_machine_id, rebuild_from, trigger_reason="manual")
     db.commit()
 
     return {
@@ -732,7 +743,9 @@ def update_operation(
     db.commit()
 
     service = PlanningEngineService(db)
-    service.rebuild_machine_schedule(op.machine_id, date.today(), trigger_reason="manual")
+    rebuild_from = date.fromisoformat(payload.from_date) if payload.from_date else date.today()
+    # F3: use UI from_date when provided, fallback to today
+    service.rebuild_machine_schedule(op.machine_id, rebuild_from, trigger_reason="manual")
     db.commit()
 
     return {
