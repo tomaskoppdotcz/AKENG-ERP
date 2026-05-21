@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from time import perf_counter
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.master_data import Machine
@@ -1015,11 +1015,13 @@ class PlanningEngineService:
                 )
             )
         else:
-            # F2: empty protect_ids would delete all schedules — treat as no-op
-            logger.warning(
-                "F2 safety guard: protect_ids is empty in _rebuild_global_schedules_body — "
-                "skipping delete of MachineSchedule/PlanningScheduleSegment to avoid wiping the whole table."
+            # F-engine-fix: empty protect_ids means nothing to protect — full delete for rebuild
+            logger.info(
+                "F-engine-fix: protect_ids is empty in _rebuild_global_schedules_body — "
+                "full delete of MachineSchedule/PlanningScheduleSegment"
             )
+            self.db.execute(delete(MachineSchedule))
+            self.db.execute(delete(PlanningScheduleSegment))
         self.db.flush()
         self._realign_machine_calendar_planned_minutes_from_schedules()
 

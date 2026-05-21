@@ -286,7 +286,8 @@ export async function regenerateMachineCalendarFromShifts(payload: {
 export async function moveGanttOperation(
   planningOperationId: number,
   targetMachineId: number,
-  targetQueuePosition?: number
+  targetQueuePosition?: number,
+  targetDay?: string // F2.2: ISO date YYYY-MM-DD
 ) {
   return apiFetch(`${API_BASE}/planning/move-gantt`, {
     method: "POST",
@@ -294,6 +295,7 @@ export async function moveGanttOperation(
       planning_operation_id: planningOperationId,
       target_machine_id: targetMachineId,
       target_queue_position: targetQueuePosition ?? null,
+      target_day: targetDay ?? null, // F2.2: optional cross-day target
     }),
   });
 }

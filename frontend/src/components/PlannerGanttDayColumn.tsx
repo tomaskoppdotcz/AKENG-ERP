@@ -11,12 +11,14 @@ function ColumnDropSpacer({
   day,
   queuePosition,
   droppableId,
+  fillColumn = false,
 }: {
   machineId: number;
   day: string;
   queuePosition: number;
   /** Musí být unikátní v rámci DndContext (více řádků stejné operace = stejné qp). */
   droppableId: string;
+  fillColumn?: boolean;
 }) {
   const { isOver, setNodeRef } = useDroppable({
     id: droppableId,
@@ -24,6 +26,7 @@ function ColumnDropSpacer({
       type: "queue-slot",
       machineId,
       queuePosition,
+      day, // F2.2: target calendar day for cross-day DnD
     },
   });
 
@@ -32,8 +35,9 @@ function ColumnDropSpacer({
       ref={setNodeRef}
       style={{
         width: "100%",
-        minHeight: 5,
-        height: 5,
+        minHeight: fillColumn ? "100%" : 5,
+        height: fillColumn ? "100%" : 5,
+        flex: fillColumn ? 1 : "none",
         flexShrink: 0,
         borderRadius: 2,
         background: isOver ? ERP_COLORS.primaryLight : "transparent",
@@ -93,7 +97,14 @@ export function PlannerGanttDayColumn({
       }}
     >
       {items.length === 0 ? (
-        <div style={{ flex: 1, minHeight: 8 }} />
+        // F2.2-fix: empty day still needs a drop zone so cross-day DnD works on empty calendar cells
+        <ColumnDropSpacer
+          machineId={machineId}
+          day={day}
+          queuePosition={1}
+          droppableId={`slot-${machineId}-day-${day}-empty`}
+          fillColumn={true}
+        />
       ) : (
         items.map((item, idx) => {
           const gIdx = gIndex(item.operationId);

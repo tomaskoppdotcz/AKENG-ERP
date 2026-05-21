@@ -4,7 +4,6 @@ import {
   DragEndEvent,
   DragOverlay,
   PointerSensor,
-  useDroppable,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
@@ -145,44 +144,6 @@ function OverlayBar({ item }: { item: PlannerGanttItem }) {
       }}
     >
       <PlannerGanttOperationBlock item={item} />
-    </div>
-  );
-}
-
-function EmptyMachineDrop({
-  machineId,
-  width,
-}: {
-  machineId: number;
-  width: number;
-}) {
-  const { isOver, setNodeRef } = useDroppable({
-    id: `slot-${machineId}-1`,
-    data: {
-      type: "queue-slot",
-      machineId,
-      queuePosition: 1,
-    },
-  });
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        padding: "6px 8px",
-        color: isOver ? ERP_COLORS.primary : ERP_COLORS.textSecondary,
-        fontSize: 11,
-        fontWeight: 700,
-        minHeight: LANE_HEIGHT + 8,
-        width,
-        background: isOver ? ERP_COLORS.primaryLight : undefined,
-        outline: isOver ? `1px dashed ${ERP_COLORS.primary}` : "none",
-        outlineOffset: -2,
-        borderRadius: 8,
-        fontFamily: FONT,
-      }}
-    >
-      Přetáhnout sem…
     </div>
   );
 }
@@ -619,12 +580,21 @@ export default function PlannerPage({
   }, [fromDate, toDate]);
 
   async function rebuildPlan() {
-    if (!canPlanningWrite) return;
+    if (!canPlanningWrite) {
+      // F2.2-fix-4: tell user why button does nothing
+      setError("Nemáte oprávnění pro přepočet plánu.");
+      return;
+    }
     try {
       setRebuilding(true);
       setError("");
       await rebuildPlanningAll();
-      await loadData();
+      // F2.2-fix-4: force gantt reload that bypasses ganttFetchSeq race guard
+      const mySeq = ++ganttFetchSeq.current;
+      const result = await getPlannerGantt(fromDate, toDate);
+      if (mySeq === ganttFetchSeq.current) {
+        setData(result);
+      }
     } catch (e: any) {
       setError(e?.message || "Nepodařilo se přepočítat plán.");
     } finally {
@@ -722,28 +692,63 @@ export default function PlannerPage({
 
   async function handleDragEnd(event: DragEndEvent) {
     setActiveDragItem(null);
-    if (!canPlanningWrite) return;
+    if (!canPlanningWrite) {
+      // F2.2-fix-3: tell user why DnD didn't do anything
+      setError("Nemáte oprávnění pro úpravy plánu.");
+      return;
+    }
 
     const overData = event.over?.data.current as
-      | { type?: string; machineId?: number; queuePosition?: number }
+      | { type?: string; machineId?: number; queuePosition?: number; day?: string } // F2.2: day added
       | undefined;
 
     const activeData = event.active.data.current as { item?: PlannerGanttItem } | undefined;
     const item = activeData?.item;
 
-    if (!item || !overData) return;
-    if (overData.type !== "queue-slot") return;
+    if (!item || !overData) {
+      // F2.2-fix-3: silent drop outside valid target
+      setError("Operace nebyla přesunuta — pusťte ji na konkrétní místo v Ganttu.");
+      return;
+    }
+    if (overData.type !== "queue-slot") {
+      // F2.2-fix-3: drop on non-droppable element
+      setError("Operaci nelze umístit sem — vyberte slot v denním sloupci.");
+      return;
+    }
 
     const targetMachineId = Number(overData.machineId);
     const targetQueuePosition = Number(overData.queuePosition);
+    const targetDay = overData.day; // F2.2: ISO date 'YYYY-MM-DD' or undefined
 
-    if (!Number.isFinite(targetMachineId) || !Number.isFinite(targetQueuePosition)) return;
+    if (!Number.isFinite(targetMachineId) || !Number.isFinite(targetQueuePosition)) {
+      // F2.2-fix-3: drop target has invalid IDs (defensive)
+      setError("Neplatný cíl přesunu.");
+      return;
+    }
 
     try {
       setMoving(true);
       setError("");
-      await moveGanttOperation(item.operationId, targetMachineId, targetQueuePosition);
-      await loadData();
+      await moveGanttOperation(item.operationId, targetMachineId, targetQueuePosition, targetDay);
+
+      // F2.2-fix-3: auto-expand date range if targetDay is outside current window
+      const expandedFromDate = targetDay && targetDay < fromDate ? targetDay : fromDate;
+      const expandedToDate = targetDay && targetDay > toDate ? targetDay : toDate;
+      const rangeChanged = expandedFromDate !== fromDate || expandedToDate !== toDate;
+
+      if (rangeChanged) {
+        // Date range expanded — useEffect on [fromDate, toDate] will fire loadData
+        setFromDate(expandedFromDate);
+        setToDate(expandedToDate);
+      } else {
+        // F2.2-fix-5: force gantt reload that bypasses ganttFetchSeq race guard
+        // (same pattern as rebuildPlan in F2.2-fix-4)
+        const mySeq = ++ganttFetchSeq.current;
+        const result = await getPlannerGantt(fromDate, toDate);
+        if (mySeq === ganttFetchSeq.current) {
+          setData(result);
+        }
+      }
     } catch (e: any) {
       setError(e?.message || "Nepodarilo se presunout operaci.");
     } finally {
@@ -1064,6 +1069,7 @@ export default function PlannerPage({
                     const globalOrder = plannerGlobalMachineOrder(machine.items);
                     const lk = laneRowKey(machine);
                     const laneHover = hoverLaneKey === lk;
+                    // F2.2-fix: per-day columns for empty machines too — each day is its own drop zone with target_day
 
                     return (
                       <div
@@ -1112,34 +1118,30 @@ export default function PlannerPage({
                             boxSizing: "border-box",
                           }}
                         >
-                          {machine.items.length === 0 ? (
-                            <EmptyMachineDrop machineId={machine.machineId} width={width} />
-                          ) : (
-                            days.map((day) => (
-                              <PlannerGanttDayColumn
-                                key={`${machine.machineId}-${day}`}
-                                day={day}
-                                machineId={machine.machineId}
-                                dayColWidth={dayColWidth}
-                                rowMinHeight={rowBodyHeight}
-                                items={byDay.get(day) ?? []}
-                                globalOrder={globalOrder}
-                                activeDragItemKey={
-                                  activeDragItem ? ganttCellItemKey(activeDragItem) : null
-                                }
-                                selectedOperationId={selectedItem?.operationId ?? null}
-                                onSelect={(cellItem) => {
-                                  const canonical = allPlannerItems.find(
-                                    (x) => x.operationId === cellItem.operationId
-                                  );
-                                  setSelectedItem(canonical ?? cellItem);
-                                }}
-                                stackGapPx={STACK_CELL_GAP_PX}
-                                cellPadPx={STACK_CELL_PAD_PX}
-                                minBlockHeight={minBlockH}
-                              />
-                            ))
-                          )}
+                          {days.map((day) => (
+                            <PlannerGanttDayColumn
+                              key={`${machine.machineId}-${day}`}
+                              day={day}
+                              machineId={machine.machineId}
+                              dayColWidth={dayColWidth}
+                              rowMinHeight={rowBodyHeight}
+                              items={byDay.get(day) ?? []}
+                              globalOrder={globalOrder}
+                              activeDragItemKey={
+                                activeDragItem ? ganttCellItemKey(activeDragItem) : null
+                              }
+                              selectedOperationId={selectedItem?.operationId ?? null}
+                              onSelect={(cellItem) => {
+                                const canonical = allPlannerItems.find(
+                                  (x) => x.operationId === cellItem.operationId
+                                );
+                                setSelectedItem(canonical ?? cellItem);
+                              }}
+                              stackGapPx={STACK_CELL_GAP_PX}
+                              cellPadPx={STACK_CELL_PAD_PX}
+                              minBlockHeight={minBlockH}
+                            />
+                          ))}
                         </div>
                       </div>
                     );

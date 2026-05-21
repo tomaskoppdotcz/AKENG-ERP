@@ -1,11 +1,11 @@
 import logging
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.api.deps import require_action
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import and_, func, inspect, or_, select, text
+from sqlalchemy import and_, delete, func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
@@ -289,6 +289,7 @@ class MoveGanttOperationRequest(BaseModel):
     target_machine_id: int
     target_queue_position: int | None = None
     from_date: str | None = None
+    target_day: str | None = None  # F2.2: ISO date 'YYYY-MM-DD' — when present, pin planned_start to that day before rebuild
 
 
 class UpdatePlanningOperationRequest(BaseModel):
@@ -651,8 +652,112 @@ def move_gantt_operation(
     if not target_machine:
         raise HTTPException(status_code=404, detail="Target machine not found")
 
-    # F3: manual move auto-locks the operation so rebuild respects it
-    op.is_locked = True
+    # F2.2-simple: auto-lock only on cross-day DnD (target_day); other moves stay unlocked (F2.3 panel).
+
+    # F2.2-fix-3: validate TP chain — reject cross-day move that would violate predecessor ordering
+    if payload.target_day:
+        try:
+            target_dt_check = date.fromisoformat(payload.target_day)
+        except ValueError:
+            # Will be re-raised by the F2.2 block below; skip validation now
+            target_dt_check = None
+
+        if target_dt_check is not None:
+            woo = (op.work_order_no or "").strip()
+            if woo:
+                same_vp_ops = db.scalars(
+                    select(PlanningOperation).where(PlanningOperation.work_order_no == woo)
+                ).all()
+                pred = None
+                raw_pid = getattr(op, "predecessor_op_id", None)
+                if raw_pid is not None:
+                    pred = next(
+                        (o for o in same_vp_ops if int(o.id) == int(raw_pid) and int(o.id) != int(op.id)),
+                        None,
+                    )
+                if pred is None:
+                    cur_no = int(op.operation_no or 0)
+                    candidates = [x for x in same_vp_ops if int(x.operation_no or 0) < cur_no]
+                    if candidates:
+                        pred = max(candidates, key=lambda x: (int(x.operation_no or 0), int(x.id)))
+
+                if pred is not None and pred.planned_end is not None:
+                    pred_end_date = (
+                        pred.planned_end.date()
+                        if hasattr(pred.planned_end, "date")
+                        else pred.planned_end
+                    )
+                    if target_dt_check < pred_end_date:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"Tato operace nemůže začínat dříve než její předchůdce. "
+                                f"Operace č. {op.operation_no} musí navazovat na operaci č. {pred.operation_no} "
+                                f"(končí {pred_end_date.isoformat()}). "
+                                f"Cílový den {target_dt_check.isoformat()} je dříve."
+                            ),
+                        )
+
+    # F2.2-final: pin planned_start to target_day at shift start (06:00), compute approximate planned_end,
+    # UPDATE existing machine_schedule (not delete) so F-engine-fix keeps it during protect_ids cleanup,
+    # delete only stale planning_schedule_segments (engine recreates these per-segment).
+    # Lock the op so engine treats it as protected and seeds op_end_times from planned_end.
+    if payload.target_day:
+        try:
+            target_dt = date.fromisoformat(payload.target_day)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="target_day must be ISO date YYYY-MM-DD")
+
+        # F2.2-final: Use 06:00 as default shift start (matches AKENG calendar setup)
+        SHIFT_START_MIN = 6 * 60  # 06:00 in minutes
+        new_start = datetime.combine(target_dt, time(SHIFT_START_MIN // 60, SHIFT_START_MIN % 60))
+
+        # F2.2-final: Compute approximate duration (engine respects this on subsequent rebuilds)
+        duration_min = int(
+            (getattr(op, "setup_time_min", 0) or 0) + (getattr(op, "total_labor_time_min", 0) or 0)
+        )
+        if duration_min <= 0:
+            duration_min = int(getattr(op, "total_operation_time_min", 0) or 0)
+        if duration_min <= 0:
+            duration_min = 60  # fallback to 1 hour if no duration field set
+
+        new_end = new_start + timedelta(minutes=duration_min)
+
+        # F2.2-final: Update op; lock so engine sees it as protected
+        op.planned_start = new_start
+        op.planned_end = new_end
+        op.is_locked = True
+
+        # F2.2-final: UPDATE existing machine_schedule (not delete) so F-engine-fix keeps it.
+        # If no row exists yet, create a fresh one (shouldn't normally happen, but defensive).
+        existing_sched = db.scalar(
+            select(MachineSchedule).where(MachineSchedule.planning_operation_id == op.id)
+        )
+        if existing_sched is not None:
+            existing_sched.planned_start = new_start
+            existing_sched.planned_end = new_end
+            existing_sched.machine_id = int(payload.target_machine_id)
+        else:
+            sched = MachineSchedule(
+                machine_id=int(payload.target_machine_id),
+                planning_operation_id=int(op.id),
+                planned_start=new_start,
+                planned_end=new_end,
+                queue_position=int(payload.target_queue_position or 1),
+                setup_time_min=float(getattr(op, "setup_time_min", 0) or 0),
+                labor_time_total_min=float(getattr(op, "total_labor_time_min", 0) or 0),
+                total_time_min=float(duration_min),
+                status="planned",
+            )
+            db.add(sched)
+
+        # F2.2-final: delete stale segments — engine recreates them on rebuild via _machine_state
+        db.execute(
+            delete(PlanningScheduleSegment).where(
+                PlanningScheduleSegment.planning_operation_id == op.id
+            )
+        )
+        db.flush()
 
     source_machine_id = op.machine_id
     target_machine_id = payload.target_machine_id
@@ -669,8 +774,9 @@ def move_gantt_operation(
         reorder_ops_with_target(current_ops, op, target_queue_position)
         db.commit()
 
+        # F2.2-fix-4: use global rebuild for cross-machine cascade (was: rebuild_machine_schedule)
         # F3: use UI from_date when provided, fallback to today
-        service.rebuild_machine_schedule(source_machine_id, rebuild_from, trigger_reason="manual")
+        service.rebuild_global_schedules(rebuild_from, trigger_reason="manual_dnd")
         db.commit()
 
         return {
@@ -694,9 +800,9 @@ def move_gantt_operation(
 
     db.commit()
 
+    # F2.2-fix-4: single global rebuild covers both source and target machines plus downstream chain
     # F3: use UI from_date when provided, fallback to today
-    service.rebuild_machine_schedule(source_machine_id, rebuild_from, trigger_reason="manual")
-    service.rebuild_machine_schedule(target_machine_id, rebuild_from, trigger_reason="manual")
+    service.rebuild_global_schedules(rebuild_from, trigger_reason="manual_dnd_cross_machine")
     db.commit()
 
     return {
